@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's result irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Everything `make pre-commit` runs locally, as separate steps rather than
+  # one `pre-commit` invocation: the targets are identical either way, and
+  # splitting them means a failure names itself in the job list instead of
+  # having to be read out of a combined log. `fmt-check` stands in for
+  # `fmt`, which would rewrite files rather than report on them.
+  check:
+    name: fmt, clippy, build, tests, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The firmware pins its own toolchain in firmware/rust-toolchain.toml
+      # -- stable, plus the two bare-metal targets and the components these
+      # recipes invoke -- and rustup reads that from the directory it runs
+      # in. The repository root deliberately has no toolchain file.
+      - name: Install the firmware's pinned toolchain
+        working-directory: firmware
+        run: |
+          rustup show
+          cargo --version
+
+      # Unlike rpi-hal, this repository's build does not stop at `cargo
+      # build`: the Makefile runs `cargo objcopy` to turn each linked ELF
+      # into a raw image, and that subcommand ships in cargo-binutils
+      # rather than with cargo itself.
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            firmware
+            cli
+
+      - run: make fmt-check
+      - run: make clippy
+      - run: make clippy64
+      - run: make clippy-cli
+      - run: make build-bcm2837
+      - run: make build64-bcm2837
+      - run: make build-bcm2711
+      - run: make build64-bcm2711
+      - run: make build-cli
+      - run: make test-cli
+      - run: make doc
+
+      # Proof the release job's artifacts are actually produced, caught
+      # here rather than halfway through an irreversible publish.
+      - name: Both images exist
+        run: test -s firmware/target/kernel7.img && test -s firmware/target/kernel8.img
+
+  # Guards the `rust-version` claim in both manifests. Without this an MSRV
+  # is a comment that rots the first time a dependency or a `core` API
+  # moves. Both packages have one now that the firmware builds on stable.
+  #
+  # Each package is checked against its own declared floor, and the
+  # `+toolchain` argument overrides firmware/rust-toolchain.toml, which is
+  # what makes it a test of the claim rather than of the pin.
+  msrv:
+    name: both packages build on their declared MSRV
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: cli
+            targets: ""
+          - package: firmware
+            targets: "--target armv7a-none-eabi --target aarch64-unknown-none-softfloat"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the MSRV from the manifest
+        id: msrv
+        run: |
+          version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' ${{ matrix.package }}/Cargo.toml)"
+          test -n "$version" || {
+            echo "${{ matrix.package }}/Cargo.toml has no rust-version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install that toolchain, with any targets the package needs
+        run: |
+          rustup toolchain install ${{ steps.msrv.outputs.version }} \
+            --profile minimal ${{ matrix.targets }}
+
+      # Build only, not test: the tests pull in dev-dependencies whose own
+      # floors are their business, and it is the shipped artifact this
+      # claim is about. The firmware builds for both bare-metal targets;
+      # the CLI builds for the host.
+      - name: Build
+        working-directory: ${{ matrix.package }}
+        run: |
+          if [ -n "${{ matrix.targets }}" ]; then
+            for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
+              cargo +${{ steps.msrv.outputs.version }} build --release --target "$target"
+            done
+          else
+            cargo +${{ steps.msrv.outputs.version }} build --release
+          fi
+
+  # `cargo package` finishes by building the packaged tarball, which catches
+  # a whole class of "works here, broken on crates.io" problems: a file the
+  # manifest excludes but the build needs, or a path that only resolves in
+  # this working copy. Only the CLI is publishable -- the firmware sets
+  # `publish = false`.
+  #
+  # Deliberately uncached. `make package` sends the verification build to
+  # its own CARGO_TARGET_DIR, and there is nothing to gain by keeping a
+  # throwaway target directory for one small crate.
+  package:
+    name: package verifies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make package
+
+  # Hardware-in-the-loop testing is deliberately absent: every check above
+  # runs against a fake device on a pty, which pins the wire format but
+  # says nothing about timing. The pacing that keeps a real PL011's RX FIFO
+  # from overflowing at 1.5Mbaud is only ever proven on a board, and no
+  # hosted runner has one.

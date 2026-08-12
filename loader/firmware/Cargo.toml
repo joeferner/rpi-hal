@@ -1,0 +1,68 @@
+[package]
+name = "rpi-loader-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "Self-relocating UART upload loader for Raspberry Pi 2/3/4 (BCM2836/BCM2837/BCM2711) — flash once, then upload new firmware over serial instead of rewriting the SD card"
+license = "MIT OR Apache-2.0"
+# The floor comes from `rpi-hal`, which declares 1.88; nothing in this
+# package needs anything newer. A meaningful number only since the build
+# stopped requiring nightly -- `rust-toolchain.toml` pins stable now, and
+# there is no `-Zbuild-std`, so rustup's precompiled `core` covers both
+# bare-metal targets.
+rust-version = "1.88"
+
+# Never published. What this package produces is a raw image for a bare
+# metal ARM target, built through `objcopy` and copied onto a FAT
+# partition -- and `cargo install` builds for the *host* target, ignoring
+# both this directory's `.cargo/config.toml` (cargo discovers config from
+# the invocation's working directory, not from an installed crate) and
+# the `objcopy` step entirely. A published version of this could not be
+# installed by anyone; the images ship as release artifacts instead, and
+# `rpi-loader` on crates.io is the host CLI that drives them.
+publish = false
+
+[dependencies]
+# default-features = false disables both `rt` and `mmu`: this loader
+# supplies its own boot sequence (src/boot.s) entirely, so neither
+# rpi-hal's `_start` nor its `rpi_hal_mmu_init` are ever linked in --
+# this crate's own boot code never references that symbol at all.
+#
+# `embedded-sdmmc` pulls in the crate's `SdCard` BlockDevice adapter so
+# the loader can serve its `sd-list`/`sd-read`/`sd-write` commands. The
+# SD/FAT path touches none of the `rt`-gated `critical-section` impl, so
+# it links fine without `rt`/`mmu`.
+#
+# `bcm2837` picks rpi-hal's PAC for this loader's actual target chip
+# (neither of rpi-hal's chip features is on by default -- see its
+# Cargo.toml). This crate's own `bcm2711` feature below adds `bcm2711`
+# alongside it rather than replacing it, since Cargo can't express
+# "turn bcm2837 off"; harmless (rpi-hal's `pac` re-export prefers
+# `bcm2711` when both are enabled), just not a build that drops
+# `bcm2837-lpa` entirely.
+rpi-hal = { version = "0.1.0", default-features = false, features = ["embedded-sdmmc", "bcm2837"] }
+# The FAT layer itself. This is a separate crate from rpi-hal (which only
+# provides the BlockDevice adapter), so the loader depends on it directly
+# for the `VolumeManager`/`Mode`/`TimeSource`/`VolumeIdx` types it drives.
+embedded-sdmmc = { version = "0.9.0", default-features = false }
+
+[features]
+# Forwards to rpi-hal's `bcm2711` feature, so this crate's own peripheral
+# access (reached only through rpi-hal's PAC re-export and drivers, which
+# this crate never hardcodes) moves to the BCM2711 (Pi 4) memory map and
+# PAC. That is the whole of the port: the boot code (`src/boot.s`,
+# `boot64.s`) needs nothing chip-specific, because it only relocates the
+# image and jumps, and every peripheral it eventually touches is reached
+# through rpi-hal.
+#
+# The GIC-400 the Pi 4 replaced the legacy interrupt controller with never
+# comes up either, and neither does `Lic` on the older chips: the loader
+# is polling-based throughout, built with `rt` off and no interrupts at
+# all. That is why it is unaffected by `lic` being unavailable under
+# `bcm2711`, where most of rpi-hal's own examples are not.
+bcm2711 = ["rpi-hal/bcm2711"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

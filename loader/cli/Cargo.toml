@@ -1,0 +1,32 @@
+[package]
+name = "rpi-loader"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side CLI for the rpi-loader UART command agent — upload firmware to a Raspberry Pi over serial and read/write its SD card, without touching the card"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joeferner/rpi-loader"
+readme = "README.md"
+keywords = ["raspberry-pi", "bare-metal", "bootloader", "serial", "uart"]
+categories = ["command-line-utilities", "embedded", "development-tools"]
+rust-version = "1.87"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+crc32fast = "1.5.0"
+# Raw-mode stdin for the passthrough terminal, and only that. The default
+# features are off because `events` drags in mio + signal-hook for an
+# event loop this doesn't use; `windows` stays on because it gates the
+# winapi console handling, and its dependencies are already `cfg(windows)`
+# targeted, so keeping it costs nothing anywhere else.
+crossterm = { version = "0.29.0", default-features = false, features = ["windows"] }
+ctrlc = "3.5.2"
+# default-features = false drops the libudev-backed port enumeration,
+# which is the crate's only C dependency. Nothing here enumerates ports --
+# the device is always named on the command line -- so this keeps
+# `cargo install rpi-loader` from needing libudev headers on the machine
+# doing the installing.
+serialport = { version = "4.9.0", default-features = false }
+
+[dev-dependencies]
+nix = { version = "0.31.3", features = ["term", "signal"] }

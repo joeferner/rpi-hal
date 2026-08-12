@@ -1,0 +1,149 @@
+name: Release
+
+# Publishing to crates.io is permanent -- a version can be yanked but never
+# replaced or deleted -- so this never triggers on a branch push. Pushing a
+# `v*` tag is the deliberate act that starts a release, and
+# `workflow_dispatch` covers re-running it after a failure without moving
+# the tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# The release object and its uploaded images need write access to the
+# repository's contents; nothing here needs anything else.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: publish the CLI and upload the images
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the firmware's pinned toolchain
+        working-directory: firmware
+        run: rustup show
+
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+
+      # Every guard below fails the release rather than shipping something
+      # that cannot be taken back.
+      - name: Both manifests agree, and the tag matches them
+        id: version
+        run: |
+          cli="$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)"
+          firmware="$(sed -n 's/^version = "\(.*\)"/\1/p' firmware/Cargo.toml | head -1)"
+          if [ "$cli" != "$firmware" ]; then
+            echo "cli is $cli but firmware is $firmware; the two ship as one release" >&2
+            exit 1
+          fi
+          # A dispatch run has no tag in its context, so the manifest is
+          # the authority there and there is nothing to cross-check.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "v$cli" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the manifest version $cli" >&2
+            exit 1
+          fi
+          echo "version=$cli" >> "$GITHUB_OUTPUT"
+          echo "tag=v$cli" >> "$GITHUB_OUTPUT"
+
+      # The changelog must already describe this version, dated. Without
+      # the date the entry claims the version was never released; without
+      # the entry there is nothing to write the release notes from.
+      - name: The changelog has a dated section for this version
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if grep -q ReleaseDate CHANGELOG.md; then
+            echo "CHANGELOG.md still has the ReleaseDate placeholder" >&2
+            exit 1
+          fi
+          if ! grep -qE "^## \[$version\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
+            echo "CHANGELOG.md has no dated '## [$version] - YYYY-MM-DD' section" >&2
+            exit 1
+          fi
+
+      - name: The packaged tarball builds
+        run: make package
+
+      # Four images, not two: each execution state is built for both chips,
+      # and `make` writes them all to the same two filenames, so each one
+      # is copied out before the next build overwrites it.
+      - name: Build the images
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          for chip in bcm2837 bcm2711; do
+            make "build-$chip"
+            cp firmware/target/kernel7.img "dist/rpi-loader-$version-$chip-kernel7.img"
+            make "build64-$chip"
+            cp firmware/target/kernel8.img "dist/rpi-loader-$version-$chip-kernel8.img"
+          done
+          cd dist && sha256sum ./*.img > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract this version's changelog section
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="## [$version]" '
+            index($0, v) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > release-notes.md
+          cat >> release-notes.md <<'NOTE'
+
+          ## Images
+
+          Copy the image matching your board to the SD card's boot
+          partition, renamed to `kernel7.img` (32-bit) or `kernel8.img`
+          (64-bit) -- the firmware loads those names and no others. Use
+          `kernel8.img` only with `arm_64bit=1` in `config.txt`.
+
+          `bcm2837` covers the Pi 2 v1.2 and Pi 3; `bcm2711` covers the
+          Pi 4. Verify with `sha256sum -c SHA256SUMS`.
+
+          The host CLI is a separate install: `cargo install rpi-loader`.
+          NOTE
+
+      # Before the irreversible step, and idempotent, so a re-run after a
+      # failed publish does not stall here.
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "rpi-loader ${{ steps.version.outputs.version }}" \
+              --notes-file release-notes.md
+          fi
+
+      # A re-run of an otherwise-successful release must not fail here just
+      # because this half already happened; crates.io refuses a version
+      # that exists, and that refusal would mask whatever the re-run was
+      # for. The sparse index is the cheapest authority on the question.
+      - name: Is this version already on crates.io?
+        id: published
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          index="$(curl -sS https://index.crates.io/rp/i-/rpi-loader || true)"
+          if printf '%s' "$index" | grep -q "\"vers\":\"$version\""; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "rpi-loader $version is already published; skipping"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the CLI to crates.io
+        if: steps.published.outputs.already == 'false'
+        working-directory: cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
