@@ -4,6 +4,22 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- crates.io version and docs.rs badges in `README.md`, alongside CI.
+
+### Fixed
+
+- The README's CI badge no longer renders as a broken image on crates.io.
+  GitHub refuses to serve its own `actions/workflows/…/badge.svg` to pages
+  on another origin — browsers report `ERR_HTTP2_SERVER_REFUSED_STREAM` —
+  so the badge worked on GitHub and nowhere else. It now comes from
+  shields.io, which serves the same status to both. crates.io renders a
+  README once, at publish time, so 0.1.0's page keeps the broken badge and
+  the fix is visible only from this version on.
+
 ## [0.1.0] - 2026-08-12
 
 First release, so there is nothing to diff against: the entry below is
@@ -78,4 +94,5 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[Unreleased]: https://github.com/joeferner/rpi-hal/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.1.0
