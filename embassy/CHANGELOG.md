@@ -4,7 +4,7 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-08-12
 
 ### Added
 
@@ -18,3 +18,5 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Examples exercising the driver and executor against real peripherals:
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
+
+[0.1.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.1.0
