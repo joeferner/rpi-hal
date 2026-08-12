@@ -1,0 +1,3 @@
+arm_64bit=1
+camera_auto_detect=1
+core_freq=250

@@ -1,0 +1,13 @@
+[toolchain]
+channel = "nightly"
+# `rust-src` is what `-Zbuild-std` (see .cargo/config.toml) compiles `core`
+# and `alloc` from. `rustfmt` and `clippy` are here because `make fmt`,
+# `make clippy` and `make pre-commit` need them, and this list is the only
+# thing that guarantees they arrive: rustup's *default* profile happens to
+# include both, so a workstation install has them whether or not they are
+# named -- but an environment configured for the minimal profile (which is
+# how GitHub's hosted runner images ship) installs exactly what is listed
+# and nothing else, and `cargo fmt` then fails with "'cargo-fmt' is not
+# installed for the toolchain".
+components = ["rust-src", "rustfmt", "clippy"]
+targets = ["armv7a-none-eabi", "aarch64-unknown-none-softfloat"]

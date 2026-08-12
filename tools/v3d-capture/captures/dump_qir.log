@@ -1,0 +1,788 @@
+GL_RENDERER: VC4 V3D 2.1
+GL_VERSION:  OpenGL ES 2.0 Mesa 25.0.7-2+rpt4
+MESA_SHADER_VERTEX prog 0/1 pre-opt QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm1.0
+mov t2, t0
+mov t3, t2.8a
+itof t4, t3
+mov t5, t1
+mov t6, t5.8a
+itof t7, t6
+fmul t8, u2 (unif[0]), t4
+fmul t9, u3 (unif[1]), t4
+fmul t10, u4 (unif[2]), t4
+fmul t11, u5 (unif[3]), t4
+fadd t12, t8, u7 (unif[12])
+fadd t13, t9, u8 (unif[13])
+fadd t14, t10, u9 (unif[14])
+fadd t15, t11, u10 (unif[15])
+mov t16, t12
+mov t17, t13
+mov t18, t14
+mov t19, t15
+mov t20, t7
+mov t21, u0 (0x00000000 / 0.000000)
+rcp t22, t19
+fmul t23, t19, t22
+fsub t24, u11 (0x40000000 / 2.000000), t23
+fmul t25, t22, t24
+fmul t27, t16, u12 (vp_x_scale)
+fmul t28, t27, t25
+ftoi t26.16a, t28
+fmul t29, t17, u13 (vp_y_scale)
+fmul t30, t29, t25
+ftoi t26.16b, t30
+mov vpm, t26
+fmul t31, t18, u14 (vp_z_scale)
+fmul t32, t31, t25
+fadd t33, t32, u15 (vp_z_offset)
+mov vpm, t33
+mov vpm, t25
+mov vpm, t16
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+
+MESA_SHADER_VERTEX prog 0/1 QIR:
+BLOCK 0:
+mov t0, vpm0.0
+itof t4, t0.8a
+fmul t11, u5 (unif[3]), t4
+fadd t15, t11, u10 (unif[15])
+rcp t22, t15
+fmul t23, t15, t22
+fsub t24, 2.000000, t23
+fmul t25, t22, t24
+fmul t9, u3 (unif[1]), t4
+fadd t13, t9, u8 (unif[13])
+fmul t8, u2 (unif[0]), t4
+fadd t12, t8, u7 (unif[12])
+fmul t29, t13, u13 (vp_y_scale)
+fmul t27, t12, u12 (vp_x_scale)
+fmul t28, t27, t25
+fmul t30, t29, t25
+ftoi t26.16a, t28
+ftoi t26.16b, t30
+mov vpm, t26
+fmul t10, u4 (unif[2]), t4
+fadd t14, t10, u9 (unif[14])
+fmul t31, t14, u14 (vp_z_scale)
+fmul t32, t31, t25
+fadd vpm, t32, u15 (vp_z_offset)
+mov vpm, t25
+mov vpm, t12
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+
+MESA_SHADER_VERTEX prog 0/1 QPU:
+0xe0024c6700101a00 load_imm vr_setup, nop, 0x00101a00 (0.000000)
+0x1002002715c27d80 mov ra0, vpm_read ; nop nop, r0, r0
+0xe0025c6700001a00 load_imm vw_setup, nop, 0x00001a00 (0.000000)
+0x180210a708027d80 itof rb2, ra0.8a, ra0.8a ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100049e320802037 nop nop, r0, r0 ; fmul r3, uni, rb2
+0x100208a701827780 fadd r2, r3, uni ; nop nop, r0, r0
+0x10024d20358024b7 mov sfu_recip, r2 ; fmul r0, uni, rb2
+0x1002106701827180 fadd rb1, r0, uni ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100049e1209e7014 nop nop, r0, r0 ; fmul r1, r2, r4
+0xd00208a7029e1e40 sig_small_imm fsub r2, 2.0, r1 ; nop nop, r0, r0
+0x100059c2209e7022 nop nop, r0, r0 ; fmul ra2, r4, r2
+0x100049e32080103e nop nop, r0, r0 ; fmul r3, rb1, uni
+0x100049e120802037 nop nop, r0, r0 ; fmul r1, uni, rb2
+0x10024863210a03de fadd r1, r1, uni ; fmul r3, r3, ra2
+0x10124062278276ce ftoi ra1.16a, r3, r3 ; fmul r2, r1, uni
+0x100049e0200a7016 nop nop, r0, r0 ; fmul r0, r2, ra2
+0x1022406227802037 ftoi ra1.16b, r0, r0 ; fmul r2, uni, rb2
+0x1002082701827580 fadd r0, r2, uni ; nop nop, r0, r0
+0x10024c2035060d87 mov vpm, ra1 ; fmul r0, r0, uni
+0x100049e1200a7006 nop nop, r0, r0 ; fmul r1, r0, ra2
+0x10020c2701827380 fadd vpm, r1, uni ; nop nop, r0, r0
+0x10020c27150a7d80 mov vpm, ra2 ; nop nop, r0, r0
+0x10020c27159c1fc0 mov vpm, rb1 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+
+MESA_SHADER_VERTEX prog 0/2 pre-opt QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm1.0
+mov t2, t0
+mov t3, t2.8a
+itof t4, t3
+mov t5, t1
+mov t6, t5.8a
+itof t7, t6
+fmul t8, u2 (unif[0]), t4
+fmul t9, u3 (unif[1]), t4
+fmul t10, u4 (unif[2]), t4
+fmul t11, u5 (unif[3]), t4
+fadd t12, t8, u7 (unif[12])
+fadd t13, t9, u8 (unif[13])
+fadd t14, t10, u9 (unif[14])
+fadd t15, t11, u10 (unif[15])
+mov t16, t12
+mov t17, t13
+mov t18, t14
+mov t19, t15
+mov t20, t7
+mov t21, u0 (0x00000000 / 0.000000)
+rcp t22, t19
+fmul t23, t19, t22
+fsub t24, u11 (0x40000000 / 2.000000), t23
+fmul t25, t22, t24
+fmul t27, t16, u12 (vp_x_scale)
+fmul t28, t27, t25
+ftoi t26.16a, t28
+fmul t29, t17, u13 (vp_y_scale)
+fmul t30, t29, t25
+ftoi t26.16b, t30
+mov vpm, t26
+fmul t31, t18, u14 (vp_z_scale)
+fmul t32, t31, t25
+fadd t33, t32, u15 (vp_z_offset)
+mov vpm, t33
+mov vpm, t25
+mov vpm, t16
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, t16
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+mov vpm, u0 (0x00000000 / 0.000000)
+
+MESA_SHADER_VERTEX prog 0/2 QIR:
+BLOCK 0:
+mov t0, vpm0.0
+itof t4, t0.8a
+fmul t11, u5 (unif[3]), t4
+fadd t15, t11, u10 (unif[15])
+rcp t22, t15
+fmul t23, t15, t22
+fsub t24, 2.000000, t23
+fmul t25, t22, t24
+fmul t9, u3 (unif[1]), t4
+fadd t13, t9, u8 (unif[13])
+fmul t8, u2 (unif[0]), t4
+fadd t12, t8, u7 (unif[12])
+fmul t29, t13, u13 (vp_y_scale)
+fmul t27, t12, u12 (vp_x_scale)
+fmul t28, t27, t25
+fmul t30, t29, t25
+ftoi t26.16a, t28
+ftoi t26.16b, t30
+mov vpm, t26
+fmul t10, u4 (unif[2]), t4
+fadd t14, t10, u9 (unif[14])
+fmul t31, t14, u14 (vp_z_scale)
+fmul t32, t31, t25
+fadd vpm, t32, u15 (vp_z_offset)
+mov vpm, t25
+mov vpm, t12
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+mov vpm, t12
+mov vpm, 0
+mov vpm, 0
+mov vpm, 0
+
+MESA_SHADER_VERTEX prog 0/2 QPU:
+0xe0024c6700101a00 load_imm vr_setup, nop, 0x00101a00 (0.000000)
+0x1002002715c27d80 mov ra0, vpm_read ; nop nop, r0, r0
+0xe0025c6700001a00 load_imm vw_setup, nop, 0x00001a00 (0.000000)
+0x180200a708027d80 itof ra2, ra0.8a, ra0.8a ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100049e3200a003e nop nop, r0, r0 ; fmul r3, uni, ra2
+0x100208a701827780 fadd r2, r3, uni ; nop nop, r0, r0
+0x10024d20350a04be mov sfu_recip, r2 ; fmul r0, uni, ra2
+0x100210a701827180 fadd rb2, r0, uni ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100049e1209e7014 nop nop, r0, r0 ; fmul r1, r2, r4
+0xd00208a7029e1e40 sig_small_imm fsub r2, 2.0, r1 ; nop nop, r0, r0
+0x100049c1209e7022 nop nop, r0, r0 ; fmul rb1, r4, r2
+0x100049e32080203e nop nop, r0, r0 ; fmul r3, rb2, uni
+0x100049e1200a003e nop nop, r0, r0 ; fmul r1, uni, ra2
+0x100248632180139f fadd r1, r1, uni ; fmul r3, r3, rb1
+0x10124062278276ce ftoi ra1.16a, r3, r3 ; fmul r2, r1, uni
+0x100049e0209c1017 nop nop, r0, r0 ; fmul r0, r2, rb1
+0x10224062270a003e ftoi ra1.16b, r0, r0 ; fmul r2, uni, ra2
+0x1002082701827580 fadd r0, r2, uni ; nop nop, r0, r0
+0x10024c2035060d87 mov vpm, ra1 ; fmul r0, r0, uni
+0x100049e1209c1007 nop nop, r0, r0 ; fmul r1, r0, rb1
+0x10020c2701827380 fadd vpm, r1, uni ; nop nop, r0, r0
+0x10020c27159c1fc0 mov vpm, rb1 ; nop nop, r0, r0
+0x10020c27159c2fc0 mov vpm, rb2 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0x10020c27159c2fc0 mov vpm, rb2 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0xd0020c27159c0fc0 sig_small_imm mov vpm, 0 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+
+MESA_SHADER_FRAGMENT prog 1/1 pre-opt QIR:
+BLOCK 0:
+frag_z t23
+frag_w t0
+fmul t1, v0, t0
+vary_add_c t2, t1
+fmul t3, v1, t0
+vary_add_c t4, t3
+fmul t5, v2, t0
+vary_add_c t6, t5
+fmul t7, v3, t0
+vary_add_c t8, t7
+mov t9, t2
+mov t10, t4
+mov t11, t9
+mov t12, t10
+mov tex_t, t12, u1 (tex_p0[0])
+mov tex_s, t11, u2 (tex_p1[0])
+thrsw null
+tex_result t13
+fmov t14, t13.8a
+fmov t15, t13.8b
+fmov t16, t13.8c
+fmov t17, t13.8d
+tlb_color_read t18
+mov t19, t18
+mmov t20.8a, t14
+mmov t20.8b, t15
+mmov t20.8c, t16
+mmov t20.8d, t17
+mov t21, t20
+mov t22, t21
+mov tlb_z, t23
+mov tlb_c, t22
+
+MESA_SHADER_FRAGMENT prog 1/1 QIR:
+BLOCK 0:
+frag_w t0
+fmul t1, v0, t0
+vary_add_c t2, t1
+fmul t3, v1, t0
+vary_add_c t4, t3
+mov tex_t, t4, u1 (tex_p0[0])
+mov tex_s, t2, u2 (tex_p1[0])
+thrsw null
+tex_result t13
+fmov t14, t13.8a
+mmov t20.8a, t14
+fmov t15, t13.8b
+mmov t20.8b, t15
+fmov t16, t13.8c
+mmov t20.8c, t16
+fmov t17, t13.8d
+mmov t20.8d, t17
+frag_z t23
+mov tlb_z, t23
+mov tlb_c, t20
+
+MESA_SHADER_FRAGMENT prog 1/1 QPU:
+0x100049e0203e303e nop nop, r0, r0 ; fmul r0, vary, ra15
+0x100248e1213e317e fadd r3, r0, r5 ; fmul r1, vary, ra15
+0x600208a7019e7340 sig_thread_switch fadd r2, r1, r5 ; nop nop, r0, r0
+0x10021e67159e7480 mov tmu0_t, r2 ; nop nop, r0, r0
+0x10021e27159e76c0 mov tmu0_s, r3 ; nop nop, r0, r0
+0xa00009e7009e7000 load_tmu0 nop nop, r0, r0 ; nop nop, r0, r0
+0x190208e7049e7900 fmax r3, r4.8a, r4.8a ; nop nop, r0, r0
+0x1b424823849e791b fmax r0, r4.8b, r4.8b ; mov r3.8a, r3
+0x1d524863849e7900 fmax r1, r4.8c, r4.8c ; mov r3.8b, r0
+0x1f6248a3849e7909 fmax r2, r4.8d, r4.8d ; mov r3.8c, r1
+0x117049e3809e7012 nop nop, r0, r0 ; mov r3.8d, r2
+0x10020b27159cffc0 mov tlb_z, rb15 ; nop nop, r0, r0
+0x10020ba7159e76c0 mov tlb_color_all, r3 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x500009e7009e7000 sig_unlock_score nop nop, r0, r0 ; nop nop, r0, r0
+
+uMvp uniform location=0
+uTexture uniform location=1
+MESA_SHADER_FRAGMENT prog 1/2 pre-opt QIR:
+BLOCK 0:
+frag_w t0
+fmul t1, v0, t0
+vary_add_c t2, t1
+fmul t3, v1, t0
+vary_add_c t4, t3
+fmul t5, v2, t0
+vary_add_c t6, t5
+fmul t7, v3, t0
+vary_add_c t8, t7
+mov t9, t2
+mov t10, t4
+mov t11, t9
+mov t12, t10
+mov tex_t, t12, u1 (tex_p0[0])
+mov tex_s, t11, u2 (tex_p1[0])
+thrsw null
+tex_result t13
+fmov t14, t13.8a
+fmov t15, t13.8b
+fmov t16, t13.8c
+fmov t17, t13.8d
+tlb_color_read t18
+mov t19, t18
+mmov t20.8a, t16
+mmov t20.8b, t15
+mmov t20.8c, t14
+mmov t20.8d, t17
+mov t21, t20
+mov t22, t21
+mov tlb_c, t22
+
+MESA_SHADER_FRAGMENT prog 1/2 QIR:
+BLOCK 0:
+frag_w t0
+fmul t1, v0, t0
+vary_add_c t2, t1
+fmul t3, v1, t0
+vary_add_c t4, t3
+mov tex_t, t4, u1 (tex_p0[0])
+mov tex_s, t2, u2 (tex_p1[0])
+thrsw null
+tex_result t13
+fmov t16, t13.8c
+mmov t20.8a, t16
+fmov t15, t13.8b
+mmov t20.8b, t15
+fmov t14, t13.8a
+mmov t20.8c, t14
+fmov t17, t13.8d
+mmov t20.8d, t17
+mov tlb_c, t20
+
+MESA_SHADER_FRAGMENT prog 1/2 QPU:
+0x100049e0203e303e nop nop, r0, r0 ; fmul r0, vary, ra15
+0x100248e1213e317e fadd r3, r0, r5 ; fmul r1, vary, ra15
+0x600208a7019e7340 sig_thread_switch fadd r2, r1, r5 ; nop nop, r0, r0
+0x10021e67159e7480 mov tmu0_t, r2 ; nop nop, r0, r0
+0x10021e27159e76c0 mov tmu0_s, r3 ; nop nop, r0, r0
+0xa00009e7009e7000 load_tmu0 nop nop, r0, r0 ; nop nop, r0, r0
+0x1d020867049e7900 fmax r1, r4.8c, r4.8c ; nop nop, r0, r0
+0x1b424821849e7909 fmax r0, r4.8b, r4.8b ; mov r1.8a, r1
+0x195248e1849e7900 fmax r3, r4.8a, r4.8a ; mov r1.8b, r0
+0x1f6248a1849e791b fmax r2, r4.8d, r4.8d ; mov r1.8c, r3
+0x117049e1809e7012 nop nop, r0, r0 ; mov r1.8d, r2
+0x10020ba7159e7240 mov tlb_color_all, r1 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x500009e7009e7000 sig_unlock_score nop nop, r0, r0 ; nop nop, r0, r0
+
+MESA_SHADER_VERTEX prog 0/3 pre-opt QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm0.1
+mov t2, vpm0.2
+mov t3, vpm0.3
+mov t4, vpm1.0
+mov t5, vpm1.1
+mov t6, t0
+mov t7, t1
+mov t8, t2
+mov t9, t3
+mov t10, t4
+mov t11, t5
+fmul t12, u1 (unif[0]), t6
+fmul t13, u2 (unif[1]), t6
+fmul t14, u3 (unif[2]), t6
+fmul t15, u4 (unif[3]), t6
+fmul t16, u6 (unif[4]), t7
+fmul t17, u7 (unif[5]), t7
+fmul t18, u8 (unif[6]), t7
+fmul t19, u9 (unif[7]), t7
+fadd t20, t12, t16
+fadd t21, t13, t17
+fadd t22, t14, t18
+fadd t23, t15, t19
+fmul t24, u11 (unif[8]), t8
+fmul t25, u12 (unif[9]), t8
+fmul t26, u13 (unif[10]), t8
+fmul t27, u14 (unif[11]), t8
+fadd t28, t20, t24
+fadd t29, t21, t25
+fadd t30, t22, t26
+fadd t31, t23, t27
+fmul t32, u16 (unif[12]), t9
+fmul t33, u17 (unif[13]), t9
+fmul t34, u18 (unif[14]), t9
+fmul t35, u19 (unif[15]), t9
+fadd t36, t28, t32
+fadd t37, t29, t33
+fadd t38, t30, t34
+fadd t39, t31, t35
+mov t40, t36
+mov t41, t37
+mov t42, t38
+mov t43, t39
+mov t44, t10
+mov t45, t11
+rcp t46, t43
+fmul t47, t43, t46
+fsub t48, u20 (0x40000000 / 2.000000), t47
+fmul t49, t46, t48
+fmul t51, t40, u21 (vp_x_scale)
+fmul t52, t51, t49
+ftoi t50.16a, t52
+fmul t53, t41, u22 (vp_y_scale)
+fmul t54, t53, t49
+ftoi t50.16b, t54
+mov vpm, t50
+fmul t55, t42, u23 (vp_z_scale)
+fmul t56, t55, t49
+fadd t57, t56, u24 (vp_z_offset)
+mov vpm, t57
+mov vpm, t49
+mov vpm, t44
+mov vpm, t45
+
+MESA_SHADER_VERTEX prog 0/3 QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm0.1
+fmul t15, u4 (unif[3]), t0
+fmul t19, u9 (unif[7]), t1
+fadd t23, t15, t19
+fmul t12, u1 (unif[0]), t0
+fmul t16, u6 (unif[4]), t1
+fadd t20, t12, t16
+fmul t13, u2 (unif[1]), t0
+fmul t17, u7 (unif[5]), t1
+fadd t21, t13, t17
+fmul t14, u3 (unif[2]), t0
+fmul t18, u8 (unif[6]), t1
+fadd t22, t14, t18
+mov t2, vpm0.2
+fmul t27, u14 (unif[11]), t2
+fadd t31, t23, t27
+fmul t24, u11 (unif[8]), t2
+fadd t28, t20, t24
+fmul t25, u12 (unif[9]), t2
+fadd t29, t21, t25
+fmul t26, u13 (unif[10]), t2
+fadd t30, t22, t26
+mov t3, vpm0.3
+fmul t35, u19 (unif[15]), t3
+fadd t39, t31, t35
+fmul t32, u16 (unif[12]), t3
+fadd t36, t28, t32
+fmul t33, u17 (unif[13]), t3
+rcp t46, t39
+fadd t37, t29, t33
+fmul t34, u18 (unif[14]), t3
+fadd t38, t30, t34
+fmul t47, t39, t46
+fsub t48, 2.000000, t47
+fmul t49, t46, t48
+fmul t51, t36, u21 (vp_x_scale)
+fmul t53, t37, u22 (vp_y_scale)
+fmul t52, t51, t49
+fmul t54, t53, t49
+ftoi t50.16a, t52
+ftoi t50.16b, t54
+mov vpm, t50
+fmul t55, t38, u23 (vp_z_scale)
+fmul t56, t55, t49
+fadd vpm, t56, u24 (vp_z_offset)
+mov vpm, t49
+mov t4, vpm1.0
+mov vpm, t4
+mov t5, vpm1.1
+mov vpm, t5
+
+MESA_SHADER_VERTEX prog 0/3 QPU:
+0xe0024c6700601a00 load_imm vr_setup, nop, 0x00601a00 (0.000000)
+0x1002012715c27d80 mov ra4, vpm_read ; nop nop, r0, r0
+0x1002112715c27d80 mov rb4, vpm_read ; nop nop, r0, r0
+0x100049e02012003e nop nop, r0, r0 ; fmul r0, uni, ra4
+0x100049e120804037 nop nop, r0, r0 ; fmul r1, uni, rb4
+0x100251a221804077 fadd rb6, r0, r1 ; fmul r2, uni, rb4
+0x100049e12012003e nop nop, r0, r0 ; fmul r1, uni, ra4
+0x10024163218042b7 fadd ra5, r1, r2 ; fmul r3, uni, rb4
+0x100049e22012003e nop nop, r0, r0 ; fmul r2, uni, ra4
+0x100250a0218044f7 fadd rb2, r2, r3 ; fmul r0, uni, rb4
+0x100049e32012003e nop nop, r0, r0 ; fmul r3, uni, ra4
+0x1002406081c27636 fadd ra1, r3, r0 ; mov r0, vpm_read
+0x100049e120827030 nop nop, r0, r0 ; fmul r1, uni, r0
+0x1002506221806e70 fadd rb1, rb6, r1 ; fmul r2, uni, r0
+0x1002486321160cb8 fadd r1, ra5, r2 ; fmul r3, uni, r0
+0x100240e021802ef0 fadd ra3, rb2, r3 ; fmul r0, uni, r0
+0x100210e701067c00 fadd rb3, ra1, r0 ; nop nop, r0, r0
+0x100208e715c27d80 mov r3, vpm_read ; nop nop, r0, r0
+0x100049e020827033 nop nop, r0, r0 ; fmul r0, uni, r3
+0x1002502221801e33 fadd rb0, rb1, r0 ; fmul r2, uni, r3
+0x100240a1218272b3 fadd ra2, r1, r2 ; fmul r1, uni, r3
+0x10024834810c0c7f fadd r0, ra3, r1 ; mov sfu_recip, rb0
+0x100049e320827033 nop nop, r0, r0 ; fmul r3, uni, r3
+0x1002516021803ec6 fadd rb5, rb3, r3 ; fmul r0, r0, uni
+0x100049e1209c003c nop nop, r0, r0 ; fmul r1, rb0, r4
+0xd00208a7029e1e40 sig_small_imm fsub r2, 2.0, r1 ; nop nop, r0, r0
+0x100059c6209e7022 nop nop, r0, r0 ; fmul ra6, r4, r2
+0x100049e2200a0037 nop nop, r0, r0 ; fmul r2, ra2, uni
+0x100049e3201a7016 nop nop, r0, r0 ; fmul r3, r2, ra6
+0x10124021271a76c6 ftoi ra0.16a, r3, r3 ; fmul r1, r0, ra6
+0x102240232780527e ftoi ra0.16b, r1, r1 ; fmul r3, rb5, uni
+0xe0025c6700001a00 load_imm vw_setup, nop, 0x00001a00 (0.000000)
+0x100049e0201a701e nop nop, r0, r0 ; fmul r0, r3, ra6
+0x10020c2715027d80 mov vpm, ra0 ; nop nop, r0, r0
+0x10024c2081c201f6 fadd vpm, r0, uni ; mov r0, vpm_read
+0x10020c27151a7d80 mov vpm, ra6 ; nop nop, r0, r0
+0x10024c2195c27036 mov vpm, r0 ; mov r1, vpm_read
+0x10020c27159e7240 mov vpm, r1 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+
+MESA_SHADER_COORD prog 0/4 pre-opt QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm0.1
+mov t2, vpm0.2
+mov t3, vpm0.3
+mov t4, vpm1.0
+mov t5, vpm1.1
+mov t6, t0
+mov t7, t1
+mov t8, t2
+mov t9, t3
+fmul t10, u1 (unif[0]), t6
+fmul t11, u2 (unif[1]), t6
+fmul t12, u3 (unif[2]), t6
+fmul t13, u4 (unif[3]), t6
+fmul t14, u6 (unif[4]), t7
+fmul t15, u7 (unif[5]), t7
+fmul t16, u8 (unif[6]), t7
+fmul t17, u9 (unif[7]), t7
+fadd t18, t10, t14
+fadd t19, t11, t15
+fadd t20, t12, t16
+fadd t21, t13, t17
+fmul t22, u11 (unif[8]), t8
+fmul t23, u12 (unif[9]), t8
+fmul t24, u13 (unif[10]), t8
+fmul t25, u14 (unif[11]), t8
+fadd t26, t18, t22
+fadd t27, t19, t23
+fadd t28, t20, t24
+fadd t29, t21, t25
+fmul t30, u16 (unif[12]), t9
+fmul t31, u17 (unif[13]), t9
+fmul t32, u18 (unif[14]), t9
+fmul t33, u19 (unif[15]), t9
+fadd t34, t26, t30
+fadd t35, t27, t31
+fadd t36, t28, t32
+fadd t37, t29, t33
+mov t38, t34
+mov t39, t35
+mov t40, t36
+mov t41, t37
+rcp t42, t41
+fmul t43, t41, t42
+fsub t44, u20 (0x40000000 / 2.000000), t43
+fmul t45, t42, t44
+mov vpm, t38
+mov vpm, t39
+mov vpm, t40
+mov vpm, t41
+fmul t47, t38, u21 (vp_x_scale)
+fmul t48, t47, t45
+ftoi t46.16a, t48
+fmul t49, t39, u22 (vp_y_scale)
+fmul t50, t49, t45
+ftoi t46.16b, t50
+mov vpm, t46
+fmul t51, t40, u23 (vp_z_scale)
+fmul t52, t51, t45
+fadd t53, t52, u24 (vp_z_offset)
+mov vpm, t53
+mov vpm, t45
+
+MESA_SHADER_COORD prog 0/4 QIR:
+BLOCK 0:
+mov t0, vpm0.0
+mov t1, vpm0.1
+fmul t10, u1 (unif[0]), t0
+fmul t14, u6 (unif[4]), t1
+fadd t18, t10, t14
+fmul t13, u4 (unif[3]), t0
+fmul t17, u9 (unif[7]), t1
+fadd t21, t13, t17
+fmul t11, u2 (unif[1]), t0
+fmul t15, u7 (unif[5]), t1
+fadd t19, t11, t15
+fmul t12, u3 (unif[2]), t0
+fmul t16, u8 (unif[6]), t1
+fadd t20, t12, t16
+mov t2, vpm0.2
+fmul t22, u11 (unif[8]), t2
+fadd t26, t18, t22
+fmul t25, u14 (unif[11]), t2
+fadd t29, t21, t25
+fmul t23, u12 (unif[9]), t2
+fadd t27, t19, t23
+fmul t24, u13 (unif[10]), t2
+fadd t28, t20, t24
+mov t3, vpm0.3
+fmul t30, u16 (unif[12]), t3
+fadd t34, t26, t30
+fmul t33, u19 (unif[15]), t3
+fadd t37, t29, t33
+fmul t31, u17 (unif[13]), t3
+fadd t35, t27, t31
+fmul t32, u18 (unif[14]), t3
+fadd t36, t28, t32
+mov vpm, t34
+rcp t42, t37
+mov vpm, t35
+mov vpm, t36
+mov vpm, t37
+fmul t43, t37, t42
+fsub t44, 2.000000, t43
+fmul t45, t42, t44
+fmul t47, t34, u21 (vp_x_scale)
+fmul t49, t35, u22 (vp_y_scale)
+fmul t48, t47, t45
+fmul t50, t49, t45
+ftoi t46.16a, t48
+ftoi t46.16b, t50
+mov vpm, t46
+fmul t51, t36, u23 (vp_z_scale)
+fmul t52, t51, t45
+fadd vpm, t52, u24 (vp_z_offset)
+mov vpm, t45
+
+MESA_SHADER_COORD prog 0/4 QPU:
+0xe0024c6700401a00 load_imm vr_setup, nop, 0x00401a00 (0.000000)
+0x100210e715c27d80 mov rb3, vpm_read ; nop nop, r0, r0
+0x1002012715c27d80 mov ra4, vpm_read ; nop nop, r0, r0
+0x100049e120803037 nop nop, r0, r0 ; fmul r1, uni, rb3
+0x100049e02012003e nop nop, r0, r0 ; fmul r0, uni, ra4
+0x1002516221803237 fadd rb5, r1, r0 ; fmul r2, uni, rb3
+0x100049e32012003e nop nop, r0, r0 ; fmul r3, uni, ra4
+0x100049e12012003e nop nop, r0, r0 ; fmul r1, uni, ra4
+0x100240e021803477 fadd ra3, r2, r1 ; fmul r0, uni, rb3
+0x10025122211200fe fadd rb4, r0, r3 ; fmul r2, uni, ra4
+0x100049e320803037 nop nop, r0, r0 ; fmul r3, uni, rb3
+0x1002502281c276b6 fadd rb0, r3, r2 ; mov r2, vpm_read
+0x100049e020827032 nop nop, r0, r0 ; fmul r0, uni, r2
+0x1002406321805e32 fadd ra1, rb5, r0 ; fmul r3, uni, r2
+0x100250a121804ef2 fadd rb2, rb4, r3 ; fmul r1, uni, r2
+0x10025062210e0c7a fadd rb1, ra3, r1 ; fmul r2, uni, r2
+0x100240a281c00eb6 fadd ra2, rb0, r2 ; mov r2, vpm_read
+0x100049e320827032 nop nop, r0, r0 ; fmul r3, uni, r2
+0x100248e021802ef2 fadd r3, rb2, r3 ; fmul r0, uni, r2
+0x10024d21358276f2 mov sfu_recip, r3 ; fmul r1, uni, r2
+0x100251a221060c3a fadd rb6, ra1, r0 ; fmul r2, uni, r2
+0x100201a7019c1e40 fadd ra6, rb1, r1 ; nop nop, r0, r0
+0x100241e0210a7c9c fadd ra7, ra2, r2 ; fmul r0, r3, r4
+0xe0025c6700001a00 load_imm vw_setup, nop, 0x00001a00 (0.000000)
+0xd0020867029e1e00 sig_small_imm fsub r1, 2.0, r0 ; nop nop, r0, r0
+0x10025c05359c6fe1 mov vpm, rb6 ; fmul ra5, r4, r1
+0x10020c27151a7d80 mov vpm, ra6 ; nop nop, r0, r0
+0x100049e12080603e nop nop, r0, r0 ; fmul r1, rb6, uni
+0x10020c27151e7d80 mov vpm, ra7 ; nop nop, r0, r0
+0x10024c22351676ce mov vpm, r3 ; fmul r2, r1, ra5
+0x10124023271a04b7 ftoi ra0.16a, r2, r2 ; fmul r3, ra6, uni
+0x100049e02016701e nop nop, r0, r0 ; fmul r0, r3, ra5
+0x10224022271e0037 ftoi ra0.16b, r0, r0 ; fmul r2, ra7, uni
+0x100049e320167016 nop nop, r0, r0 ; fmul r3, r2, ra5
+0x10020c2715027d80 mov vpm, ra0 ; nop nop, r0, r0
+0x10020c2701827780 fadd vpm, r3, uni ; nop nop, r0, r0
+0x10020c2715167d80 mov vpm, ra5 ; nop nop, r0, r0
+0x300009e7009e7000 sig_end nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+0x100009e7009e7000 nop nop, r0, r0 ; nop nop, r0, r0
+
+BCL:
+0x00000000 0x00000000: 0x70 Tile Binning Mode Configuration
+    Tile Allocation memory address: 0
+    Tile Allocation memory size: 0
+    Tile State Data Array Address: 0
+    Width (in tiles): 1
+    Height (in tiles): 1
+    Multisample Mode (4x): 0 /* false */
+    Tile Buffer 64-bit Color Depth: 0 /* false */
+    Auto-initialise Tile State Data Array: 0 /* false */
+    Tile Allocation Initial Block Size: 0 /* block size 32 */
+    Tile Allocation Block Size: 0 /* block size 32 */
+    Double-buffer in non-ms mode: 0 /* false */
+0x00000010 0x00000010: 0x06 Start Tile Binning
+0x00000011 0x00000011: 0x38 Primitive List Format
+    Primitive Type: 2 /* Triangles List */
+    Data Type: 1 /* 16-bit index */
+0x00000013 0x00000013: 0x66 Clip Window
+    Clip Window Left Pixel Coordinate: 0
+    Clip Window Bottom Pixel Coordinate: 0
+    Clip Window Width in pixels: 4
+    Clip Window Height in pixels: 4
+0x0000001c 0x0000001c: 0x60 Configuration Bits
+    Enable Forward Facing Primitive: 1 /* true */
+    Enable Reverse Facing Primitive: 1 /* true */
+    Clockwise Primitives: 1 /* true */
+    Enable Depth Offset: 0 /* false */
+    Antialiased Points and Lines: 0 /* false */
+    Coverage Read Type: 0
+    Rasteriser Oversample Mode: 0
+    Coverage Pipe Select: 0 /* false */
+    Coverage Read Mode: 0
+    Depth-Test Function: 7 /* ALWAYS */
+    Z updates enable: 0 /* false */
+    Early Z enable: 0 /* false */
+    Early Z updates enable: 1 /* true */
+0x00000020 0x00000020: 0x65 Depth Offset
+    Depth Offset Factor: 0
+    Depth Offset Units: 0
+0x00000025 0x00000025: 0x62 Point size
+    Point Size: 1.000000
+0x0000002a 0x0000002a: 0x63 Line width
+    Line width: 1.000000
+0x0000002f 0x0000002f: 0x69 Clipper XY Scaling
+    Viewport Half-Width in 1/16th of pixel: 32.000000
+    Viewport Half-Height in 1/16th of pixel: -32.000000
+0x00000038 0x00000038: 0x6a Clipper Z Scale and Offset
+    Viewport Z Scale (Zc to Zs): 0.500000
+    Viewport Z Offset (Zc to Zs): 0.500000
+0x00000041 0x00000041: 0x67 Viewport Offset
+    Viewport Centre X-coordinate: 2.000000
+    Viewport Centre Y-coordinate: 2.000000
+0x00000046 0x00000046: 0x61 Flat Shade Flags
+    Flat-shading Flags: 0
+0x0000004b 0x0000004b: 0x40 GL Shader State
+    Address: 2
+    Number of attribute arrays: 2
+    Extended shader record: 0 /* false */
+0x00000050 0x00000050: 0xfe Gem Relocations
+    buffer 0: 3
+    buffer 1: 0
+0x00000059 0x00000050: 0x20 Indexed Primitive List
+    Primitive mode: 4 /* TRIANGLES */
+    Index type: 1 /* 16-bit */
+    Length: 3
+    Address of Indices List: 120
+    Maximum Index: 43687
+draw complete

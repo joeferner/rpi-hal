@@ -1,0 +1,11 @@
+[build]
+target = "armv7a-none-eabi"
+
+[unstable]
+# `alloc` is built alongside `core` so an application (or example) that
+# supplies its own `#[global_allocator]` can use the `alloc` crate
+# (`Box`/`Vec`/`String`/...). Building it here is inert for targets that
+# never reference it — nothing links `alloc` unless a global allocator is
+# declared (see `examples/heap_alloc.rs`). The library itself stays
+# `#![no_std]` with no allocator, as a HAL must.
+build-std = ["core", "alloc"]

@@ -1,0 +1,187 @@
+use crate::pac::LIC;
+
+/// Safe wrapper around the BCM2836/2837 legacy interrupt controller —
+/// routes GPU-side IRQ sources (System Timer, UART0, etc.) to the ARM
+/// core. Despite the PAC's name for it, this is the legacy
+/// VideoCore-shared controller, not the separate per-core "local"
+/// controller (mailboxes, ARM generic timer) that `bcm2837-lpa` doesn't
+/// model at all.
+///
+/// Distinct from the CPU-level IRQ mask (see
+/// [`crate::irq::enable_irq`]/[`crate::irq::disable_irq`]) — both need
+/// to be open for an interrupt to fire.
+pub struct Lic {
+    lic: LIC,
+}
+
+impl Lic {
+    /// Wraps an already-configured `LIC` peripheral. The controller
+    /// itself needs no setup — routing is per-source, via the
+    /// `enable_*`/`disable_*` methods below.
+    pub fn new(lic: LIC) -> Self {
+        Self { lic }
+    }
+
+    /// Routes System Timer Compare 1's IRQ to the ARM core. Compare 1
+    /// (not 0 or 2) is used throughout this crate because GPU firmware
+    /// reserves those two — see `Timer`'s module doc comment.
+    pub fn enable_timer1_irq(&self) {
+        unsafe {
+            self.lic
+                .enable_1()
+                .write_with_zero(|w| w.timer_1().set_bit());
+        }
+    }
+
+    /// Masks System Timer Compare 1's IRQ at the interrupt controller —
+    /// the inverse of `enable_timer1_irq`.
+    pub fn disable_timer1_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_1()
+                .write_with_zero(|w| w.timer_1().clear_bit_by_one());
+        }
+    }
+
+    /// True if Compare 1's IRQ is currently pending at the interrupt
+    /// controller.
+    pub fn is_timer1_pending(&self) -> bool {
+        self.lic.pending_1().read().timer_1().bit_is_set()
+    }
+
+    /// Routes UART0's IRQ (shared by all four status conditions PL011
+    /// can raise — see `Uart::enable_rx_irq`) to the ARM core.
+    pub fn enable_uart_irq(&self) {
+        unsafe {
+            self.lic.enable_2().write_with_zero(|w| w.uart().set_bit());
+        }
+    }
+
+    /// Masks UART0's IRQ at the interrupt controller — the inverse of
+    /// `enable_uart_irq`.
+    pub fn disable_uart_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_2()
+                .write_with_zero(|w| w.uart().clear_bit_by_one());
+        }
+    }
+
+    /// True if UART0's IRQ is currently pending at the interrupt
+    /// controller.
+    pub fn is_uart_pending(&self) -> bool {
+        self.lic.pending_2().read().uart().bit_is_set()
+    }
+
+    /// Routes the AUX IRQ to the ARM core. This one line is shared by all
+    /// three AUX sub-peripherals — the mini UART (UART1), SPI1, and SPI2
+    /// (the controller ORs their interrupts together), so a handler must
+    /// read the AUX `IRQ` status register to tell which one fired. The
+    /// mini UART's RX interrupt is enabled at the peripheral with
+    /// [`MiniUart::enable_rx_irq`](crate::mini_uart::MiniUart::enable_rx_irq).
+    pub fn enable_aux_irq(&self) {
+        unsafe {
+            self.lic.enable_1().write_with_zero(|w| w.aux().set_bit());
+        }
+    }
+
+    /// Masks the AUX IRQ at the interrupt controller — the inverse of
+    /// `enable_aux_irq`. Because the line is shared across all three AUX
+    /// sub-peripherals, this masks every one of them.
+    pub fn disable_aux_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_1()
+                .write_with_zero(|w| w.aux().clear_bit_by_one());
+        }
+    }
+
+    /// True if the AUX IRQ is currently pending at the interrupt
+    /// controller. This only says *some* AUX sub-peripheral fired; read
+    /// the AUX `IRQ` status register to find which.
+    pub fn is_aux_pending(&self) -> bool {
+        self.lic.pending_1().read().aux().bit_is_set()
+    }
+
+    /// Routes the GPIO bank IRQ that covers `pin` to the ARM core.
+    ///
+    /// The BCM2836/2837 splits GPIO event detection across three
+    /// interrupt lines by pin range — 0-27, 28-45, 46-53 — so this maps
+    /// the pin to the right one. Those ranges are the hardware's, matching
+    /// Linux's `pinctrl-bcm2835` bank split; note they are deliberately
+    /// *not* the 0-31/32-53 boundary the GPEDS registers use, which is
+    /// different. (A fourth line ORs all GPIO events together, but the
+    /// per-range lines are used instead so unrelated pins can be masked
+    /// independently.)
+    ///
+    /// All pins in the same range share one line: enabling it for one pin
+    /// enables it for every pin in that range, so a handler must read
+    /// GPEDS — [`Pin::is_interrupt_pending`](crate::gpio::Pin::is_interrupt_pending)
+    /// — to tell which pin actually fired.
+    pub fn enable_gpio_irq(&self, pin: u8) {
+        unsafe {
+            match gpio_line(pin) {
+                0 => self
+                    .lic
+                    .enable_2()
+                    .write_with_zero(|w| w.gpio_0().set_bit()),
+                1 => self
+                    .lic
+                    .enable_2()
+                    .write_with_zero(|w| w.gpio_1().set_bit()),
+                _ => self
+                    .lic
+                    .enable_2()
+                    .write_with_zero(|w| w.gpio_2().set_bit()),
+            }
+        }
+    }
+
+    /// Masks the GPIO bank IRQ covering `pin` — the inverse of
+    /// `enable_gpio_irq`. Because the line is shared across the whole pin
+    /// range, this also masks every other pin in that range.
+    pub fn disable_gpio_irq(&self, pin: u8) {
+        unsafe {
+            match gpio_line(pin) {
+                0 => self
+                    .lic
+                    .disable_2()
+                    .write_with_zero(|w| w.gpio_0().clear_bit_by_one()),
+                1 => self
+                    .lic
+                    .disable_2()
+                    .write_with_zero(|w| w.gpio_1().clear_bit_by_one()),
+                _ => self
+                    .lic
+                    .disable_2()
+                    .write_with_zero(|w| w.gpio_2().clear_bit_by_one()),
+            }
+        }
+    }
+
+    /// True if the GPIO bank IRQ covering `pin` is currently pending. This
+    /// only says *some* pin in the range fired; read GPEDS via
+    /// [`Pin::is_interrupt_pending`](crate::gpio::Pin::is_interrupt_pending)
+    /// to find which.
+    pub fn is_gpio_pending(&self, pin: u8) -> bool {
+        match gpio_line(pin) {
+            0 => self.lic.pending_2().read().gpio_0().bit_is_set(),
+            1 => self.lic.pending_2().read().gpio_1().bit_is_set(),
+            _ => self.lic.pending_2().read().gpio_2().bit_is_set(),
+        }
+    }
+}
+
+/// Maps a GPIO pin to which of the three GPIO interrupt lines carries its
+/// events: 0 for pins 0-27, 1 for 28-45, 2 for 46-53. See
+/// [`Lic::enable_gpio_irq`] for why these ranges (not the GPEDS register
+/// banks) are the right split.
+const fn gpio_line(pin: u8) -> u8 {
+    if pin <= 27 {
+        0
+    } else if pin <= 45 {
+        1
+    } else {
+        2
+    }
+}
