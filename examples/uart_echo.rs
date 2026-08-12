@@ -18,6 +18,7 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
 
+    let _ = writeln!(uart, "Starting UART echo mode...");
     loop {
         let byte = uart.read_byte();
         uart.write_byte(byte);

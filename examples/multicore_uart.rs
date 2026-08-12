@@ -18,8 +18,8 @@
 //!
 //! ```sh
 //! ./scripts/build-example64.sh multicore_uart
-//! python3 <rpi-loader>/scripts/upload.py --load-addr 0x8000 <device> \
-//!     target/kernel8-example.img
+//! rpi-loader --device <device> boot --load-addr 0x80000 \
+//!     target/kernel8.img
 //! ```
 
 use core::fmt::Write;
