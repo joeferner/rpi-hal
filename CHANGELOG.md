@@ -4,7 +4,7 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - ReleaseDate
+## [0.1.0] - 2026-08-12
 
 First release, so there is nothing to diff against: the entry below is
 what the crate covers rather than what changed in it. Later entries will
