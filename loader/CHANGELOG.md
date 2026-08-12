@@ -8,7 +8,7 @@ The firmware and the host CLI share one version and ship as one release:
 they are two halves of a wire protocol, and a version that identifies
 only one of them says nothing useful about compatibility.
 
-## [Unreleased]
+## [0.1.0] - 2026-08-12
 
 ### Added
 
@@ -26,3 +26,5 @@ only one of them says nothing useful about compatibility.
   device.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
+
+[0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.1.0
