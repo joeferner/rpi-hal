@@ -23,10 +23,10 @@
 //!
 //! ```sh
 //! ./scripts/build-example64.sh aarch64_smoke bcm2711   # -> target/kernel8.img
-//! # from the rpi-loader checkout, with the board already running the loader.
+//! # with the board already running the loader (`cargo install rpi-loader`).
 //! # The load address matches linker64.ld's 0x80000, not the 32-bit 0x8000:
-//! python3 scripts/upload.py <device> boot --load-addr 0x80000 \
-//!     path/to/rpi-hal/target/kernel8.img
+//! rpi-loader --device <device> boot --load-addr 0x80000 \
+//!     target/kernel8.img
 //! ```
 
 use core::fmt::Write;

@@ -26,7 +26,7 @@ echo "Deploy either way:"
 echo "  - SD card: copy target/kernel8.img to the boot partition (with"
 echo "    arm_64bit=1 in config.txt) and it direct-boots, no loader."
 echo "  - rpi-loader over UART, matching the 0x80000 link address:"
-echo "    python3 <rpi-loader>/scripts/upload.py --load-addr 0x80000 <device> target/kernel8.img"
+echo "    rpi-loader --device <device> boot --load-addr 0x80000 target/kernel8.img"
 echo
 echo "=== FP opcodes emitted (scalar FP + SIMD) ==="
 fp=$(cargo objdump "${build_args[@]}" -- -d --no-show-raw-insn 2>/dev/null |
