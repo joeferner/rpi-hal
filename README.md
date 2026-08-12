@@ -1,6 +1,8 @@
 # rpi-hal
 
-[![CI](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml/badge.svg)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/rpi-hal.svg)](https://crates.io/crates/rpi-hal)
+[![docs.rs](https://img.shields.io/docsrs/rpi-hal)](https://docs.rs/rpi-hal)
 
 Hardware abstraction layer for the Raspberry Pi.
 

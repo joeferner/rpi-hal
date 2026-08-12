@@ -58,9 +58,11 @@ git checkout -b release-<version>
 - `Cargo.toml`: set `version`.
 - `cargo check --features bcm2837` — refreshes `Cargo.lock`, which is
   tracked and would otherwise be stale in the published tarball.
-- `CHANGELOG.md`: turn the `## [Unreleased]` section into
-  `## [<version>] - <YYYY-MM-DD>` and add a link reference at the bottom
-  pointing at `releases/tag/v<version>`.
+- `CHANGELOG.md`: give the changes a version heading —
+  `## [<version>] - <YYYY-MM-DD>` — and add a link reference at the bottom
+  pointing at `releases/tag/v<version>`. If an `## [Unreleased]` heading is
+  sitting there, rename it; if there isn't one, write the version heading
+  directly. Both are normal (see "The changelog needs no reopening" below).
 
 The date matters: the release workflow **refuses to publish** while the
 literal `ReleaseDate` placeholder is present, so a section left
@@ -136,10 +138,24 @@ gh release create v<version> \
   --notes-file <(sed -n "/## \[<version>\]/,/^\[<version>\]:/p" CHANGELOG.md)
 ```
 
-### 9. Reopen the changelog
+That's the release. Nothing further is required.
 
-Add an empty `## [Unreleased]` section back at the top of `CHANGELOG.md`,
-so the next change has somewhere to go. Another PR, same as step 2.
+## The changelog needs no reopening
+
+Keep a Changelog suggests holding an empty `## [Unreleased]` section open at
+all times. Don't: with a protected `main`, creating it is a commit and a
+pull request whose entire content is a heading with nothing under it.
+
+Instead the section is created by **whichever change first needs it**, in
+that change's own pull request — the PR that adds a driver adds the heading
+above its own bullet. The heading then exists exactly when there is
+something to put under it, and step 2 renames it. If a release happens to
+contain only changes that warranted no entry, there is no heading to rename
+and step 2 writes the version heading directly.
+
+The same reasoning applies to post-release version bumps, which is why
+there is no `0.2.0-dev` step here either: `Cargo.toml` carries the last
+released version between releases, and step 2 is where it moves.
 
 ## What the automation enforces, and how it fails
 
