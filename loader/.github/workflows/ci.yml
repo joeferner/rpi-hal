@@ -74,7 +74,11 @@ jobs:
   # `+toolchain` argument overrides firmware/rust-toolchain.toml, which is
   # what makes it a test of the claim rather than of the pin.
   msrv:
-    name: both packages build on their declared MSRV
+    # Named from the matrix rather than left to default. GitHub otherwise
+    # appends every matrix value to the job name -- including the target
+    # flags, truncated mid-word -- and these names are what a branch
+    # ruleset's required status checks are matched against.
+    name: ${{ matrix.package }} builds on its declared MSRV
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
