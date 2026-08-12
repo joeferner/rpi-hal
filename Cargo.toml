@@ -9,10 +9,12 @@ documentation = "https://docs.rs/rpi-hal"
 readme = "README.md"
 keywords = ["raspberry-pi", "bare-metal", "embedded-hal", "bcm2837", "arm"]
 categories = ["embedded", "no-std", "hardware-support"]
-# Editor configuration and the CI workflows are the tracked things with no
-# reader outside this repository -- a consumer's build never consults either,
-# and the workflows describe how *this* repository is checked and published,
-# not anything about using the crate.
+# Editor configuration, the CI workflows and `RELEASING.md` are the tracked
+# things with no reader outside this repository -- a consumer's build never
+# consults any of them, and they describe how *this* repository is checked,
+# versioned and published rather than anything about using the crate.
+# `RELEASING.md` is deliberately not linked from `README.md`, so leaving it
+# out strands nothing.
 #
 # Everything else that looks like repo furniture earns its place.
 # `scripts/` and `tests/hil/` are linked from `docs/getting-started.md` and
@@ -23,7 +25,7 @@ categories = ["embedded", "no-std", "hardware-support"]
 # its own README's table cites each one as the provenance of a specific
 # shader stage. None of it is worth cutting anyway: the whole package is
 # 2.1MiB, 598KiB compressed.
-exclude = [".vscode", ".github"]
+exclude = [".vscode", ".github", "RELEASING.md"]
 # The floor is `#[unsafe(naked)]`/`naked_asm!` (`fpu.rs`) plus
 # `slice_as_chunks`, all stabilized in 1.88 -- 1.87 rejects each of them,
 # and 1.88 builds the library with every optional feature except
