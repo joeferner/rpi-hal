@@ -1,0 +1,23 @@
+# Both architectures are supported; AArch32 is the default only because it
+# is the one a Pi 2 can run. Build the other with
+# `--target aarch64-unknown-none-softfloat`.
+[build]
+target = "armv7a-none-eabi"
+
+# The linker script for this crate's example images comes from `rpi-hal`,
+# which publishes it on the linker search path as `rpi-link.x` -- so there's
+# no copy of it here and no build script to pass one. It provides the
+# `_start`/`__bss_start`/`__bss_end` that `rpi-hal`'s boot code links
+# against, already at the right load address for the target being built
+# (0x8000 for a 32-bit kernel7.img, 0x80000 for a 64-bit kernel8.img), which
+# is why both entries below are the same line: the architecture is decided
+# on `rpi-hal`'s side, not here.
+#
+# Note these are ignored outright if a `RUSTFLAGS` environment variable is
+# set, and the symptom is `undefined symbol: __bss_end`.
+[target.armv7a-none-eabi]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
+
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
+

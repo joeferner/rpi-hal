@@ -1,0 +1,127 @@
+[package]
+name = "rpi-hal-embassy"
+version = "0.1.0"
+edition = "2024"
+description = "Embassy time driver and executor for bare-metal Raspberry Pi 2/3 (BCM2836/BCM2837), on top of rpi-hal"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joeferner/rpi-hal-embassy"
+documentation = "https://docs.rs/rpi-hal-embassy"
+readme = "README.md"
+keywords = ["raspberry-pi", "bare-metal", "embassy", "async", "bcm2837"]
+categories = ["embedded", "no-std", "asynchronous"]
+# Edition 2024 puts the floor at 1.85 on its own; 1.88 is where `rpi-hal`
+# already sits, and nothing here needs anything newer. Nightly is not a
+# requirement despite what `rust-toolchain.toml` pins for this
+# repository's own builds -- rustup's precompiled `core`/`alloc` cover
+# both bare-metal targets, so stable links the library and every example.
+rust-version = "1.88"
+
+# docs.rs builds for a host target by default, and nothing in this
+# dependency graph compiles for one: `rpi-hal` is bare-metal ARM. Naming
+# the targets explicitly is what keeps the published page from being a
+# build failure instead of documentation. Both architectures are listed
+# because the crate supports both, even though its source is shared.
+[package.metadata.docs.rs]
+default-target = "armv7a-none-eabi"
+targets = ["aarch64-unknown-none-softfloat"]
+
+[dependencies]
+# The HAL this crate adapts, from crates.io the way an external consumer
+# would take it.
+#
+# `rt`/`mmu` aren't requested: the boot sequence and the MMU bring-up are
+# the application's to choose, not a library's to force, even though both
+# are in practice required for anything here to work (see README.md).
+# Cargo unions in whatever the application selects.
+#
+# `bcm2837` is requested, unlike `rt`/`mmu`: this crate's own
+# `time_driver.rs` reaches `rpi_hal::pac::SYSTMR` and `rpi_hal::lic::Lic`
+# directly, so unlike `rt`/`mmu` a chip PAC isn't optional -- neither of
+# rpi-hal's chip features is on by default (see its Cargo.toml), and this
+# crate only targets BCM2836/2837 today (its time driver is IRQ-driven via
+# `Lic`, which doesn't exist under rpi-hal's `bcm2711` feature).
+rpi-hal = { version = "0.1.0", default-features = false, features = ["bcm2837"] }
+# Deliberately no `platform-*` feature: those select an upstream executor
+# backend, and this crate supplies its own `__pender` and idle loop instead
+# so that AArch32 and AArch64 behave identically. `platform-cortex-ar`
+# would cover only AArch32, leaving AArch64 on `platform-spin`, which never
+# idles the CPU. `embassy_executor::raw` is public precisely for this.
+embassy-executor = "0.10.0"
+# `tick-hz-1_000_000` is pinned here rather than left to the application:
+# the System Timer this driver is built on runs at a fixed 1MHz, so the
+# tick rate is a property of the hardware, not a choice. Leaving it open
+# would let an application select a rate the driver cannot deliver, and
+# `embassy-time-driver` recommends a single-rate driver pin it for exactly
+# that reason. `embassy-time` picks `TICK_HZ` up from here.
+embassy-time-driver = { version = "0.2.2", features = ["tick-hz-1_000_000"] }
+# The timer queue the driver owns. Default (no features) is the integrated
+# queue, which stores each waiter in the task itself rather than in a
+# fixed-capacity array -- no arbitrary limit on how many tasks can await a
+# deadline at once.
+embassy-time-queue-utils = "0.3.2"
+# API only. The single implementation comes from rpi-hal's `rt` feature.
+critical-section = { version = "1.2.0", default-features = false }
+
+[dev-dependencies]
+# The examples are whole programs, so unlike the library they do need
+# rpi-hal's boot sequence. Cargo unions these features with the
+# feature-free library dependency above when building a dev target, which
+# keeps `rt` out of what this crate imposes on its consumers.
+#
+# The source has to match [dependencies] exactly: Cargo requires one
+# canonical source per dependency across all build targets, and rejects
+# the manifest outright ("different source paths depending on the build
+# target") if a normal and a dev edge disagree.
+rpi-hal = { version = "0.1.0", features = [
+    "rt",
+    "async",
+    "embassy-net-driver",
+] }
+# The application-facing time API (`Instant`, `Duration`, `Timer::after`),
+# used by the examples to exercise the driver in this crate. A library
+# dependency here would be wrong: an application picks its own
+# `embassy-time` version, and this crate only has to satisfy the driver
+# contract that `embassy-time-driver` defines.
+embassy-time = { version = "0.5.1", default-features = false }
+embedded-hal = { version = "1.0.0", default-features = false }
+# The async traits whose implementations live in rpi-hal. A trait has to
+# be in scope to call its methods, so an example needs both crates by
+# name: `Wait` for GPIO, `Read`/`Write` for the UART.
+embedded-hal-async = { version = "1.0.0", default-features = false }
+embedded-io-async = { version = "0.7.0", default-features = false }
+# An async mutex, for the example where two tasks share one UART. Not a
+# library dependency: this crate's own code has no shared state to guard,
+# and which sync primitives an application uses is its own choice.
+embassy-sync = { version = "0.8.0", default-features = false }
+# Fixed-capacity `String`, to format a line before handing it to an async
+# writer — `core::fmt::Write` on `Uart` is the blocking path, which is
+# exactly what those examples exist to avoid.
+#
+# Pinned to 0.8 to match picoserve, which implements its `Content` trait
+# for *its* `heapless::String`. With 0.9 here the two are unrelated types
+# and a handler returning one fails to satisfy the trait, with an error
+# that names neither version.
+heapless = { version = "0.8.0", default-features = false }
+# The TCP/IP stack, for the example that exercises rpi-hal's
+# `embassy-net-driver` adapter. Which protocols and sockets a stack needs
+# is application policy, so the features are chosen here rather than by
+# the HAL: DHCP for addressing, TCP for the echo server, and
+# `auto-icmp-echo-reply` so the interface answers pings on its own.
+embassy-net = { version = "0.9.1", default-features = false, features = [
+    "dhcpv4",
+    "tcp",
+    "auto-icmp-echo-reply",
+] }
+# A no_std HTTP server built on embassy-net, for the example that serves
+# pages off the board. Its `embassy` feature is what pulls in the
+# embassy-net/embassy-time integration; it already wants the same versions
+# used above, so nothing is duplicated in the graph.
+picoserve = { version = "0.19.0", default-features = false, features = [
+    "embassy",
+] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -1,0 +1,110 @@
+name: Release
+
+# Publishing to crates.io is permanent -- a version can be yanked but never
+# replaced or deleted -- so this never triggers on a branch push. Pushing a
+# `v*` tag is the deliberate act that starts a release, and
+# `workflow_dispatch` covers re-running it after a failure without moving
+# the tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Creating the GitHub release object needs write access to the
+# repository's contents; nothing here needs anything else.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      # Both guards below fail the release rather than publishing
+      # something that cannot be taken back.
+      - name: Tag matches the manifest version
+        id: version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          # A dispatch run has no tag in its context, so the manifest is
+          # the authority there and there is nothing to cross-check.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the manifest version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      # The changelog must already describe this version, dated. Without
+      # the date the entry claims the version was never released; without
+      # the entry there is nothing to write the release notes from.
+      - name: The changelog has a dated section for this version
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if grep -q ReleaseDate CHANGELOG.md; then
+            echo "CHANGELOG.md still has the ReleaseDate placeholder" >&2
+            exit 1
+          fi
+          if ! grep -qE "^## \[$version\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
+            echo "CHANGELOG.md has no dated '## [$version] - YYYY-MM-DD' section" >&2
+            exit 1
+          fi
+
+      - name: The packaged tarball builds
+        run: make package
+
+      - name: Extract this version's changelog section
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="## [$version]" '
+            index($0, v) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > release-notes.md
+          cat release-notes.md
+
+      # Before the irreversible step, and idempotent, so a re-run after a
+      # failed publish does not stall here.
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" \
+              --title "rpi-hal-embassy ${{ steps.version.outputs.version }}" \
+              --notes-file release-notes.md
+          fi
+
+      # A re-run of an otherwise-successful release must not fail here just
+      # because this half already happened; crates.io refuses a version
+      # that exists, and that refusal would mask whatever the re-run was
+      # for. The sparse index is the cheapest authority on the question.
+      - name: Is this version already on crates.io?
+        id: published
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          index="$(curl -sS https://index.crates.io/rp/i-/rpi-hal-embassy || true)"
+          if printf '%s' "$index" | grep -q "\"vers\":\"$version\""; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "rpi-hal-embassy $version is already published; skipping"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish
+        if: steps.published.outputs.already == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
