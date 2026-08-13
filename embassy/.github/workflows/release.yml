@@ -62,6 +62,11 @@ jobs:
       - name: The packaged tarball builds
         run: make package
 
+      # Written to the runner's temp directory, not the checkout. This
+      # package is the repository root, so a stray file here is a file
+      # *inside* the package -- and `cargo publish` refuses to publish
+      # from a working tree with uncommitted changes, which is exactly
+      # the guard we want it to keep.
       - name: Extract this version's changelog section
         run: |
           version="${{ steps.version.outputs.version }}"
@@ -69,8 +74,8 @@ jobs:
             index($0, v) == 1 { inside = 1; next }
             inside && /^## \[/ { exit }
             inside { print }
-          ' CHANGELOG.md > release-notes.md
-          cat release-notes.md
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
 
       # Before the irreversible step, and idempotent, so a re-run after a
       # failed publish does not stall here.
@@ -80,11 +85,11 @@ jobs:
         run: |
           tag="${{ steps.version.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --notes-file release-notes.md
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$tag" \
               --title "rpi-hal-embassy ${{ steps.version.outputs.version }}" \
-              --notes-file release-notes.md
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
 
       # A re-run of an otherwise-successful release must not fail here just
