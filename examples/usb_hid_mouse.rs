@@ -25,7 +25,7 @@ use rpi_hal::pac;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::hid::mouse::{ButtonEvent, Mouse};
 
 #[panic_handler]
@@ -50,7 +50,7 @@ pub extern "C" fn kmain() -> ! {
         halt();
     }
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -65,8 +65,8 @@ pub extern "C" fn kmain() -> ! {
     // Enumerate the bus; the first HID mouse found is polled forever
     // (poll_mouse never returns, so enumeration stops there). Other
     // devices are left addressed and skipped.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let mut mouse = match Mouse::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let mut mouse = match Mouse::from_device(channel, timer, device) {
             Ok(Some(mouse)) => mouse,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -83,7 +83,7 @@ pub extern "C" fn kmain() -> ! {
             0x80 | mouse.report_endpoint(),
             mouse.max_packet_size(),
         );
-        poll_mouse(&mut uart, dwc2, timer, &mut mouse)
+        poll_mouse(&mut uart, channel, timer, &mut mouse)
     });
 
     match result {
@@ -98,12 +98,12 @@ pub extern "C" fn kmain() -> ! {
 }
 
 /// Polls `mouse` forever, printing movement deltas and button events.
-fn poll_mouse(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, mouse: &mut Mouse) -> ! {
+fn poll_mouse(uart: &mut Uart, channel: &mut Channel, timer: &Timer, mouse: &mut Mouse) -> ! {
     loop {
         // Pace polls -- interrupt endpoints mustn't be hammered.
         timer.delay_ms(10);
 
-        match mouse.poll(dwc2, timer) {
+        match mouse.poll(channel, timer) {
             Ok(Some(update)) => {
                 for event in update.button_events() {
                     match event {
@@ -126,7 +126,7 @@ fn poll_mouse(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, mouse: &mut M
                 let _ = writeln!(
                     uart,
                     "poll error: {e:?} (hcint=0x{:08x})",
-                    dwc2.last_channel_interrupt()
+                    channel.last_interrupt()
                 );
             }
         }

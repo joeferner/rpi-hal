@@ -33,6 +33,55 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   itself, so comparing what was sent against what came back is what makes
   one diagnosable.
 - crates.io version and docs.rs badges in `README.md`, alongside CI.
+- **USB host channels as owned handles**: `usb::dwc2::Dwc2Host::alloc_channel`
+  hands out a `usb::dwc2::Channel`, and every transfer primitive now lives
+  on that rather than on the controller. A channel carries its own DMA
+  staging buffer and borrows the controller immutably, so several can be
+  outstanding at once and two endpoints can be driven independently —
+  where before one `&mut Dwc2Host` and one shared buffer meant one
+  transfer at a time, on a channel index every caller hardcoded to 0.
+  Exhaustion is reported (`None`, and `EnumerationError::OutOfChannels`)
+  rather than queued.
+- **Interrupt-driven USB** (`async` feature): `usb::dwc2::asynch`, with an
+  `_async` twin of each `Channel` transfer primitive plus
+  `Dwc2Host::wait_for_port_change` and `Channel::wait_microframes`, all
+  serviced by `usb::dwc2::on_irq` from the application's `__irq_handler`.
+  No time crate is involved: the channel-halt interrupt reports
+  completion and start-of-frame supplies the microframe scheduling a
+  periodic split needs, so the whole path is bus-clocked. An async
+  transfer has no timeout of its own — dropping the future imposes one
+  and aborts the channel. `examples/usb_irq.rs` drives it with a
+  hand-rolled `block_on`, no executor.
+- `lic::Lic::enable_usb_irq`/`disable_usb_irq`/`is_usb_pending`, routing
+  the DWC2 controller's line to the ARM core.
+- `usb::lan9514::Lan9514::from_endpoint`, for a LAN9514 that an external
+  host stack has already addressed and configured — the counterpart to
+  `from_device` when this crate's `enumerate` isn't the thing walking the
+  bus.
+
+### Changed
+
+- `usb::enumerate` takes `&Dwc2Host` rather than `&mut`, and its callback
+  receives a `&mut Channel` in place of the controller. A callback that
+  needs a channel outliving enumeration captures the same `&Dwc2Host` and
+  allocates its own.
+- `usb::lan9514::Lan9514Phy::new` and `Lan9514Driver::new` take an owned
+  `Channel` instead of `&mut Dwc2Host`, so the rest of the controller's
+  channels stay free while a network stack runs.
+- Every `usb::control`, `usb::hub` and `usb::hid` entry point takes
+  `&mut Channel` in place of `&mut Dwc2Host`.
+- `Dwc2Host::last_channel_interrupt` is now `Channel::last_interrupt`,
+  reporting per channel rather than per controller.
+- `Dwc2Host::init` leaves `GINTMSK.SOFM` masked. It was set
+  unconditionally and harmless only because nothing routed USB to the ARM
+  core; now that `Lic::enable_usb_irq` exists, an unmasked 8kHz level
+  source with nothing to acknowledge it would be a hang rather than
+  merely wasted cycles. The async path unmasks it only while a channel is
+  waiting on a microframe.
+- A channel start programs `HCINTMSK` to `CHH` alone instead of every
+  condition, so "this channel raised `HAINT`" means "it halted". The
+  `HCINT` bits themselves still latch, so nothing that reads them at the
+  halt — including the split logic's `ACK` check — sees any difference.
 
 ### Fixed
 

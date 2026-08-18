@@ -344,6 +344,10 @@ name = "usb_ethernet_http_server"
 required-features = ["smoltcp"]
 
 [[example]]
+name = "usb_irq"
+required-features = ["async"]
+
+[[example]]
 name = "h264_decode"
 required-features = ["mmal", "embedded-sdmmc"]
 

@@ -32,11 +32,6 @@ pub mod mouse;
 
 use crate::usb::descriptor::{Descriptors, EndpointDescriptor, InterfaceDescriptor};
 
-/// Host channel HID transfers use. Fine as a fixed constant for now —
-/// nothing else contends for channels (the same choice
-/// [`crate::usb::control`] makes for control transfers).
-const CHANNEL: usize = 0;
-
 /// `bInterfaceClass` value identifying a Human Interface Device.
 const HID_CLASS: u8 = 3;
 

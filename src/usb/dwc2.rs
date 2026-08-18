@@ -49,6 +49,18 @@
 //! VideoCore bus alias the same way (see `to_vc_bus_address`) before
 //! it's ever written to `HCDMA`.
 
+/// Interrupt-driven `async` twins of [`Channel`]'s transfer primitives —
+/// see the module's own documentation for the interrupt wiring an
+/// application must provide.
+///
+/// Available only with the `async` feature enabled.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+pub mod asynch;
+
+#[cfg(feature = "async")]
+pub use asynch::on_irq;
+
 use core::cell::Cell;
 
 use crate::cache::{clean_range, invalidate_range, MIN_CACHE_LINE};
@@ -111,7 +123,7 @@ enum EndpointType {
     /// Interrupt endpoint (e.g. a hub's status-change endpoint or a HID
     /// report endpoint). Periodic on this core — for an *interrupt*
     /// endpoint a bulk channel type was tried instead and the
-    /// transaction wouldn't run at all (see [`Dwc2Host::interrupt_in`]);
+    /// transaction wouldn't run at all (see [`Channel::interrupt_in`]);
     /// a genuine bulk endpoint still uses [`Self::Bulk`] below.
     Interrupt,
     /// Bulk endpoint (e.g. the LAN9514 Ethernet controller's frame RX/TX
@@ -148,6 +160,22 @@ pub enum TransferError {
     /// A caller-level retry budget was exhausted while the device
     /// kept NAKing — distinct from a single [`Self::Nak`].
     NakTimeout,
+    /// `HCINT.FRMOR` — frame overrun. A periodic (interrupt or
+    /// isochronous) transaction was still in progress when the
+    /// microframe it was scheduled in ran out, and the core abandoned
+    /// it.
+    ///
+    /// This is about *when* the transaction was started, not about the
+    /// device: a periodic transfer armed late in a microframe has too
+    /// little of it left to finish. Retrying on the next interval is
+    /// the normal response, which is why callers should treat this much
+    /// as they treat [`Self::Nak`] rather than as a hard failure.
+    FrameOverrun,
+    /// `HCINT.DTERR` — the packet arrived carrying the opposite data
+    /// toggle to the one expected, so it was discarded as a
+    /// retransmission of one already received. Means host and device
+    /// have lost toggle synchronisation.
+    DataToggleError,
     /// The channel halted (`HCINT.CHH`) without `HCINT.XFRC` (transfer
     /// complete) and without any specific error/status bit set — an
     /// unexplained halt. Not expected in normal operation now that
@@ -202,7 +230,7 @@ pub struct ControlEndpoint {
 }
 
 /// The shape of one channel transaction, bundled so
-/// [`Dwc2Host::start_channel`]/[`Dwc2Host::run_transaction`] don't
+/// [`Channel::start_channel`]/[`Channel::run_transaction`] don't
 /// exceed clippy's argument-count limit.
 #[derive(Clone, Copy)]
 struct Transaction {
@@ -233,10 +261,10 @@ struct Transaction {
 /// line-aligned at both ends.
 const DMA_BUFFER_LEN: usize = 256;
 
-/// Largest data payload a single transfer through this driver's shared
-/// DMA scratch buffer can carry, in bytes — every control-transfer stage
-/// ([`Dwc2Host::control_data_in`], [`Dwc2Host::control_data_out`]) and an
-/// interrupt-IN poll ([`Dwc2Host::interrupt_in`]). A caller sizing a
+/// Largest data payload a single transfer through a channel's DMA
+/// scratch buffer can carry, in bytes — every control-transfer stage
+/// ([`Channel::control_data_in`], [`Channel::control_data_out`]) and an
+/// interrupt-IN poll ([`Channel::interrupt_in`]). A caller sizing a
 /// buffer for one of those (a descriptor read, a report endpoint's
 /// packets) can check it against this instead of guessing. Bulk transfers
 /// DMA straight from/to the caller's buffer and aren't bounded by it.
@@ -249,8 +277,19 @@ pub const MAX_TRANSFER_LEN: usize = DMA_BUFFER_LEN;
 /// multi-packet transfers, so it must be large enough for the whole
 /// transfer at once — hence [`DMA_BUFFER_LEN`], which is also a whole
 /// number of cache lines.
+///
+/// One per [`Channel`], not one per controller: two channels running at
+/// once must not be staging their packets through the same memory.
 #[repr(C, align(64))]
 struct DmaBuffer([u8; DMA_BUFFER_LEN]);
+
+/// Upper bound on host channels, from the PAC rather than the silicon:
+/// `USB_OTG_HOST::host_channel(n)` indexes a fixed 12-entry array and
+/// refuses to compile past it. The core reports its real count in
+/// `GHWCFG2` (8 on this SoC), which is what [`Dwc2Host::alloc_channel`]
+/// actually hands out — this only keeps a nonsense read from indexing
+/// out of range.
+const MAX_CHANNELS: usize = 12;
 
 // Host channel interrupt (`HCINT`) bit masks — the terminal conditions
 // a transaction can halt with. Used directly as masks rather than
@@ -275,6 +314,14 @@ const HCINT_NYET: u32 = 1 << 6;
 const HCINT_TXERR: u32 = 1 << 7;
 /// `HCINT.BBERR` — babble (the device sent more than expected).
 const HCINT_BBERR: u32 = 1 << 8;
+/// `HCINT.FRMOR` — frame overrun: a periodic transaction was still
+/// running when its (micro)frame ended, so the core abandoned it. A
+/// scheduling failure, not a device fault — see
+/// [`TransferError::FrameOverrun`].
+const HCINT_FRMOR: u32 = 1 << 9;
+/// `HCINT.DTERR` — data toggle error: the packet arrived with the PID
+/// this endpoint's toggle didn't expect.
+const HCINT_DTERR: u32 = 1 << 10;
 
 /// How many times to poll a split transaction's complete-split phase
 /// while the hub's transaction translator answers `NYET`/`NAK` before
@@ -291,21 +338,31 @@ const MAX_CSPLIT_POLLS: u32 = 8;
 const CSPLIT_RETRY_DELAY_US: u32 = 5 * 125;
 
 /// Host-mode DWC2 controller: reset, powered up, and (after
-/// [`Self::reset_port`]) able to run DMA-mode control transfers (up to
-/// `DMA_BUFFER_LEN` bytes of data per transfer, the DWC2 handling the
-/// multi-packet split) and interrupt-IN polls ([`Self::interrupt_in`]),
-/// on directly-connected devices or full/low-speed devices behind a
-/// hub (via split transactions — see [`SplitTarget`]). No bulk
-/// transfers, enumeration state machine, or hub traversal live here —
-/// those belong above the channel primitives.
+/// [`Self::reset_port`]) able to hand out [`Channel`]s — the host
+/// channels every transfer actually runs on.
+///
+/// What lives here is bus-level and shared: the root port, and the pool
+/// of host channels. What lives on [`Channel`] is everything to do with
+/// moving bytes — DMA-mode control transfers (up to
+/// [`MAX_TRANSFER_LEN`] bytes of data per transfer, the DWC2 handling
+/// the multi-packet split), interrupt-IN polls and bulk transfers, on
+/// directly-connected devices or full/low-speed devices behind a hub
+/// (via split transactions — see [`SplitTarget`]). The split is what
+/// lets two endpoints be driven at once: a [`Channel`] borrows this
+/// type immutably, so several can be outstanding, each with its own
+/// registers and its own DMA buffer. No enumeration state machine or
+/// hub traversal lives here either — those belong above the channel
+/// primitives.
 pub struct Dwc2Host {
     global: USB_OTG_GLOBAL,
     host: USB_OTG_HOST,
-    dma_buffer: DmaBuffer,
-    /// Raw `HCINT` value captured at the most recent channel halt — see
-    /// [`Self::last_channel_interrupt`]. Interior-mutable so the polling
-    /// path (which takes `&self`) can record it.
-    last_hcint: Cell<u32>,
+    /// One bit per host channel, set while a [`Channel`] handle for it
+    /// is outstanding. Interior-mutable so [`Self::alloc_channel`] can
+    /// take `&self` and so hand out more than one channel at a time.
+    allocated: Cell<u16>,
+    /// How many host channels this core actually implements, read from
+    /// `GHWCFG2` in [`Self::init`] rather than assumed.
+    num_channels: u8,
 }
 
 impl Dwc2Host {
@@ -441,20 +498,25 @@ impl Dwc2Host {
             .gahbcfg()
             .modify(|_, w| w.dmaen().set_bit().axi_wait().set_bit().gint().set_bit());
 
-        // Unmask the host-channel, port and start-of-frame interrupts
-        // in `GINTMSK`. This driver polls `HCINT` directly and never
-        // takes a CPU interrupt, so `GINTMSK` (which only gates whether
-        // pending sources propagate to the core's interrupt line) has
-        // no bearing on the polling path -- these bits are unmasked to
-        // match the host-mode setup of the known-working reference
-        // drivers for this SoC (rsta2's `circle`/`uspi`) and to leave
-        // the core ready for a future interrupt-driven path, not
-        // because masking them affected transfers (it didn't; see the
-        // module doc on what actually gated bring-up). `HCIM` (host
+        // Unmask the host-channel and port interrupts in `GINTMSK`, and
+        // mask start-of-frame. `GINTMSK` gates whether a pending source
+        // propagates to the core's interrupt line, so it has no bearing
+        // on the blocking path (which reads `HCINT`/`HFNUM` directly);
+        // it decides what an application that routes USB to the ARM core
+        // (`Lic::enable_usb_irq`) will actually see. `HCIM` (host
         // channels, bit 25) and `PRTIM` (port, bit 24) use raw bits
         // because this PAC generates a reader but no writer for the
         // port-interrupt mask.
-        global.gintmsk().modify(|_, w| w.sofm().set_bit());
+        //
+        // `SOFM` is deliberately *cleared*. A high-speed port raises SOF
+        // every 125µs, so leaving it unmasked hands an application that
+        // enables the USB IRQ an 8kHz interrupt with nothing to service
+        // it — and since the line stays asserted until `GINTSTS.SOF` is
+        // acked, the core re-enters the handler forever rather than
+        // merely wasting cycles. Only [`Channel`]'s periodic-split
+        // scheduling needs SOF, and it unmasks the bit for exactly as
+        // long as some channel is waiting on a microframe.
+        global.gintmsk().modify(|_, w| w.sofm().clear_bit());
         unsafe {
             global
                 .gintmsk()
@@ -498,24 +560,54 @@ impl Dwc2Host {
         // that entirely.
         host.hprt().write(|w| w.ppwr().set_bit());
 
+        // How many host channels this core implements. `GHWCFG2`
+        // (`hw_config0` in this PAC — see the module doc on its naming)
+        // encodes it as the count minus one, so a core reporting 7 has
+        // 8. Read rather than hardcoded, and still capped at the number
+        // the PAC will index: `host_channel(n)` panics at compile time
+        // past 12, and a bogus read must not turn into an out-of-range
+        // register access.
+        let num_channels =
+            (global.hw_config0().read().host_channel_count().bits() + 1).min(MAX_CHANNELS as u8);
+
         Self {
             global,
             host,
-            dma_buffer: DmaBuffer([0; DMA_BUFFER_LEN]),
-            last_hcint: Cell::new(0),
+            allocated: Cell::new(0),
+            num_channels,
         }
     }
 
-    /// The raw `HCINT` (host channel interrupt) value captured the last
-    /// time a channel halted — the exact bits the transfer's
-    /// [`TransferError`]/success was derived from (`XFRC`, `STALL`,
-    /// `NAK`, `ACK`, `NYET`, `TXERR`, `BBERR`, `CHH`, …). This driver
-    /// collapses those bits into a coarse result; a caller debugging a
-    /// transfer that fails or behaves unexpectedly can read the
-    /// underlying bits here to see exactly what the hardware reported.
-    /// Only meaningful immediately after a transfer method returns.
-    pub fn last_channel_interrupt(&self) -> u32 {
-        self.last_hcint.get()
+    /// How many host channels this core implements — the ceiling on how
+    /// many [`Channel`]s can be outstanding at once (8 on this SoC).
+    pub fn num_channels(&self) -> usize {
+        self.num_channels as usize
+    }
+
+    /// Takes the lowest-numbered free host channel out of the pool,
+    /// returning `None` when every channel this core has is already
+    /// handed out.
+    ///
+    /// Exhaustion is reported, not queued: a caller that needs a channel
+    /// and can't have one is in a position to say so (or to wait on its
+    /// own terms), whereas a queue hidden in here would silently
+    /// serialise transfers a caller believed were concurrent. The
+    /// [`Channel`] returns its slot to the pool when dropped, so a
+    /// short-lived transfer can scope one rather than holding it.
+    ///
+    /// Takes `&self`, so several channels can be outstanding at once —
+    /// that's the whole point of the split between this type and
+    /// [`Channel`].
+    pub fn alloc_channel(&self) -> Option<Channel<'_>> {
+        let allocated = self.allocated.get();
+        let index = (0..self.num_channels as usize).find(|i| allocated & (1 << i) == 0)?;
+        self.allocated.set(allocated | (1 << index));
+        Some(Channel {
+            owner: self,
+            index,
+            dma_buffer: DmaBuffer([0; DMA_BUFFER_LEN]),
+            last_hcint: Cell::new(0),
+        })
     }
 
     /// True if the root port currently reports a device electrically
@@ -621,12 +713,85 @@ impl Dwc2Host {
         &self.host
     }
 
-    /// Runs one SETUP-stage transaction on `channel`: 8 raw bytes,
-    /// always PID SETUP, always OUT direction (a SETUP token is
-    /// functionally an OUT transfer at the protocol level).
+    /// Returns a channel's slot to the pool. Called by [`Channel`]'s
+    /// `Drop`, which is the only way a slot is ever freed.
+    fn free_channel(&self, index: usize) {
+        self.allocated.set(self.allocated.get() & !(1 << index));
+    }
+}
+
+/// One host channel, taken from [`Dwc2Host::alloc_channel`] — the thing
+/// a USB transfer actually runs on.
+///
+/// Every transfer primitive lives here rather than on [`Dwc2Host`]
+/// because a host channel is genuinely independent hardware: its
+/// registers are its own, and the core arbitrates between channels by
+/// itself. Holding one is therefore what grants the right to run a
+/// transfer, and two callers holding two channels can drive two
+/// endpoints without either taking a mutable borrow of the controller.
+///
+/// The channel carries the DMA scratch buffer its control and
+/// interrupt transfers stage through, so it is not a trivially cheap
+/// value to move around — allocate one per endpoint that needs one and
+/// keep it, rather than re-allocating per transfer. Dropping it frees
+/// the slot for another caller.
+pub struct Channel<'a> {
+    /// The controller this channel belongs to — borrowed immutably, so
+    /// its siblings can be outstanding at the same time.
+    owner: &'a Dwc2Host,
+    /// This channel's index into the core's host-channel registers.
+    index: usize,
+    /// This channel's own DMA staging buffer — see [`DmaBuffer`].
+    dma_buffer: DmaBuffer,
+    /// Raw `HCINT` value captured at the most recent halt on this
+    /// channel — see [`Self::last_interrupt`]. Interior-mutable so the
+    /// transfer path (which takes `&self`) can record it.
+    last_hcint: Cell<u32>,
+}
+
+impl Drop for Channel<'_> {
+    fn drop(&mut self) {
+        self.owner.free_channel(self.index);
+    }
+}
+
+impl Channel<'_> {
+    /// This channel's index into the core's host-channel registers.
+    /// Only of interest for diagnostics — nothing in this API takes a
+    /// channel number any more.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The raw `HCINT` (host channel interrupt) value captured the last
+    /// time this channel halted — the exact bits the transfer's
+    /// [`TransferError`]/success was derived from (`XFRC`, `STALL`,
+    /// `NAK`, `ACK`, `NYET`, `TXERR`, `BBERR`, `CHH`, …). This driver
+    /// collapses those bits into a coarse result; a caller debugging a
+    /// transfer that fails or behaves unexpectedly can read the
+    /// underlying bits here to see exactly what the hardware reported.
+    /// Only meaningful immediately after a transfer method returns.
+    pub fn last_interrupt(&self) -> u32 {
+        self.last_hcint.get()
+    }
+
+    /// The core's host-mode register block, for the handful of shared
+    /// registers a channel touches (`HAINTMSK`, `HFNUM`) alongside its
+    /// own.
+    fn regs(&self) -> &USB_OTG_HOST {
+        &self.owner.host
+    }
+
+    /// This channel's own register block.
+    fn ch(&self) -> &crate::pac::usb_otg_host::HOST_CHANNEL {
+        self.owner.host.host_channel(self.index)
+    }
+
+    /// Runs one SETUP-stage transaction: 8 raw bytes, always PID SETUP,
+    /// always OUT direction (a SETUP token is functionally an OUT
+    /// transfer at the protocol level).
     pub fn control_setup(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         setup: &[u8; 8],
         timer: &Timer,
@@ -643,20 +808,19 @@ impl Dwc2Host {
             transfer_size: 8,
             dma_address: address,
         };
-        self.run_transaction(channel, endpoint, &txn, timer)?;
+        self.run_transaction(endpoint, &txn, timer)?;
         Ok(())
     }
 
-    /// Runs one DATA-stage IN transaction on `channel`, reading up to
-    /// `buf.len()` bytes (always starting at PID DATA1 — see
-    /// [`DataPid::Data1`]; the DWC2 toggles DATA1/DATA0 itself across a
-    /// multi-packet transfer). Returns the number of bytes actually
-    /// received, which can be less than `buf.len()` if the device sent
-    /// a short packet. `buf.len()` must be at most `DMA_BUFFER_LEN` —
-    /// this driver's shared DMA scratch buffer size.
+    /// Runs one DATA-stage IN transaction, reading up to `buf.len()`
+    /// bytes (always starting at PID DATA1 — see [`DataPid::Data1`]; the
+    /// DWC2 toggles DATA1/DATA0 itself across a multi-packet transfer).
+    /// Returns the number of bytes actually received, which can be less
+    /// than `buf.len()` if the device sent a short packet. `buf.len()`
+    /// must be at most [`MAX_TRANSFER_LEN`] — this channel's DMA scratch
+    /// buffer size.
     pub fn control_data_in(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         buf: &mut [u8],
         timer: &Timer,
@@ -672,20 +836,19 @@ impl Dwc2Host {
             transfer_size: buf.len() as u32,
             dma_address: address,
         };
-        let received = self.run_transaction(channel, endpoint, &txn, timer)?;
+        let received = self.run_transaction(endpoint, &txn, timer)?;
 
         invalidate_range(address, buf.len());
         buf[..received].copy_from_slice(&self.dma_buffer.0[..received]);
         Ok(received)
     }
 
-    /// Runs one zero-length STATUS-stage OUT transaction on `channel`
-    /// (always PID DATA1 — see [`DataPid::Data1`]), completing a
-    /// control transfer that had a device-to-host (IN) data stage, or
-    /// no data stage in the host-to-device direction.
+    /// Runs one zero-length STATUS-stage OUT transaction (always PID
+    /// DATA1 — see [`DataPid::Data1`]), completing a control transfer
+    /// that had a device-to-host (IN) data stage, or no data stage in
+    /// the host-to-device direction.
     pub fn control_status_out(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         timer: &Timer,
     ) -> Result<(), TransferError> {
@@ -698,18 +861,17 @@ impl Dwc2Host {
             transfer_size: 0,
             dma_address: address,
         };
-        self.run_transaction(channel, endpoint, &txn, timer)?;
+        self.run_transaction(endpoint, &txn, timer)?;
         Ok(())
     }
 
-    /// Runs one zero-length STATUS-stage IN transaction on `channel`
-    /// (always PID DATA1 — see [`DataPid::Data1`]), completing a
-    /// control transfer that had no data stage (e.g. SET_ADDRESS,
-    /// SET_CONFIGURATION): a no-data control transfer's status stage is
-    /// always IN, the opposite of its (absent) data stage.
+    /// Runs one zero-length STATUS-stage IN transaction (always PID
+    /// DATA1 — see [`DataPid::Data1`]), completing a control transfer
+    /// that had no data stage (e.g. SET_ADDRESS, SET_CONFIGURATION): a
+    /// no-data control transfer's status stage is always IN, the
+    /// opposite of its (absent) data stage.
     pub fn control_status_in(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         timer: &Timer,
     ) -> Result<(), TransferError> {
@@ -722,22 +884,20 @@ impl Dwc2Host {
             transfer_size: 0,
             dma_address: address,
         };
-        self.run_transaction(channel, endpoint, &txn, timer)?;
+        self.run_transaction(endpoint, &txn, timer)?;
         Ok(())
     }
 
-    /// Runs one DATA-stage OUT transaction on `channel`, sending `data`
-    /// (always starting at PID DATA1 — see [`DataPid::Data1`]; the DWC2
-    /// toggles across a multi-packet transfer itself). For the
-    /// host-to-device control transfers that carry data (e.g. a
-    /// vendor register write — see
-    /// [`crate::usb::control::vendor_out`]); the plain SET_ADDRESS/
+    /// Runs one DATA-stage OUT transaction, sending `data` (always
+    /// starting at PID DATA1 — see [`DataPid::Data1`]; the DWC2 toggles
+    /// across a multi-packet transfer itself). For the host-to-device
+    /// control transfers that carry data (e.g. a vendor register write —
+    /// see [`crate::usb::control::vendor_out`]); the plain SET_ADDRESS/
     /// SET_CONFIGURATION requests have no data stage and use
     /// [`Self::control_status_in`] directly. `data.len()` must be at most
-    /// `DMA_BUFFER_LEN`.
+    /// [`MAX_TRANSFER_LEN`].
     pub fn control_data_out(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         data: &[u8],
         timer: &Timer,
@@ -756,7 +916,7 @@ impl Dwc2Host {
             transfer_size: data.len() as u32,
             dma_address: address,
         };
-        self.run_transaction(channel, endpoint, &txn, timer)?;
+        self.run_transaction(endpoint, &txn, timer)?;
         Ok(())
     }
 
@@ -778,7 +938,6 @@ impl Dwc2Host {
     /// `bInterval`).
     pub fn interrupt_in(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         endpoint_number: u8,
         data_toggle: &mut bool,
@@ -800,7 +959,7 @@ impl Dwc2Host {
             transfer_size: buf.len() as u32,
             dma_address: address,
         };
-        let received = self.run_transaction(channel, endpoint, &txn, timer)?;
+        let received = self.run_transaction(endpoint, &txn, timer)?;
         // Only a completed transfer advances the toggle; a NAK left it
         // untouched by returning early above.
         *data_toggle = !*data_toggle;
@@ -830,7 +989,6 @@ impl Dwc2Host {
     /// [`crate::usb::lan9514`]).
     pub fn bulk_out(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         endpoint_number: u8,
         data_toggle: &mut bool,
@@ -848,8 +1006,8 @@ impl Dwc2Host {
             transfer_size: buf.len() as u32,
             dma_address: address,
         };
-        let sent = self.run_transaction(channel, endpoint, &txn, timer)?;
-        *data_toggle = self.channel_next_toggle(channel);
+        let sent = self.run_transaction(endpoint, &txn, timer)?;
+        *data_toggle = self.next_toggle();
         Ok(sent)
     }
 
@@ -872,7 +1030,6 @@ impl Dwc2Host {
     /// sizing it to a whole number of packets wastes nothing.
     pub fn bulk_in(
         &mut self,
-        channel: usize,
         endpoint: ControlEndpoint,
         endpoint_number: u8,
         data_toggle: &mut bool,
@@ -896,8 +1053,8 @@ impl Dwc2Host {
             transfer_size,
             dma_address: address,
         };
-        let received = self.run_transaction(channel, endpoint, &txn, timer)?;
-        *data_toggle = self.channel_next_toggle(channel);
+        let received = self.run_transaction(endpoint, &txn, timer)?;
+        *data_toggle = self.next_toggle();
 
         invalidate_range(address, buf.len());
         Ok(received)
@@ -914,19 +1071,13 @@ impl Dwc2Host {
     }
 
     /// The data toggle (`true` = DATA1) to resume the next transfer on
-    /// `channel` with, read back from `HCTSIZ.DPID` after a completed
+    /// this channel with, read back from `HCTSIZ.DPID` after a completed
     /// transfer — the DWC2 leaves it pointing at the next expected PID,
     /// which is correct even when the transfer spanned several packets
     /// (so it can't just be flipped like the single-packet interrupt
     /// path does).
-    fn channel_next_toggle(&self, channel: usize) -> bool {
-        self.host
-            .host_channel(channel)
-            .hctsiz()
-            .read()
-            .dpid()
-            .bits()
-            == DataPid::Data1.bits()
+    fn next_toggle(&self) -> bool {
+        self.ch().hctsiz().read().dpid().bits() == DataPid::Data1.bits()
     }
 
     /// Programs `HCSPLT`/`HCDMA`/`HCTSIZ`/`HCCHAR` for one DMA
@@ -952,13 +1103,12 @@ impl Dwc2Host {
     /// cleared for a non-periodic split).
     fn start_channel(
         &self,
-        channel: usize,
         endpoint: ControlEndpoint,
         txn: &Transaction,
         complete_split: bool,
         odd_frame: Option<bool>,
     ) {
-        let ch = self.host.host_channel(channel);
+        let ch = self.ch();
 
         // Clear any stale interrupt bits left over from a previous
         // transaction on this channel -- `HCINT` bits are
@@ -968,14 +1118,25 @@ impl Dwc2Host {
             ch.hcint().write(|w| w.bits(0xffff_ffff));
         }
 
-        // Unmask every channel interrupt condition. Irrelevant to
-        // whether the CPU actually takes an interrupt (this driver
-        // only ever polls `HCINT` directly), but a known-working
-        // reference driver for this same SoC always programs this
-        // explicitly before starting a channel rather than leaving it
-        // at its reset value, so this does too.
+        // Program the per-channel interrupt mask explicitly, rather
+        // than leaving it at its reset value — the known-working
+        // reference driver for this SoC does the same before every
+        // channel start.
+        //
+        // `CHH` alone, not every condition. `HCINTMSK` gates only what
+        // reaches `HAINT` and the core's interrupt line; the `HCINT`
+        // bits themselves latch regardless, so the blocking path (which
+        // reads `HCINT` directly) sees exactly what it always did, and
+        // so does [`Self::interpret_halt`] at the halt. What the
+        // narrower mask buys is that "this channel raised `HAINT`" means
+        // "this channel halted" and nothing else — which is what
+        // [`asynch::on_irq`] needs. With every condition unmasked, an
+        // intermediate `ACK` or `NAK` would assert the line too, and a
+        // handler would have to either ack it (destroying a bit the
+        // split logic reads at the halt — `run_split_packet` keys off
+        // `ACK`) or leave it asserted (a re-entering interrupt forever).
         unsafe {
-            ch.hcintmsk().write(|w| w.bits(0xffff_ffff));
+            ch.hcintmsk().write(|w| w.bits(HCINT_CHH));
         }
 
         // Unmask this channel at the host level too. `HAINTMSK`
@@ -989,9 +1150,9 @@ impl Dwc2Host {
         // `.write()`, to only ever add this channel's bit rather than
         // clobbering any other channel's.
         unsafe {
-            self.host
+            self.regs()
                 .haintmsk()
-                .modify(|r, w| w.haintm().bits(r.haintm().bits() | (1 << channel)));
+                .modify(|r, w| w.haintm().bits(r.haintm().bits() | (1 << self.index)));
         }
 
         // Split control (`HCSPLT`): for a device behind a high-speed
@@ -1051,7 +1212,7 @@ impl Dwc2Host {
         let odd_frame = match odd_frame {
             Some(odd) => odd,
             None if endpoint.split.is_some() => false,
-            None => self.host.hfnum().read().frnum().bits() & 1 == 1,
+            None => self.regs().hfnum().read().frnum().bits() & 1 == 1,
         };
 
         unsafe {
@@ -1069,17 +1230,15 @@ impl Dwc2Host {
         }
     }
 
-    /// Acknowledges (clears) every pending bit in `channel`'s `HCINT`.
-    fn ack_hcint(&self, channel: usize) {
+    /// Acknowledges (clears) every pending bit in this channel's
+    /// `HCINT`.
+    fn ack_hcint(&self) {
         unsafe {
-            self.host
-                .host_channel(channel)
-                .hcint()
-                .write(|w| w.bits(0xffff_ffff));
+            self.ch().hcint().write(|w| w.bits(0xffff_ffff));
         }
     }
 
-    /// Forcibly halts `channel` after [`Self::run_channel`] times out,
+    /// Forcibly halts this channel after [`Self::run_channel`] times out,
     /// leaving it in a clean, reusable state. A timeout means `HCINT`
     /// never signaled completion, so — per the DWC2 databook — `CHENA`
     /// may still be set and the transaction still technically active in
@@ -1094,10 +1253,10 @@ impl Dwc2Host {
     /// waiting for `HCINT.CHH` (channel halted); this does that, with
     /// its own short timeout so a channel that won't halt can't wedge
     /// the caller forever either.
-    fn abort_channel(&self, channel: usize, timer: &Timer) {
+    fn abort_channel(&self, timer: &Timer) {
         const ABORT_TIMEOUT_US: u64 = 10_000;
 
-        let ch = self.host.host_channel(channel);
+        let ch = self.ch();
         ch.hcchar()
             .modify(|_, w| w.chdis().set_bit().chena().set_bit());
 
@@ -1107,10 +1266,10 @@ impl Dwc2Host {
                 break;
             }
         }
-        self.ack_hcint(channel);
+        self.ack_hcint();
     }
 
-    /// Waits for `channel` to halt (`HCINT.CHH` — the DMA-mode
+    /// Waits for this channel to halt (`HCINT.CHH` — the DMA-mode
     /// completion signal), returning the raw `HCINT` value at that
     /// point. On timeout (the channel never halts) forcibly disables it
     /// via [`Self::abort_channel`] and returns [`TransferError::Timeout`].
@@ -1124,24 +1283,24 @@ impl Dwc2Host {
     /// SoC produces intermittently) and then have to force a disable —
     /// and forcing `CHDIS`/`CHENA` on an already-halted channel was
     /// observed to wedge the core into a dead, all-zero-`HCINT` state.
-    fn wait_for_halt(&self, channel: usize, timer: &Timer) -> Result<u32, TransferError> {
+    fn wait_for_halt(&self, timer: &Timer) -> Result<u32, TransferError> {
         const TIMEOUT_US: u64 = 50_000;
 
-        let ch = self.host.host_channel(channel);
+        let ch = self.ch();
         let start = timer.now_micros();
         loop {
             let hcint = ch.hcint().read().bits();
             if hcint & HCINT_CHH != 0 {
                 self.last_hcint.set(hcint);
-                self.ack_hcint(channel);
+                self.ack_hcint();
                 return Ok(hcint);
             }
             if timer.now_micros() - start > TIMEOUT_US {
                 // Record the channel's `HCINT` at the moment it timed out
-                // (before the abort clears it) so [`Self::last_channel_interrupt`]
+                // (before the abort clears it) so [`Self::last_interrupt`]
                 // reflects the stuck transfer, not the last successful one.
                 self.last_hcint.set(hcint);
-                self.abort_channel(channel, timer);
+                self.abort_channel(timer);
                 return Err(TransferError::Timeout);
             }
         }
@@ -1153,20 +1312,9 @@ impl Dwc2Host {
     /// `HCTSIZ.XFRSIZ`'s leftover count, which is why `requested` is
     /// passed in; otherwise maps the reason bit to a [`TransferError`],
     /// or [`TransferError::Halted`] for a halt with no reason bit set.
-    fn interpret_halt(
-        &self,
-        channel: usize,
-        hcint: u32,
-        requested: usize,
-    ) -> Result<usize, TransferError> {
+    fn interpret_halt(&self, hcint: u32, requested: usize) -> Result<usize, TransferError> {
         if hcint & HCINT_XFRC != 0 {
-            let remaining = self
-                .host
-                .host_channel(channel)
-                .hctsiz()
-                .read()
-                .xfrsiz()
-                .bits() as usize;
+            let remaining = self.ch().hctsiz().read().xfrsiz().bits() as usize;
             Ok(requested - remaining)
         } else if hcint & HCINT_STALL != 0 {
             Err(TransferError::Stall)
@@ -1174,6 +1322,10 @@ impl Dwc2Host {
             Err(TransferError::TransactionError)
         } else if hcint & HCINT_BBERR != 0 {
             Err(TransferError::Babble)
+        } else if hcint & HCINT_FRMOR != 0 {
+            Err(TransferError::FrameOverrun)
+        } else if hcint & HCINT_DTERR != 0 {
+            Err(TransferError::DataToggleError)
         } else if hcint & HCINT_NAK != 0 {
             Err(TransferError::Nak)
         } else {
@@ -1183,16 +1335,10 @@ impl Dwc2Host {
 
     /// Runs one non-split channel transaction: wait for the (already
     /// armed) channel to halt, then interpret the result.
-    fn run_channel(&self, channel: usize, timer: &Timer) -> Result<usize, TransferError> {
-        let requested = self
-            .host
-            .host_channel(channel)
-            .hctsiz()
-            .read()
-            .xfrsiz()
-            .bits() as usize;
-        let hcint = self.wait_for_halt(channel, timer)?;
-        self.interpret_halt(channel, hcint, requested)
+    fn run_channel(&self, timer: &Timer) -> Result<usize, TransferError> {
+        let requested = self.ch().hctsiz().read().xfrsiz().bits() as usize;
+        let hcint = self.wait_for_halt(timer)?;
+        self.interpret_halt(hcint, requested)
     }
 
     /// Arms and runs one channel transfer, transparently doing split
@@ -1202,7 +1348,6 @@ impl Dwc2Host {
     /// translates it). Returns the number of bytes moved.
     fn run_transaction(
         &self,
-        channel: usize,
         endpoint: ControlEndpoint,
         txn: &Transaction,
         timer: &Timer,
@@ -1210,8 +1355,8 @@ impl Dwc2Host {
         if endpoint.split.is_none() {
             // Direct: the DWC2 handles the whole (possibly multi-packet)
             // transfer from one channel start.
-            self.start_channel(channel, endpoint, txn, false, None);
-            return self.run_channel(channel, timer);
+            self.start_channel(endpoint, txn, false, None);
+            return self.run_channel(timer);
         }
 
         // Split: the DWC2 does one packet per start-split/complete-split,
@@ -1232,9 +1377,9 @@ impl Dwc2Host {
                 ..*txn
             };
             let received = if periodic {
-                self.run_periodic_split_packet(channel, endpoint, &packet, timer)? as u32
+                self.run_periodic_split_packet(endpoint, &packet, timer)? as u32
             } else {
-                self.run_split_packet(channel, endpoint, &packet, timer)? as u32
+                self.run_split_packet(endpoint, &packet, timer)? as u32
             };
             offset += received;
             pid = pid.toggled();
@@ -1262,17 +1407,16 @@ impl Dwc2Host {
     /// bit ends it.
     fn run_split_packet(
         &self,
-        channel: usize,
         endpoint: ControlEndpoint,
         packet: &Transaction,
         timer: &Timer,
     ) -> Result<usize, TransferError> {
         let requested = packet.transfer_size as usize;
 
-        self.start_channel(channel, endpoint, packet, false, None);
-        let hcint = self.wait_for_halt(channel, timer)?;
+        self.start_channel(endpoint, packet, false, None);
+        let hcint = self.wait_for_halt(timer)?;
         if hcint & HCINT_ACK == 0 {
-            return self.interpret_halt(channel, hcint, requested);
+            return self.interpret_halt(hcint, requested);
         }
 
         let mut hcint = 0;
@@ -1280,16 +1424,16 @@ impl Dwc2Host {
             if attempt > 0 {
                 timer.delay_us(CSPLIT_RETRY_DELAY_US);
             }
-            self.start_channel(channel, endpoint, packet, true, None);
-            hcint = self.wait_for_halt(channel, timer)?;
+            self.start_channel(endpoint, packet, true, None);
+            hcint = self.wait_for_halt(timer)?;
             if hcint & (HCINT_NYET | HCINT_NAK) != 0 && hcint & HCINT_XFRC == 0 {
                 continue;
             }
-            return self.interpret_halt(channel, hcint, requested);
+            return self.interpret_halt(hcint, requested);
         }
         // Exhausted the poll budget -- report the last result (a bare
         // NYET/NAK maps to a retryable error the caller can re-drive).
-        self.interpret_halt(channel, hcint, requested)
+        self.interpret_halt(hcint, requested)
     }
 
     /// Runs one single-packet *periodic* split transaction — an
@@ -1324,7 +1468,6 @@ impl Dwc2Host {
     /// next poll — not a real error.
     fn run_periodic_split_packet(
         &self,
-        channel: usize,
         endpoint: ControlEndpoint,
         packet: &Transaction,
         timer: &Timer,
@@ -1338,12 +1481,12 @@ impl Dwc2Host {
             next_frame = 7;
         }
         self.wait_for_microframe(next_frame, timer);
-        self.start_channel(channel, endpoint, packet, false, Some(next_frame & 1 == 1));
-        let hcint = self.wait_for_halt(channel, timer)?;
+        self.start_channel(endpoint, packet, false, Some(next_frame & 1 == 1));
+        let hcint = self.wait_for_halt(timer)?;
         // The transaction translator must ACK a start-split it accepted;
         // anything else (a real error, or a NAK/NYET) ends the attempt.
         if hcint & HCINT_ACK == 0 {
-            return self.interpret_halt(channel, hcint, requested);
+            return self.interpret_halt(hcint, requested);
         }
 
         // Complete-split: first two microframes on from the start-split,
@@ -1355,12 +1498,12 @@ impl Dwc2Host {
         next_frame = (next_frame + 2) & 7;
         loop {
             self.wait_for_microframe(next_frame, timer);
-            self.start_channel(channel, endpoint, packet, true, Some(next_frame & 1 == 1));
-            let hcint = self.wait_for_halt(channel, timer)?;
+            self.start_channel(endpoint, packet, true, Some(next_frame & 1 == 1));
+            let hcint = self.wait_for_halt(timer)?;
 
             // A real error bit, or success, is terminal.
             if hcint & (HCINT_STALL | HCINT_TXERR | HCINT_BBERR | HCINT_XFRC) != 0 {
-                return self.interpret_halt(channel, hcint, requested);
+                return self.interpret_halt(hcint, requested);
             }
             // Translator not finished yet — retry in the next microframe
             // until the budget is spent.
@@ -1377,7 +1520,7 @@ impl Dwc2Host {
                 return Err(TransferError::Nak);
             }
             // No recognized bit set — an unexplained halt.
-            return self.interpret_halt(channel, hcint, requested);
+            return self.interpret_halt(hcint, requested);
         }
     }
 
@@ -1386,7 +1529,7 @@ impl Dwc2Host {
     /// the low three bits are the microframe index periodic split
     /// scheduling keys off.
     fn current_microframe(&self) -> u8 {
-        (self.host.hfnum().read().frnum().bits() & 7) as u8
+        (self.regs().hfnum().read().frnum().bits() & 7) as u8
     }
 
     /// Busy-waits until [`Self::current_microframe`] reaches `frame`,

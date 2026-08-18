@@ -21,7 +21,7 @@
 //! transactions through the hub's transaction translator (see
 //! [`dwc2::SplitTarget`](crate::usb::dwc2::SplitTarget)) — and
 //! interrupt-IN endpoints can be polled
-//! ([`dwc2::Dwc2Host::interrupt_in`](crate::usb::dwc2::Dwc2Host::interrupt_in)),
+//! ([`dwc2::Channel::interrupt_in`](crate::usb::dwc2::Channel::interrupt_in)),
 //! directly (the hub's own status-change endpoint) or through the hub
 //! at full/low speed via periodic split scheduling (the report endpoint
 //! of a HID keyboard on a physical port). [`enumerate`](crate::usb::enumerate) ties the whole
@@ -93,7 +93,7 @@ use crate::mailbox::{Mailbox, PowerDeviceId};
 use crate::timer::Timer;
 use crate::usb::control::probe_and_address;
 use crate::usb::descriptor::DeviceDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError};
+use crate::usb::dwc2::{Channel, ControlEndpoint, Dwc2Host, TransferError};
 use crate::usb::hub::Hub;
 
 /// Address assigned to the on-board root hub during [`enumerate`].
@@ -128,6 +128,10 @@ pub enum EnumerationError {
     /// A descriptor (the root hub's configuration or class descriptor)
     /// was too short to parse.
     MalformedDescriptor,
+    /// Every host channel was already handed out, so enumeration
+    /// couldn't get one to run its control transfers on — see
+    /// [`Dwc2Host::alloc_channel`].
+    OutOfChannels,
     /// An underlying control transfer failed.
     Transfer(TransferError),
 }
@@ -167,24 +171,30 @@ pub struct Device {
 /// device is addressed before the next port is touched (two devices must
 /// never sit at address 0 at once).
 ///
-/// `on_device` receives the controller and timer (to do further
-/// transfers) and the [`Device`]; return [`ControlFlow::Break`] from it
-/// to stop enumerating early (e.g. once the device of interest is found),
-/// or [`ControlFlow::Continue`] to keep going. A port whose reset or
-/// descriptor read fails is skipped rather than aborting the whole
-/// enumeration; only a failure of the shared root-hub bring-up returns an
-/// [`EnumerationError`].
+/// `on_device` receives the [`Channel`] enumeration ran on (to do
+/// further transfers), the timer, and the [`Device`]; return
+/// [`ControlFlow::Break`] from it to stop enumerating early (e.g. once
+/// the device of interest is found), or [`ControlFlow::Continue`] to
+/// keep going. A port whose reset or descriptor read fails is skipped
+/// rather than aborting the whole enumeration; only a failure of the
+/// shared root-hub bring-up returns an [`EnumerationError`].
+///
+/// The controller is borrowed immutably, so a callback that needs a
+/// channel of its own — one to keep polling a device's endpoint after
+/// enumeration finishes, say — can capture the same `&Dwc2Host` and
+/// call [`Dwc2Host::alloc_channel`] on it. The channel passed in is
+/// enumeration's own and goes away when this returns.
 ///
 /// This drives a single level of hubs (the root hub's own ports); a hub
 /// plugged into one of those ports is reported as a device but not itself
 /// recursed into.
 pub fn enumerate<F>(
-    dwc2: &mut Dwc2Host,
+    dwc2: &Dwc2Host,
     timer: &Timer,
     mut on_device: F,
 ) -> Result<(), EnumerationError>
 where
-    F: FnMut(&mut Dwc2Host, &Timer, Device) -> ControlFlow<()>,
+    F: FnMut(&mut Channel, &Timer, Device) -> ControlFlow<()>,
 {
     if !dwc2.port_connected() {
         return Err(EnumerationError::NotConnected);
@@ -194,6 +204,11 @@ where
         return Err(EnumerationError::PortNotEnabled);
     }
 
+    let mut channel = dwc2
+        .alloc_channel()
+        .ok_or(EnumerationError::OutOfChannels)?;
+    let channel = &mut channel;
+
     // Enumerate and address the root device (the on-board hub), then
     // configure it and power its downstream ports.
     let root = ControlEndpoint {
@@ -202,21 +217,22 @@ where
         max_packet_size: 8,
         split: None,
     };
-    let (hub_endpoint, _root_descriptor) = probe_and_address(dwc2, timer, root, ROOT_HUB_ADDRESS)?;
-    let hub = Hub::configure(dwc2, timer, hub_endpoint)?;
+    let (hub_endpoint, _root_descriptor) =
+        probe_and_address(channel, timer, root, ROOT_HUB_ADDRESS)?;
+    let hub = Hub::configure(channel, timer, hub_endpoint)?;
 
     // Enumerate each connected port's device, one at a time — addressing
     // each before touching the next so two just-reset devices don't both
     // sit at address 0. A port that misbehaves is skipped, not fatal.
     let mut next_address = ROOT_HUB_ADDRESS + 1;
     for port in 1..=hub.num_ports {
-        let Ok(status) = hub.port_status(dwc2, timer, port) else {
+        let Ok(status) = hub.port_status(channel, timer, port) else {
             continue;
         };
         if !status.connected() {
             continue;
         }
-        let Ok(status) = hub.reset_port(dwc2, timer, port) else {
+        let Ok(status) = hub.reset_port(channel, timer, port) else {
             continue;
         };
         if !status.enabled() {
@@ -230,7 +246,7 @@ where
             split: hub.split_target(port, &status),
         };
         let address = next_address;
-        let Ok((endpoint, descriptor)) = probe_and_address(dwc2, timer, probe, address) else {
+        let Ok((endpoint, descriptor)) = probe_and_address(channel, timer, probe, address) else {
             continue;
         };
         next_address += 1;
@@ -240,7 +256,7 @@ where
             endpoint,
             descriptor,
         };
-        if on_device(dwc2, timer, device).is_break() {
+        if on_device(channel, timer, device).is_break() {
             break;
         }
     }

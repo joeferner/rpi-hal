@@ -18,13 +18,7 @@
 
 use crate::timer::Timer;
 use crate::usb::descriptor::DeviceDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError};
-
-/// Host channel this module always uses for control transfers. Fine
-/// as a fixed constant for now — nothing else contends for host
-/// channels yet, since there's no enumeration/hub logic running
-/// concurrent transfers.
-const CHANNEL: usize = 0;
+use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
 
 /// How many times to retry a single NAK'd transaction before giving
 /// up. NAKs are normal USB flow control (a device saying "not ready
@@ -131,18 +125,18 @@ fn retry_on_nak<T>(
 /// on NAK. Returns the number of data bytes actually received (a device
 /// may answer with fewer than requested via a short packet). `buf` must
 /// be no larger than the driver's DMA scratch buffer; see
-/// [`Dwc2Host::control_data_in`](crate::usb::dwc2::Dwc2Host::control_data_in).
+/// [`Channel::control_data_in`](crate::usb::dwc2::Channel::control_data_in).
 fn control_in(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     endpoint: ControlEndpoint,
     setup: Setup,
     buf: &mut [u8],
 ) -> Result<usize, TransferError> {
     let setup = setup.to_bytes();
-    retry_on_nak(|| dwc2.control_setup(CHANNEL, endpoint, &setup, timer))?;
-    let received = retry_on_nak(|| dwc2.control_data_in(CHANNEL, endpoint, buf, timer))?;
-    retry_on_nak(|| dwc2.control_status_out(CHANNEL, endpoint, timer))?;
+    retry_on_nak(|| channel.control_setup(endpoint, &setup, timer))?;
+    let received = retry_on_nak(|| channel.control_data_in(endpoint, buf, timer))?;
+    retry_on_nak(|| channel.control_status_out(endpoint, timer))?;
     Ok(received)
 }
 
@@ -150,14 +144,14 @@ fn control_in(
 /// status stage — for host-to-device requests that carry no data
 /// (SET_ADDRESS, SET_CONFIGURATION), each stage retried on NAK.
 fn control_no_data(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     endpoint: ControlEndpoint,
     setup: Setup,
 ) -> Result<(), TransferError> {
     let setup = setup.to_bytes();
-    retry_on_nak(|| dwc2.control_setup(CHANNEL, endpoint, &setup, timer))?;
-    retry_on_nak(|| dwc2.control_status_in(CHANNEL, endpoint, timer))?;
+    retry_on_nak(|| channel.control_setup(endpoint, &setup, timer))?;
+    retry_on_nak(|| channel.control_status_in(endpoint, timer))?;
     Ok(())
 }
 
@@ -166,16 +160,16 @@ fn control_no_data(
 /// data stage, each stage retried on NAK. The mirror of [`control_in`]
 /// for the OUT direction (e.g. a vendor register write).
 fn control_out(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     endpoint: ControlEndpoint,
     setup: Setup,
     data: &[u8],
 ) -> Result<(), TransferError> {
     let setup = setup.to_bytes();
-    retry_on_nak(|| dwc2.control_setup(CHANNEL, endpoint, &setup, timer))?;
-    retry_on_nak(|| dwc2.control_data_out(CHANNEL, endpoint, data, timer))?;
-    retry_on_nak(|| dwc2.control_status_in(CHANNEL, endpoint, timer))?;
+    retry_on_nak(|| channel.control_setup(endpoint, &setup, timer))?;
+    retry_on_nak(|| channel.control_data_out(endpoint, data, timer))?;
+    retry_on_nak(|| channel.control_status_in(endpoint, timer))?;
     Ok(())
 }
 
@@ -208,19 +202,19 @@ const DESCRIPTOR_RETRY_MS: u32 = 5;
 /// they're idempotent, unlike the state-changing requests here (a repeated
 /// SET_ADDRESS or SET_CONFIGURATION is not the same as one).
 fn descriptor_in(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     endpoint: ControlEndpoint,
     setup: Setup,
     buf: &mut [u8],
 ) -> Result<usize, TransferError> {
-    let mut result = control_in(dwc2, timer, endpoint, setup, buf);
+    let mut result = control_in(channel, timer, endpoint, setup, buf);
     for _ in 1..DESCRIPTOR_TRIES {
         if result.is_ok() {
             break;
         }
         timer.delay_ms(DESCRIPTOR_RETRY_MS);
-        result = control_in(dwc2, timer, endpoint, setup, buf);
+        result = control_in(channel, timer, endpoint, setup, buf);
     }
     result
 }
@@ -246,7 +240,7 @@ fn get_descriptor_setup(request_type: u8, descriptor_type: u8, index: u8, length
 /// ignored: the probe always uses 8, the conservative default every
 /// USB device is guaranteed to support at endpoint 0.
 pub fn get_device_descriptor_header(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
 ) -> Result<[u8; 8], TransferError> {
@@ -257,7 +251,7 @@ pub fn get_device_descriptor_header(
     // bmRequestType=0x80: device-to-host, standard, recipient=device.
     let setup = get_descriptor_setup(0x80, DESCRIPTOR_TYPE_DEVICE, 0, 8);
     let mut descriptor = [0u8; 8];
-    descriptor_in(dwc2, timer, endpoint, setup, &mut descriptor)?;
+    descriptor_in(channel, timer, endpoint, setup, &mut descriptor)?;
     Ok(descriptor)
 }
 
@@ -272,11 +266,11 @@ pub fn get_device_descriptor_header(
 /// request in one oversized packet, overrunning the channel (a babble
 /// error).
 pub fn get_device_descriptor(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
 ) -> Result<[u8; 18], TransferError> {
-    let header = get_device_descriptor_header(dwc2, timer, device)?;
+    let header = get_device_descriptor_header(channel, timer, device)?;
     // bMaxPacketSize0 is the 8th byte of the descriptor.
     let endpoint = ControlEndpoint {
         max_packet_size: header[7] as u16,
@@ -285,7 +279,7 @@ pub fn get_device_descriptor(
     // bmRequestType=0x80: device-to-host, standard, recipient=device.
     let setup = get_descriptor_setup(0x80, DESCRIPTOR_TYPE_DEVICE, 0, 18);
     let mut descriptor = [0u8; 18];
-    descriptor_in(dwc2, timer, endpoint, setup, &mut descriptor)?;
+    descriptor_in(channel, timer, endpoint, setup, &mut descriptor)?;
     Ok(descriptor)
 }
 
@@ -302,13 +296,13 @@ pub fn get_device_descriptor(
 /// 8-byte default (which [`get_device_descriptor`] uses for its probe
 /// regardless). `new_address` must be 1..=127 and not already in use.
 pub fn probe_and_address(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     probe: ControlEndpoint,
     new_address: u8,
 ) -> Result<(ControlEndpoint, DeviceDescriptor), TransferError> {
-    let descriptor = DeviceDescriptor::from_bytes(&get_device_descriptor(dwc2, timer, probe)?);
-    set_address(dwc2, timer, probe, new_address)?;
+    let descriptor = DeviceDescriptor::from_bytes(&get_device_descriptor(channel, timer, probe)?);
+    set_address(channel, timer, probe, new_address)?;
     let endpoint = ControlEndpoint {
         address: new_address,
         max_packet_size: descriptor.max_packet_size0 as u16,
@@ -339,7 +333,7 @@ const CONFIGURATION_DESCRIPTOR_HEADER_LEN: usize = 9;
 /// much was read), which covers the small single-configuration devices
 /// this stack targets so far but not a large composite configuration.
 pub fn get_configuration_descriptor(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     index: u8,
@@ -355,13 +349,13 @@ pub fn get_configuration_descriptor(
         index,
         CONFIGURATION_DESCRIPTOR_HEADER_LEN as u16,
     );
-    descriptor_in(dwc2, timer, device, setup, &mut header)?;
+    descriptor_in(channel, timer, device, setup, &mut header)?;
 
     let total_length = u16::from_le_bytes([header[2], header[3]]) as usize;
     let to_read = total_length.min(buf.len());
 
     let setup = get_descriptor_setup(0x80, DESCRIPTOR_TYPE_CONFIGURATION, index, to_read as u16);
-    descriptor_in(dwc2, timer, device, setup, &mut buf[..to_read])?;
+    descriptor_in(channel, timer, device, setup, &mut buf[..to_read])?;
     Ok(to_read)
 }
 
@@ -377,14 +371,14 @@ pub fn get_configuration_descriptor(
 /// a class request (`bmRequestType=0xA0`), unlike the standard device/
 /// configuration descriptor reads above.
 pub fn get_hub_descriptor(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     buf: &mut [u8],
 ) -> Result<usize, TransferError> {
     // bmRequestType=0xA0: device-to-host, class, recipient=device.
     let setup = get_descriptor_setup(0xA0, DESCRIPTOR_TYPE_HUB, 0, buf.len() as u16);
-    descriptor_in(dwc2, timer, device, setup, buf)
+    descriptor_in(channel, timer, device, setup, buf)
 }
 
 /// Reads the HID report descriptor of `interface` on `device` into `buf`,
@@ -408,7 +402,7 @@ pub fn get_hub_descriptor(
 /// control transfer here — must be no larger than the driver's DMA
 /// scratch buffer.
 pub fn get_report_descriptor(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     interface: u8,
@@ -417,7 +411,7 @@ pub fn get_report_descriptor(
     // bmRequestType=0x81: device-to-host, standard, recipient=interface.
     let mut setup = get_descriptor_setup(0x81, DESCRIPTOR_TYPE_HID_REPORT, 0, buf.len() as u16);
     setup.index = interface as u16;
-    descriptor_in(dwc2, timer, device, setup, buf)
+    descriptor_in(channel, timer, device, setup, buf)
 }
 
 /// USB SetAddress recovery time (USB 2.0 spec §9.2.6.3): after the
@@ -437,7 +431,7 @@ const SET_ADDRESS_RECOVERY_MS: u32 = 2;
 /// `new_address` must be 1..=127 (0 is the default address every
 /// unaddressed device starts at).
 pub fn set_address(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     new_address: u8,
@@ -451,7 +445,7 @@ pub fn set_address(
         length: 0,
     };
 
-    control_no_data(dwc2, timer, device, setup)?;
+    control_no_data(channel, timer, device, setup)?;
     timer.delay_ms(SET_ADDRESS_RECOVERY_MS);
     Ok(())
 }
@@ -466,7 +460,7 @@ pub fn set_address(
 /// `bConfigurationValue` (not its index in the descriptor list); `0`
 /// puts the device back into the unconfigured Address state.
 pub fn set_configuration(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     configuration_value: u8,
@@ -480,7 +474,7 @@ pub fn set_configuration(
         length: 0,
     };
 
-    control_no_data(dwc2, timer, device, setup)
+    control_no_data(channel, timer, device, setup)
 }
 
 /// Runs a vendor-specific control-IN transfer to `device` — the request
@@ -494,7 +488,7 @@ pub fn set_configuration(
 /// controller (see [`crate::usb::lan9514`]), whose registers are read via
 /// a vendor request carrying the register offset in `index`.
 pub fn vendor_in(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     request: u8,
@@ -510,7 +504,7 @@ pub fn vendor_in(
         index,
         length: buf.len() as u16,
     };
-    control_in(dwc2, timer, device, setup, buf)
+    control_in(channel, timer, device, setup, buf)
 }
 
 /// Runs a vendor-specific control-OUT transfer to `device` — the request
@@ -520,7 +514,7 @@ pub fn vendor_in(
 /// access (see [`vendor_in`]); for the LAN9514 this writes a register
 /// whose offset is carried in `index`.
 pub fn vendor_out(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     request: u8,
@@ -536,7 +530,7 @@ pub fn vendor_out(
         index,
         length: data.len() as u16,
     };
-    control_out(dwc2, timer, device, setup, data)
+    control_out(channel, timer, device, setup, data)
 }
 
 /// Selects the HID protocol on `interface` of `device` (HID spec
@@ -544,7 +538,7 @@ pub fn vendor_out(
 /// format needing no report-descriptor parsing), 1 for the report
 /// protocol. A no-data class request to the interface.
 pub fn set_protocol(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     interface: u8,
@@ -559,7 +553,7 @@ pub fn set_protocol(
         index: interface as u16,
         length: 0,
     };
-    control_no_data(dwc2, timer, device, setup)
+    control_no_data(channel, timer, device, setup)
 }
 
 /// Sets the HID idle rate on `interface` of `device` (HID spec §7.2.4).
@@ -569,7 +563,7 @@ pub fn set_protocol(
 /// the interface. Some devices STALL this; the caller may ignore an
 /// error.
 pub fn set_idle(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     device: ControlEndpoint,
     interface: u8,
@@ -584,7 +578,7 @@ pub fn set_idle(
         index: interface as u16,
         length: 0,
     };
-    control_no_data(dwc2, timer, device, setup)
+    control_no_data(channel, timer, device, setup)
 }
 
 /// Powers on downstream `port` (1-based) of the hub at `hub_address`
@@ -594,7 +588,7 @@ pub fn set_idle(
 /// before the port's status is meaningful. `low_speed` should reflect
 /// `Dwc2Host::port_speed() == 2` for the hub itself.
 pub fn set_port_power(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     hub_address: u8,
     port: u8,
@@ -615,7 +609,7 @@ pub fn set_port_power(
         index: port as u16,
         length: 0,
     };
-    control_no_data(dwc2, timer, endpoint, setup)
+    control_no_data(channel, timer, endpoint, setup)
 }
 
 /// Reads downstream `port`'s status via GET_STATUS (USB 2.0 spec
@@ -629,7 +623,7 @@ pub fn set_port_power(
 /// CLEAR_FEATURE. `low_speed` should reflect `Dwc2Host::port_speed() ==
 /// 2` for the hub itself.
 pub fn get_port_status(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     hub_address: u8,
     port: u8,
@@ -651,7 +645,7 @@ pub fn get_port_status(
         length: 4,
     };
     let mut status = [0u8; 4];
-    control_in(dwc2, timer, endpoint, setup, &mut status)?;
+    control_in(channel, timer, endpoint, setup, &mut status)?;
     Ok((
         u16::from_le_bytes([status[0], status[1]]),
         u16::from_le_bytes([status[2], status[3]]),
@@ -668,7 +662,7 @@ pub fn get_port_status(
 /// device connected. `low_speed` should reflect `Dwc2Host::port_speed()
 /// == 2` for the hub itself.
 pub fn set_port_reset(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     hub_address: u8,
     port: u8,
@@ -688,7 +682,7 @@ pub fn set_port_reset(
         index: port as u16,
         length: 0,
     };
-    control_no_data(dwc2, timer, endpoint, setup)
+    control_no_data(channel, timer, endpoint, setup)
 }
 
 /// Clears `feature` on downstream `port` of the hub at `hub_address`
@@ -698,7 +692,7 @@ pub fn set_port_reset(
 /// class request to the port. `low_speed` should reflect
 /// `Dwc2Host::port_speed() == 2` for the hub itself.
 pub fn clear_port_feature(
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     hub_address: u8,
     port: u8,
@@ -719,5 +713,5 @@ pub fn clear_port_feature(
         index: port as u16,
         length: 0,
     };
-    control_no_data(dwc2, timer, endpoint, setup)
+    control_no_data(channel, timer, endpoint, setup)
 }

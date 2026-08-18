@@ -45,7 +45,7 @@ use rpi_hal::sd::{Sd, SdCard, SdCardError};
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::hid::keyboard::Keyboard;
 
 #[path = "common/mod.rs"]
@@ -311,7 +311,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = writeln!(console, "USB power-on failed");
         halt();
     }
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -327,8 +327,8 @@ pub extern "C" fn kmain() -> ! {
     let mut persist = |bond: &Bond| write_bond(&volumes, bond).is_ok();
 
     // Enumerate; the first HID keyboard found runs the bridge forever.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let mut keyboard = match Keyboard::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let mut keyboard = match Keyboard::from_device(channel, timer, device) {
             Ok(Some(keyboard)) => keyboard,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -346,7 +346,7 @@ pub extern "C" fn kmain() -> ! {
             &mut bt,
             &mut smp,
             own_addr,
-            dwc2,
+            channel,
             timer,
             &mut keyboard,
             &mut persist,
@@ -373,7 +373,7 @@ fn run_bridge(
     bt: &mut Bluetooth,
     smp: &mut Smp,
     own_addr: [u8; 6],
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     keyboard: &mut Keyboard,
     persist: &mut dyn FnMut(&Bond) -> bool,
@@ -501,7 +501,7 @@ fn run_bridge(
 
         // Poll the USB keyboard; forward each new report over BLE. A poll
         // with no new report, or a transient endpoint error, is ignored.
-        if let Ok(Some(events)) = keyboard.poll(dwc2, timer) {
+        if let Ok(Some(events)) = keyboard.poll(channel, timer) {
             let report = events.report().boot_report();
             if let Some(handle) = conn_handle {
                 if encrypted && server.is_subscribed(INPUT_REPORT_HANDLE) {

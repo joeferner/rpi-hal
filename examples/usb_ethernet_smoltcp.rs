@@ -29,7 +29,7 @@ use rpi_hal::pac;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::lan9514::{Lan9514, Lan9514Phy};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::socket::{dhcpv4, udp};
@@ -81,7 +81,7 @@ pub extern "C" fn kmain() -> ! {
         }
     };
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -94,8 +94,8 @@ pub extern "C" fn kmain() -> ! {
     }
 
     // Enumerate the bus; when the LAN9514 turns up, run the stack on it.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let lan9514 = match Lan9514::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let lan9514 = match Lan9514::from_device(channel, timer, device) {
             Ok(Some(lan9514)) => lan9514,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -103,7 +103,14 @@ pub extern "C" fn kmain() -> ! {
                 return ControlFlow::Break(());
             }
         };
-        run_stack(&mut uart, dwc2, timer, lan9514, board_mac);
+        // The stack needs a channel of its own: `channel` is
+        // enumeration's and goes away when the callback returns, while
+        // the `phy::Device` below keeps moving frames forever.
+        let Some(net_channel) = dwc2.alloc_channel() else {
+            let _ = writeln!(uart, "no free host channel for the stack");
+            return ControlFlow::Break(());
+        };
+        run_stack(&mut uart, net_channel, timer, lan9514, board_mac);
         ControlFlow::Break(())
     });
 
@@ -118,19 +125,19 @@ pub extern "C" fn kmain() -> ! {
 /// UDP datagram sent to [`ECHO_PORT`].
 fn run_stack(
     uart: &mut Uart,
-    dwc2: &mut Dwc2Host,
+    mut channel: Channel,
     timer: &Timer,
     mut lan9514: Lan9514,
     mac: [u8; 6],
 ) {
-    if let Err(e) = lan9514.start(dwc2, timer, mac) {
+    if let Err(e) = lan9514.start(&mut channel, timer, mac) {
         let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
         return;
     }
 
     let _ = writeln!(uart, "waiting for link...");
     loop {
-        match lan9514.is_link_up(dwc2, timer) {
+        match lan9514.is_link_up(&mut channel, timer) {
             Ok(true) => break,
             Ok(false) => timer.delay_ms(100),
             Err(e) => {
@@ -141,7 +148,7 @@ fn run_stack(
     }
     let _ = writeln!(uart, "link up");
 
-    let mut phy = Lan9514Phy::new(lan9514, dwc2, timer);
+    let mut phy = Lan9514Phy::new(lan9514, channel, timer);
 
     // Configure the interface with the board MAC and a fresh clock seed.
     // No IP is assigned here -- DHCP fills that in once it gets a lease.

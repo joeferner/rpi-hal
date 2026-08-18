@@ -14,10 +14,10 @@
 //! ```ignore
 //! use rpi_hal::usb::hid::mouse::{ButtonEvent, Mouse};
 //!
-//! if let Some(mut mouse) = Mouse::from_device(dwc2, timer, device)? {
+//! if let Some(mut mouse) = Mouse::from_device(channel, timer, device)? {
 //!     loop {
 //!         timer.delay_ms(10); // pace polls -- see Mouse::poll
-//!         if let Some(update) = mouse.poll(dwc2, timer)? {
+//!         if let Some(update) = mouse.poll(channel, timer)? {
 //!             let report = update.report();
 //!             // report.x / report.y / report.wheel are relative deltas
 //!             for event in update.button_events() {
@@ -33,8 +33,8 @@ use crate::usb::control::{
     get_configuration_descriptor, set_configuration, set_idle, set_protocol,
 };
 use crate::usb::descriptor::ConfigurationDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError};
-use crate::usb::hid::{is_boot_interface, HidInterface, BOOT_PROTOCOL, CHANNEL};
+use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
+use crate::usb::hid::{is_boot_interface, HidInterface, BOOT_PROTOCOL};
 use crate::usb::Device;
 
 /// `bInterfaceProtocol` value identifying a HID mouse (the boot
@@ -213,12 +213,12 @@ impl Mouse {
     /// `SET_CONFIGURATION`/`SET_PROTOCOL` failing is reported as an error
     /// since the mouse wouldn't produce boot reports without them.
     pub fn from_device(
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         device: Device,
     ) -> Result<Option<Mouse>, TransferError> {
         let mut config = [0u8; 64];
-        let len = get_configuration_descriptor(dwc2, timer, device.endpoint, 0, &mut config)?;
+        let len = get_configuration_descriptor(channel, timer, device.endpoint, 0, &mut config)?;
         let Some(interface) = HidInterface::find(&config[..len], |iface| {
             is_boot_interface(iface, PROTOCOL_MOUSE)
         }) else {
@@ -229,9 +229,9 @@ impl Mouse {
             return Ok(None);
         };
 
-        set_configuration(dwc2, timer, device.endpoint, config_value)?;
+        set_configuration(channel, timer, device.endpoint, config_value)?;
         set_protocol(
-            dwc2,
+            channel,
             timer,
             device.endpoint,
             interface.interface,
@@ -239,7 +239,7 @@ impl Mouse {
         )?;
         // Report-on-change only (idle duration 0); a STALL here is
         // harmless -- the mouse still reports on change by default.
-        let _ = set_idle(dwc2, timer, device.endpoint, interface.interface, 0);
+        let _ = set_idle(channel, timer, device.endpoint, interface.interface, 0);
 
         Ok(Some(Mouse {
             endpoint: ControlEndpoint {
@@ -277,15 +277,14 @@ impl Mouse {
     /// The caller must pace polls (the endpoint's `bInterval`, ~10ms for
     /// a typical mouse): interrupt endpoints mustn't be hammered
     /// back-to-back, which wedges the controller's periodic scheduling —
-    /// see [`Dwc2Host::interrupt_in`](crate::usb::dwc2::Dwc2Host::interrupt_in).
+    /// see [`Channel::interrupt_in`](crate::usb::dwc2::Channel::interrupt_in).
     pub fn poll(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
     ) -> Result<Option<MouseUpdate>, TransferError> {
         let mut buffer = [0u8; 8];
-        let received = match dwc2.interrupt_in(
-            CHANNEL,
+        let received = match channel.interrupt_in(
             self.endpoint,
             self.report_endpoint,
             &mut self.toggle,

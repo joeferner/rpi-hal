@@ -12,10 +12,10 @@
 //! ```ignore
 //! use rpi_hal::usb::hid::keyboard::{usage_to_ascii, KeyEvent, Keyboard};
 //!
-//! if let Some(mut keyboard) = Keyboard::from_device(dwc2, timer, device)? {
+//! if let Some(mut keyboard) = Keyboard::from_device(channel, timer, device)? {
 //!     loop {
 //!         timer.delay_ms(10); // pace polls -- see Keyboard::poll
-//!         if let Some(events) = keyboard.poll(dwc2, timer)? {
+//!         if let Some(events) = keyboard.poll(channel, timer)? {
 //!             let shift = events.report().modifiers.shift();
 //!             for event in events.iter() {
 //!                 if let KeyEvent::Pressed(usage) = event {
@@ -32,8 +32,8 @@ use crate::usb::control::{
     get_configuration_descriptor, set_configuration, set_idle, set_protocol,
 };
 use crate::usb::descriptor::ConfigurationDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError};
-use crate::usb::hid::{is_boot_interface, HidInterface, BOOT_PROTOCOL, CHANNEL};
+use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
+use crate::usb::hid::{is_boot_interface, HidInterface, BOOT_PROTOCOL};
 use crate::usb::Device;
 
 /// `bInterfaceProtocol` value identifying a HID keyboard (the boot
@@ -280,12 +280,12 @@ impl Keyboard {
     /// `SET_CONFIGURATION`/`SET_PROTOCOL` failing is reported as an error
     /// since the keyboard wouldn't produce boot reports without them.
     pub fn from_device(
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         device: Device,
     ) -> Result<Option<Keyboard>, TransferError> {
         let mut config = [0u8; 64];
-        let len = get_configuration_descriptor(dwc2, timer, device.endpoint, 0, &mut config)?;
+        let len = get_configuration_descriptor(channel, timer, device.endpoint, 0, &mut config)?;
         let Some(interface) = HidInterface::find(&config[..len], |iface| {
             is_boot_interface(iface, PROTOCOL_KEYBOARD)
         }) else {
@@ -296,9 +296,9 @@ impl Keyboard {
             return Ok(None);
         };
 
-        set_configuration(dwc2, timer, device.endpoint, config_value)?;
+        set_configuration(channel, timer, device.endpoint, config_value)?;
         set_protocol(
-            dwc2,
+            channel,
             timer,
             device.endpoint,
             interface.interface,
@@ -306,7 +306,7 @@ impl Keyboard {
         )?;
         // Report-on-change only (idle duration 0); a STALL here is
         // harmless -- the keyboard still reports on change by default.
-        let _ = set_idle(dwc2, timer, device.endpoint, interface.interface, 0);
+        let _ = set_idle(channel, timer, device.endpoint, interface.interface, 0);
 
         Ok(Some(Keyboard {
             endpoint: ControlEndpoint {
@@ -344,15 +344,14 @@ impl Keyboard {
     /// The caller must pace polls (the endpoint's `bInterval`, ~10ms for
     /// a typical keyboard): interrupt endpoints mustn't be hammered
     /// back-to-back, which wedges the controller's periodic scheduling —
-    /// see [`Dwc2Host::interrupt_in`](crate::usb::dwc2::Dwc2Host::interrupt_in).
+    /// see [`Channel::interrupt_in`](crate::usb::dwc2::Channel::interrupt_in).
     pub fn poll(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
     ) -> Result<Option<KeyEvents>, TransferError> {
         let mut buffer = [0u8; 8];
-        let received = match dwc2.interrupt_in(
-            CHANNEL,
+        let received = match channel.interrupt_in(
             self.endpoint,
             self.report_endpoint,
             &mut self.toggle,

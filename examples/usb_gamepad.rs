@@ -36,7 +36,7 @@ use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
 use rpi_hal::usb::control::get_configuration_descriptor;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::hid::gamepad::Gamepad;
 use rpi_hal::usb::Device;
 
@@ -70,7 +70,7 @@ pub extern "C" fn kmain() -> ! {
         halt();
     }
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -85,8 +85,8 @@ pub extern "C" fn kmain() -> ! {
     // Enumerate the bus; the first game controller found is polled forever
     // (poll_gamepad never returns, so enumeration stops there). Other devices
     // are left addressed and skipped.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let mut gamepad = match Gamepad::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let mut gamepad = match Gamepad::from_device(channel, timer, device) {
             Ok(Some(gamepad)) => gamepad,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -95,7 +95,7 @@ pub extern "C" fn kmain() -> ! {
                 // refuses setup is only debuggable against its own
                 // descriptors.
                 let _ = writeln!(uart, "port {}: gamepad setup failed: {e:?}", device.port);
-                dump_configuration(&mut uart, dwc2, timer, device);
+                dump_configuration(&mut uart, channel, timer, device);
                 return ControlFlow::Continue(());
             }
         };
@@ -129,7 +129,7 @@ pub extern "C" fn kmain() -> ! {
              which usage is a stick vs a trigger is a device convention, not in the\r\n\
              descriptor -- an OS resolves that with a per-device quirk database.)"
         );
-        poll_gamepad(&mut uart, dwc2, timer, &mut gamepad)
+        poll_gamepad(&mut uart, channel, timer, &mut gamepad)
     });
 
     match result {
@@ -158,9 +158,9 @@ fn hexdump(uart: &mut Uart, label: &str, bytes: &[u8]) {
 /// Reads and dumps `device`'s configuration descriptor — the interfaces and
 /// endpoints it declares, which is what a device that refused setup has to be
 /// read against to see why.
-fn dump_configuration(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, device: Device) {
+fn dump_configuration(uart: &mut Uart, channel: &mut Channel, timer: &Timer, device: Device) {
     let mut config = [0u8; 64];
-    match get_configuration_descriptor(dwc2, timer, device.endpoint, 0, &mut config) {
+    match get_configuration_descriptor(channel, timer, device.endpoint, 0, &mut config) {
         Ok(len) => hexdump(uart, "  configuration descriptor", &config[..len]),
         Err(e) => {
             let _ = writeln!(uart, "  configuration descriptor unreadable too: {e:?}");
@@ -171,14 +171,14 @@ fn dump_configuration(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, devic
 /// Polls `gamepad` forever, printing each report decoded through its field map
 /// whenever the decoded state changes (a controller streams reports
 /// continuously, whether or not anything moved).
-fn poll_gamepad(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, gamepad: &mut Gamepad) -> ! {
+fn poll_gamepad(uart: &mut Uart, channel: &mut Channel, timer: &Timer, gamepad: &mut Gamepad) -> ! {
     let mut decoder = Decoder::new();
     let mut buf = [0u8; MAX_REPORT];
     loop {
         // Pace polls -- interrupt endpoints mustn't be hammered.
         timer.delay_ms(gamepad.poll_interval_ms());
 
-        match gamepad.poll(dwc2, timer, &mut buf) {
+        match gamepad.poll(channel, timer, &mut buf) {
             Ok(Some(report)) => {
                 decoder.print_changes(uart, gamepad.report_descriptor(), report.id, report.payload)
             }
@@ -188,7 +188,7 @@ fn poll_gamepad(uart: &mut Uart, dwc2: &mut Dwc2Host, timer: &Timer, gamepad: &m
                 let _ = writeln!(
                     uart,
                     "poll error: {e:?} (hcint=0x{:08x})",
-                    dwc2.last_channel_interrupt()
+                    channel.last_interrupt()
                 );
             }
         }

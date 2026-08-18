@@ -19,7 +19,7 @@ use rpi_hal::pac;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::hid::keyboard::{usage_to_ascii, KeyEvent, Keyboard};
 
 #[panic_handler]
@@ -44,7 +44,7 @@ pub extern "C" fn kmain() -> ! {
         halt();
     }
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -59,8 +59,8 @@ pub extern "C" fn kmain() -> ! {
     // Enumerate the bus; the first HID keyboard found is polled forever
     // (poll_keyboard never returns, so enumeration stops there). Other
     // devices are left addressed and skipped.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let mut keyboard = match Keyboard::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let mut keyboard = match Keyboard::from_device(channel, timer, device) {
             Ok(Some(keyboard)) => keyboard,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -77,7 +77,7 @@ pub extern "C" fn kmain() -> ! {
             0x80 | keyboard.report_endpoint(),
             keyboard.max_packet_size(),
         );
-        poll_keyboard(&mut uart, dwc2, timer, &mut keyboard)
+        poll_keyboard(&mut uart, channel, timer, &mut keyboard)
     });
 
     match result {
@@ -95,7 +95,7 @@ pub extern "C" fn kmain() -> ! {
 /// over `uart`.
 fn poll_keyboard(
     uart: &mut Uart,
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     keyboard: &mut Keyboard,
 ) -> ! {
@@ -103,7 +103,7 @@ fn poll_keyboard(
         // Pace polls -- interrupt endpoints mustn't be hammered.
         timer.delay_ms(10);
 
-        match keyboard.poll(dwc2, timer) {
+        match keyboard.poll(channel, timer) {
             Ok(Some(events)) => {
                 let shift = events.report().modifiers.shift();
                 for event in events.iter() {
@@ -122,7 +122,7 @@ fn poll_keyboard(
                 let _ = writeln!(
                     uart,
                     "\npoll error: {e:?} (hcint=0x{:08x})",
-                    dwc2.last_channel_interrupt()
+                    channel.last_interrupt()
                 );
             }
         }

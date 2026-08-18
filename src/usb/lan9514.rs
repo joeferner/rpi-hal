@@ -35,7 +35,7 @@
 use crate::timer::Timer;
 use crate::usb::control::{get_configuration_descriptor, set_configuration, vendor_in, vendor_out};
 use crate::usb::descriptor::{ConfigurationDescriptor, Descriptors, EndpointDescriptor};
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError};
+use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
 use crate::usb::Device;
 
 /// USB vendor ID of the LAN9514 (SMSC/Microchip).
@@ -113,18 +113,14 @@ const RX_STATUS_FRAME_LENGTH: u32 = 0x3FFF_0000;
 /// frame plus the chip's framing words, and a whole number of both cache
 /// lines and 512-byte bulk max packets (`2048 = 32 × 64 = 4 × 512`) so a
 /// bulk-IN transfer fills it exactly with no rounding waste (see
-/// [`Dwc2Host::bulk_in`]).
+/// [`Channel::bulk_in`]).
 const FRAME_BUFFER_SIZE: usize = 2048;
-
-/// Host channel this driver's transfers use — fine as a fixed constant,
-/// nothing else contends for channels (see [`crate::usb::control`]).
-const CHANNEL: usize = 0;
 
 /// Timeout for an MII (PHY) access to complete, in microseconds.
 const MII_TIMEOUT_US: u64 = 1_000_000;
 
 /// A frame buffer sized and aligned for bulk DMA — cache-line aligned and
-/// a whole number of cache lines, as [`Dwc2Host::bulk_in`] requires.
+/// a whole number of cache lines, as [`Channel::bulk_in`] requires.
 #[repr(C, align(64))]
 struct FrameBuffer([u8; FRAME_BUFFER_SIZE]);
 
@@ -159,6 +155,32 @@ pub struct Lan9514 {
     tx_buffer: FrameBuffer,
 }
 
+/// Picks the bulk IN and OUT endpoints out of a configuration
+/// descriptor, with their max packet sizes and a fresh DATA0 toggle.
+/// `None` unless both directions are present — a LAN9514 missing one of
+/// them isn't one this driver can move frames through.
+fn find_bulk_endpoints(config: &[u8]) -> Option<(BulkEndpoint, BulkEndpoint)> {
+    let mut bulk_in = None;
+    let mut bulk_out = None;
+    for descriptor in Descriptors::new(config) {
+        if let Some(endpoint) = EndpointDescriptor::parse(descriptor) {
+            if endpoint.is_bulk() {
+                let info = BulkEndpoint {
+                    number: endpoint.number(),
+                    max_packet_size: endpoint.max_packet_size(),
+                    toggle: false,
+                };
+                if endpoint.is_in() {
+                    bulk_in = Some(info);
+                } else {
+                    bulk_out = Some(info);
+                }
+            }
+        }
+    }
+    Some((bulk_in?, bulk_out?))
+}
+
 impl Lan9514 {
     /// Brings `device` up as a LAN9514 if its USB vendor/product ID
     /// ([`VENDOR_ID`]:[`PRODUCT_ID`]) matches, returning `Ok(None)`
@@ -173,7 +195,7 @@ impl Lan9514 {
     /// configured). Call [`Self::start`] next to program the MAC and
     /// enable RX/TX.
     pub fn from_device(
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         device: Device,
     ) -> Result<Option<Lan9514>, TransferError> {
@@ -182,38 +204,57 @@ impl Lan9514 {
         }
 
         let mut config = [0u8; 64];
-        let len = get_configuration_descriptor(dwc2, timer, device.endpoint, 0, &mut config)?;
+        let len = get_configuration_descriptor(channel, timer, device.endpoint, 0, &mut config)?;
         let Some(config_value) = ConfigurationDescriptor::parse(&config[..len]).map(|c| c.value())
         else {
             return Ok(None);
         };
-
-        let mut bulk_in = None;
-        let mut bulk_out = None;
-        for descriptor in Descriptors::new(&config[..len]) {
-            if let Some(endpoint) = EndpointDescriptor::parse(descriptor) {
-                if endpoint.is_bulk() {
-                    let info = BulkEndpoint {
-                        number: endpoint.number(),
-                        max_packet_size: endpoint.max_packet_size(),
-                        toggle: false,
-                    };
-                    if endpoint.is_in() {
-                        bulk_in = Some(info);
-                    } else {
-                        bulk_out = Some(info);
-                    }
-                }
-            }
-        }
-        let (Some(bulk_in), Some(bulk_out)) = (bulk_in, bulk_out) else {
+        let Some((bulk_in, bulk_out)) = find_bulk_endpoints(&config[..len]) else {
             return Ok(None);
         };
 
-        set_configuration(dwc2, timer, device.endpoint, config_value)?;
+        set_configuration(channel, timer, device.endpoint, config_value)?;
 
         Ok(Some(Lan9514 {
             endpoint: device.endpoint,
+            bulk_in,
+            bulk_out,
+            rx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
+            tx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
+        }))
+    }
+
+    /// Brings up a LAN9514 that something *else* has already addressed
+    /// and configured, given its endpoint 0.
+    ///
+    /// The counterpart to [`Self::from_device`] for the case where this
+    /// crate's [`enumerate`](crate::usb::enumerate) isn't the thing
+    /// walking the bus — an external host stack that has done
+    /// SET_ADDRESS and SET_CONFIGURATION itself, and can say which
+    /// address, speed and split target the device ended up with. Only
+    /// the configuration descriptor is read here, and only to locate the
+    /// bulk endpoints; the configuration is *not* re-activated, since
+    /// re-issuing SET_CONFIGURATION would reset the device's endpoints
+    /// out from under whoever configured it.
+    ///
+    /// No vendor/product check: a caller reaching for this has already
+    /// identified the device (that is how it knows to use this driver at
+    /// all). `Ok(None)` means the expected bulk IN/OUT pair wasn't
+    /// found. Call [`Self::start`] next, exactly as after
+    /// [`Self::from_device`].
+    pub fn from_endpoint(
+        channel: &mut Channel,
+        timer: &Timer,
+        endpoint: ControlEndpoint,
+    ) -> Result<Option<Lan9514>, TransferError> {
+        let mut config = [0u8; 64];
+        let len = get_configuration_descriptor(channel, timer, endpoint, 0, &mut config)?;
+        let Some((bulk_in, bulk_out)) = find_bulk_endpoints(&config[..len]) else {
+            return Ok(None);
+        };
+
+        Ok(Some(Lan9514 {
+            endpoint,
             bulk_in,
             bulk_out,
             rx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
@@ -226,13 +267,13 @@ impl Lan9514 {
     /// Registers are little-endian on the wire.
     pub fn read_register(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         register: u16,
     ) -> Result<u32, TransferError> {
         let mut value = [0u8; 4];
         vendor_in(
-            dwc2,
+            channel,
             timer,
             self.endpoint,
             READ_REGISTER,
@@ -249,13 +290,13 @@ impl Lan9514 {
     /// Registers are little-endian on the wire.
     pub fn write_register(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         register: u16,
         value: u32,
     ) -> Result<(), TransferError> {
         vendor_out(
-            dwc2,
+            channel,
             timer,
             self.endpoint,
             WRITE_REGISTER,
@@ -270,10 +311,10 @@ impl Lan9514 {
     /// to confirm the LAN9514 is responding (its ID reads back `0xEC00`).
     pub fn id_revision(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
     ) -> Result<IdRevision, TransferError> {
-        let value = self.read_register(dwc2, timer, REG_ID_REV)?;
+        let value = self.read_register(channel, timer, REG_ID_REV)?;
         Ok(IdRevision {
             id: (value >> 16) as u16,
             revision: (value & 0xFFFF) as u16,
@@ -288,14 +329,14 @@ impl Lan9514 {
     /// here — [`Self::start`] does this.
     pub fn set_mac_address(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         mac: [u8; 6],
     ) -> Result<(), TransferError> {
         let low = u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]);
         let high = u16::from_le_bytes([mac[4], mac[5]]) as u32;
-        self.write_register(dwc2, timer, REG_ADDRL, low)?;
-        self.write_register(dwc2, timer, REG_ADDRH, high)?;
+        self.write_register(channel, timer, REG_ADDRL, low)?;
+        self.write_register(channel, timer, REG_ADDRH, high)?;
         Ok(())
     }
 
@@ -304,11 +345,11 @@ impl Lan9514 {
     /// last programmed (all-zero on a freshly powered chip).
     pub fn mac_address(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
     ) -> Result<[u8; 6], TransferError> {
-        let low = self.read_register(dwc2, timer, REG_ADDRL)?.to_le_bytes();
-        let high = self.read_register(dwc2, timer, REG_ADDRH)?.to_le_bytes();
+        let low = self.read_register(channel, timer, REG_ADDRL)?.to_le_bytes();
+        let high = self.read_register(channel, timer, REG_ADDRH)?.to_le_bytes();
         Ok([low[0], low[1], low[2], low[3], high[0], high[1]])
     }
 
@@ -320,28 +361,28 @@ impl Lan9514 {
     /// wait for it before expecting frames.
     pub fn start(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         mac: [u8; 6],
     ) -> Result<(), TransferError> {
-        self.set_mac_address(dwc2, timer, mac)?;
+        self.set_mac_address(channel, timer, mac)?;
 
-        let hw_cfg = self.read_register(dwc2, timer, REG_HW_CFG)?;
-        self.write_register(dwc2, timer, REG_HW_CFG, hw_cfg | HW_CFG_BIR)?;
+        let hw_cfg = self.read_register(channel, timer, REG_HW_CFG)?;
+        self.write_register(channel, timer, REG_HW_CFG, hw_cfg | HW_CFG_BIR)?;
 
         self.write_register(
-            dwc2,
+            channel,
             timer,
             REG_LED_GPIO_CFG,
             LED_GPIO_CFG_SPD_LED | LED_GPIO_CFG_LNK_LED | LED_GPIO_CFG_FDX_LED,
         )?;
         self.write_register(
-            dwc2,
+            channel,
             timer,
             REG_MAC_CR,
             MAC_CR_RCVOWN | MAC_CR_TXEN | MAC_CR_RXEN,
         )?;
-        self.write_register(dwc2, timer, REG_TX_CFG, TX_CFG_ON)?;
+        self.write_register(channel, timer, REG_TX_CFG, TX_CFG_ON)?;
         Ok(())
     }
 
@@ -358,8 +399,8 @@ impl Lan9514 {
     /// Whether the Ethernet link is up, read from the PHY's basic-mode
     /// status register over MII. `false` until the cable is connected and
     /// auto-negotiation completes.
-    pub fn is_link_up(&self, dwc2: &mut Dwc2Host, timer: &Timer) -> Result<bool, TransferError> {
-        Ok(self.phy_read(dwc2, timer, PHY_REG_STATUS)? & BMSR_LINK_UP != 0)
+    pub fn is_link_up(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
+        Ok(self.phy_read(channel, timer, PHY_REG_STATUS)? & BMSR_LINK_UP != 0)
     }
 
     /// Sends one Ethernet frame (destination MAC through payload, without
@@ -368,7 +409,7 @@ impl Lan9514 {
     /// than a frame buffer less that header.
     pub fn send_frame(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         frame: &[u8],
     ) -> Result<(), TransferError> {
@@ -387,8 +428,7 @@ impl Lan9514 {
             max_packet_size: self.bulk_out.max_packet_size,
             ..self.endpoint
         };
-        dwc2.bulk_out(
-            CHANNEL,
+        channel.bulk_out(
             endpoint,
             number,
             &mut self.bulk_out.toggle,
@@ -406,14 +446,14 @@ impl Lan9514 {
     /// driver's RX buffer until the next call.
     pub fn receive_frame(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
     ) -> Result<Option<&[u8]>, TransferError> {
         // Only issue a bulk-IN when the chip actually has a frame
         // buffered. A bulk-IN against an empty RX FIFO just NAKs, and the
         // DWC2 doesn't halt a bulk channel on NAK (it retries), so it
         // would block for the full transfer timeout on every idle poll.
-        if self.read_register(dwc2, timer, REG_RX_FIFO_INF)? == 0 {
+        if self.read_register(channel, timer, REG_RX_FIFO_INF)? == 0 {
             return Ok(None);
         }
 
@@ -422,8 +462,7 @@ impl Lan9514 {
             max_packet_size: self.bulk_in.max_packet_size,
             ..self.endpoint
         };
-        let received = match dwc2.bulk_in(
-            CHANNEL,
+        let received = match channel.bulk_in(
             endpoint,
             number,
             &mut self.bulk_in.toggle,
@@ -468,22 +507,22 @@ impl Lan9514 {
     /// busy to clear, then read `MII_DATA`.
     fn phy_read(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         index: u8,
     ) -> Result<u16, TransferError> {
-        self.phy_wait_not_busy(dwc2, timer)?;
+        self.phy_wait_not_busy(channel, timer)?;
         let mii_address = (PHY_ID_INTERNAL << 11) | ((index as u32) << 6);
-        self.write_register(dwc2, timer, REG_MII_ADDR, mii_address | MII_BUSY)?;
-        self.phy_wait_not_busy(dwc2, timer)?;
-        Ok(self.read_register(dwc2, timer, REG_MII_DATA)? as u16)
+        self.write_register(channel, timer, REG_MII_ADDR, mii_address | MII_BUSY)?;
+        self.phy_wait_not_busy(channel, timer)?;
+        Ok(self.read_register(channel, timer, REG_MII_DATA)? as u16)
     }
 
     /// Spins until the MII interface's busy bit clears, bounded by
     /// [`MII_TIMEOUT_US`] so a stuck PHY access can't wedge the caller.
-    fn phy_wait_not_busy(&self, dwc2: &mut Dwc2Host, timer: &Timer) -> Result<(), TransferError> {
+    fn phy_wait_not_busy(&self, channel: &mut Channel, timer: &Timer) -> Result<(), TransferError> {
         let start = timer.now_micros();
-        while self.read_register(dwc2, timer, REG_MII_ADDR)? & MII_BUSY != 0 {
+        while self.read_register(channel, timer, REG_MII_ADDR)? & MII_BUSY != 0 {
             if timer.now_micros() - start > MII_TIMEOUT_US {
                 return Err(TransferError::Timeout);
             }
@@ -508,8 +547,11 @@ pub const MTU: usize = 1514;
 /// [`Lan9514Phy::new`], then hand it to `smoltcp`'s
 /// [`Interface`](smoltcp::iface::Interface).
 ///
-/// The driver's frame calls each need `&mut Dwc2Host` and `&Timer`, so the
-/// adapter carries both alongside the [`Lan9514`]. `smoltcp` hands out an
+/// The driver's frame calls each need `&mut Channel` and `&Timer`, so the
+/// adapter carries both alongside the [`Lan9514`]. The channel is *owned*
+/// rather than borrowed — it belongs to this device for as long as the
+/// adapter lives, which is also what keeps the rest of the bus usable
+/// while a network stack is running on it. `smoltcp` hands out an
 /// RX and a TX token together from one `&mut self` borrow, and both would
 /// otherwise need that shared bus at once; the adapter sidesteps this by
 /// doing the receive up front and copying the frame into a buffer the RX
@@ -518,22 +560,23 @@ pub const MTU: usize = 1514;
 ///
 /// Available only with the `smoltcp` feature enabled.
 #[cfg(feature = "smoltcp")]
-pub struct Lan9514Phy<'a> {
+pub struct Lan9514Phy<'a, 'c> {
     lan9514: Lan9514,
-    dwc2: &'a mut Dwc2Host,
+    channel: Channel<'c>,
     timer: &'a Timer,
     /// Scratch the TX token fills for smoltcp and hands to the driver.
     tx_scratch: [u8; MTU + 2],
 }
 
 #[cfg(feature = "smoltcp")]
-impl<'a> Lan9514Phy<'a> {
+impl<'a, 'c> Lan9514Phy<'a, 'c> {
     /// Wraps an already-[`started`](Lan9514::start) LAN9514 as a smoltcp
-    /// device, borrowing the DWC2 host and timer it drives frames through.
-    pub fn new(lan9514: Lan9514, dwc2: &'a mut Dwc2Host, timer: &'a Timer) -> Self {
+    /// device, taking the host channel it drives frames through and
+    /// borrowing the timer.
+    pub fn new(lan9514: Lan9514, channel: Channel<'c>, timer: &'a Timer) -> Self {
         Self {
             lan9514,
-            dwc2,
+            channel,
             timer,
             tx_scratch: [0; MTU + 2],
         }
@@ -541,13 +584,13 @@ impl<'a> Lan9514Phy<'a> {
 }
 
 #[cfg(feature = "smoltcp")]
-impl PhyDevice for Lan9514Phy<'_> {
+impl<'c> PhyDevice for Lan9514Phy<'_, 'c> {
     type RxToken<'t>
         = Lan9514RxToken
     where
         Self: 't;
     type TxToken<'t>
-        = Lan9514TxToken<'t>
+        = Lan9514TxToken<'t, 'c>
     where
         Self: 't;
 
@@ -556,7 +599,7 @@ impl PhyDevice for Lan9514Phy<'_> {
     /// the driver is free for the TX token returned alongside — see the
     /// type docs.
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let frame = match self.lan9514.receive_frame(self.dwc2, self.timer) {
+        let frame = match self.lan9514.receive_frame(&mut self.channel, self.timer) {
             Ok(Some(frame)) => frame,
             Ok(None) => return None,
             Err(_) => return None,
@@ -570,7 +613,7 @@ impl PhyDevice for Lan9514Phy<'_> {
 
         let tx = Lan9514TxToken {
             lan9514: &mut self.lan9514,
-            dwc2: self.dwc2,
+            channel: &mut self.channel,
             timer: self.timer,
             scratch: &mut self.tx_scratch,
         };
@@ -581,7 +624,7 @@ impl PhyDevice for Lan9514Phy<'_> {
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         Some(Lan9514TxToken {
             lan9514: &mut self.lan9514,
-            dwc2: self.dwc2,
+            channel: &mut self.channel,
             timer: self.timer,
             scratch: &mut self.tx_scratch,
         })
@@ -627,15 +670,15 @@ impl RxToken for Lan9514RxToken {
 ///
 /// Available only with the `smoltcp` feature enabled.
 #[cfg(feature = "smoltcp")]
-pub struct Lan9514TxToken<'a> {
+pub struct Lan9514TxToken<'a, 'c> {
     lan9514: &'a mut Lan9514,
-    dwc2: &'a mut Dwc2Host,
+    channel: &'a mut Channel<'c>,
     timer: &'a Timer,
     scratch: &'a mut [u8],
 }
 
 #[cfg(feature = "smoltcp")]
-impl TxToken for Lan9514TxToken<'_> {
+impl TxToken for Lan9514TxToken<'_, '_> {
     /// Lets `f` fill the frame buffer, then sends it. A failed send is
     /// dropped: smoltcp treats transmission as best-effort (retransmission
     /// is a higher layer's job), and `consume` has no channel to report an
@@ -647,7 +690,7 @@ impl TxToken for Lan9514TxToken<'_> {
         let result = f(&mut self.scratch[..len]);
         let _ = self
             .lan9514
-            .send_frame(self.dwc2, self.timer, &self.scratch[..len]);
+            .send_frame(self.channel, self.timer, &self.scratch[..len]);
         result
     }
 }
@@ -703,9 +746,9 @@ pub fn wake_rx() {
 ///
 /// Available only with the `embassy-net-driver` feature enabled.
 #[cfg(feature = "embassy-net-driver")]
-pub struct Lan9514Driver<'a> {
+pub struct Lan9514Driver<'a, 'c> {
     lan9514: Lan9514,
-    dwc2: &'a mut Dwc2Host,
+    channel: Channel<'c>,
     timer: &'a Timer,
     mac: [u8; 6],
     /// Scratch the TX token fills for the stack and hands to the driver.
@@ -713,18 +756,22 @@ pub struct Lan9514Driver<'a> {
 }
 
 #[cfg(feature = "embassy-net-driver")]
-impl<'a> Lan9514Driver<'a> {
+impl<'a, 'c> Lan9514Driver<'a, 'c> {
     /// Wraps an already-[`started`](Lan9514::start) LAN9514 as an
-    /// `embassy-net` device, borrowing the DWC2 host and timer it drives
-    /// frames through.
+    /// `embassy-net` device, taking the host channel it drives frames
+    /// through and borrowing the timer.
+    ///
+    /// The channel is owned rather than borrowed, so the rest of the
+    /// controller's channels stay free for other endpoints — a keyboard
+    /// polled from another task, say — while the stack runs.
     ///
     /// `mac` must be the address passed to [`Lan9514::start`]: the driver
     /// programs it into the chip but doesn't retain it, and
     /// `embassy-net` needs it to answer ARP.
-    pub fn new(lan9514: Lan9514, dwc2: &'a mut Dwc2Host, timer: &'a Timer, mac: [u8; 6]) -> Self {
+    pub fn new(lan9514: Lan9514, channel: Channel<'c>, timer: &'a Timer, mac: [u8; 6]) -> Self {
         Self {
             lan9514,
-            dwc2,
+            channel,
             timer,
             mac,
             tx_scratch: [0; MTU + 2],
@@ -733,13 +780,13 @@ impl<'a> Lan9514Driver<'a> {
 }
 
 #[cfg(feature = "embassy-net-driver")]
-impl embassy_net_driver::Driver for Lan9514Driver<'_> {
+impl<'c> embassy_net_driver::Driver for Lan9514Driver<'_, 'c> {
     type RxToken<'t>
         = Lan9514NetRxToken
     where
         Self: 't;
     type TxToken<'t>
-        = Lan9514NetTxToken<'t>
+        = Lan9514NetTxToken<'t, 'c>
     where
         Self: 't;
 
@@ -757,7 +804,7 @@ impl embassy_net_driver::Driver for Lan9514Driver<'_> {
         &mut self,
         cx: &mut core::task::Context,
     ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let frame = match self.lan9514.receive_frame(self.dwc2, self.timer) {
+        let frame = match self.lan9514.receive_frame(&mut self.channel, self.timer) {
             Ok(Some(frame)) => frame,
             // A transfer error is reported the same way as an empty queue:
             // there is no frame to hand up either way, and the stack's
@@ -779,7 +826,7 @@ impl embassy_net_driver::Driver for Lan9514Driver<'_> {
 
         let tx = Lan9514NetTxToken {
             lan9514: &mut self.lan9514,
-            dwc2: self.dwc2,
+            channel: &mut self.channel,
             timer: self.timer,
             scratch: &mut self.tx_scratch,
         };
@@ -793,7 +840,7 @@ impl embassy_net_driver::Driver for Lan9514Driver<'_> {
     fn transmit(&mut self, _cx: &mut core::task::Context) -> Option<Self::TxToken<'_>> {
         Some(Lan9514NetTxToken {
             lan9514: &mut self.lan9514,
-            dwc2: self.dwc2,
+            channel: &mut self.channel,
             timer: self.timer,
             scratch: &mut self.tx_scratch,
         })
@@ -861,15 +908,15 @@ impl embassy_net_driver::RxToken for Lan9514NetRxToken {
 ///
 /// Available only with the `embassy-net-driver` feature enabled.
 #[cfg(feature = "embassy-net-driver")]
-pub struct Lan9514NetTxToken<'a> {
+pub struct Lan9514NetTxToken<'a, 'c> {
     lan9514: &'a mut Lan9514,
-    dwc2: &'a mut Dwc2Host,
+    channel: &'a mut Channel<'c>,
     timer: &'a Timer,
     scratch: &'a mut [u8],
 }
 
 #[cfg(feature = "embassy-net-driver")]
-impl embassy_net_driver::TxToken for Lan9514NetTxToken<'_> {
+impl embassy_net_driver::TxToken for Lan9514NetTxToken<'_, '_> {
     /// Lets `f` fill the frame buffer, then sends it. A failed send is
     /// dropped: `consume` has no channel to report an error on, and
     /// retransmission belongs to a higher layer.
@@ -880,7 +927,7 @@ impl embassy_net_driver::TxToken for Lan9514NetTxToken<'_> {
         let result = f(&mut self.scratch[..len]);
         let _ = self
             .lan9514
-            .send_frame(self.dwc2, self.timer, &self.scratch[..len]);
+            .send_frame(self.channel, self.timer, &self.scratch[..len]);
         result
     }
 }

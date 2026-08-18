@@ -539,14 +539,29 @@ has what's left.
     yields the core instead of spinning ~87us per byte at 115200 baud,
     which is what stops one task's logging stalling every other task
     under an executor.
+  - `usb::dwc2::asynch` — interrupt-driven twins of every
+    `usb::dwc2::Channel` transfer primitive
+    (`control_*_async`, `interrupt_in_async`, `bulk_*_async`), plus
+    `Dwc2Host::wait_for_port_change`. The blocking versions busy-wait on
+    `HCINT` for a transfer, on `HFNUM` for a periodic split's microframe,
+    and on the clock between complete-split polls; each of those becomes
+    an await. Notably this needs no time crate — a transfer completing is
+    a channel-halt interrupt and every split delay is a whole number of
+    microframes, so start-of-frame is the clock (which is also what
+    `Channel::wait_microframes` exposes for pacing a periodic endpoint).
+    An async transfer therefore has no timeout of its own; drop the
+    future to impose one, which aborts the channel. See
+    `examples/usb_irq.rs`.
 
   Each is driven by the same interrupt the blocking API already exposes,
-  with the application routing it to `gpio::on_irq` or `uart::on_irq`
-  from its own `__irq_handler` — the same dispatch contract every other
-  source here uses. Off by default because each implementation carries a
-  waker slot a purely blocking consumer shouldn't pay for. The futures
-  are plain `poll`/`Waker` code with no executor dependency, so any
-  executor drives them — see the `rpi-hal-embassy` crate for one.
+  with the application routing it to `gpio::on_irq`, `uart::on_irq` or
+  `usb::dwc2::on_irq` from its own `__irq_handler` — the same dispatch
+  contract every other source here uses. Off by default because each
+  implementation carries a waker slot a purely blocking consumer
+  shouldn't pay for. The futures are plain `poll`/`Waker` code with no
+  executor dependency, so any executor drives them — see the
+  `rpi-hal-embassy` crate for one, and `examples/usb_irq.rs` for a
+  hand-rolled `block_on` that needs none.
 - **`embassy-net-driver`** (off by default): adds
   `usb::lan9514::Lan9514Driver`, an adapter implementing `embassy-net`'s
   `Driver` trait over the LAN9514 Ethernet driver — the async counterpart
@@ -557,10 +572,13 @@ has what's left.
   here beside the `phy::Device` one it parallels.
 
   It needs the application to call `lan9514::wake_rx` periodically. The
-  chip is reached by polling over USB bulk endpoints and this SoC's
-  interrupt controller has no USB routing wired up here, so nothing can
-  tell the driver a frame arrived — and `embassy-net`'s contract requires
-  waking its waker when one does. The polling interval is the
+  chip is reached over USB bulk endpoints, and a bulk IN with no frame
+  waiting simply NAKs — so however the transfer itself is driven, there
+  is no event that says "a frame arrived", only an answer to a question
+  the host has to keep asking. (The `async` feature's USB interrupt
+  changes how a transfer *completes*, not that one has to be issued.)
+  `embassy-net`'s contract requires waking its waker when a frame lands,
+  and this is the only honest way to do it. The polling interval is the
   application's choice because it is a latency-versus-wake-ups trade only
   it can make.
 - **`embedded-sdmmc`** (off by default): adds `sd::SdCard`, an adapter

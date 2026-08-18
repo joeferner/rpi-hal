@@ -103,6 +103,44 @@ impl Lic {
         self.lic.pending_1().read().aux().bit_is_set()
     }
 
+    /// Routes the USB controller's IRQ to the ARM core. Like the AUX
+    /// line this is one interrupt covering everything the DWC2 core can
+    /// report — channel halts, start-of-frame, root-port changes — so a
+    /// handler dispatches on the core's own `GINTSTS`/`HAINT` rather
+    /// than on which line fired;
+    /// [`usb::dwc2::on_irq`](crate::usb::dwc2::on_irq) does exactly
+    /// that.
+    ///
+    /// Which of those conditions actually reach this line is decided at
+    /// the core by `GINTMSK`, which
+    /// [`Dwc2Host::init`](crate::usb::dwc2::Dwc2Host::init) sets up. In
+    /// particular start-of-frame is masked there and only unmasked
+    /// while something is waiting on it — at high speed it fires every
+    /// 125µs, and it is a level source, so an unserviced SOF is not a
+    /// wasted interrupt but a hang.
+    pub fn enable_usb_irq(&self) {
+        unsafe {
+            self.lic.enable_1().write_with_zero(|w| w.usb().set_bit());
+        }
+    }
+
+    /// Masks the USB controller's IRQ at the interrupt controller — the
+    /// inverse of `enable_usb_irq`.
+    pub fn disable_usb_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_1()
+                .write_with_zero(|w| w.usb().clear_bit_by_one());
+        }
+    }
+
+    /// True if the USB controller's IRQ is currently pending at the
+    /// interrupt controller. This only says the DWC2 core asserted its
+    /// line; `GINTSTS`/`HAINT` say why.
+    pub fn is_usb_pending(&self) -> bool {
+        self.lic.pending_1().read().usb().bit_is_set()
+    }
+
     /// Routes the GPIO bank IRQ that covers `pin` to the ARM core.
     ///
     /// The BCM2836/2837 splits GPIO event detection across three

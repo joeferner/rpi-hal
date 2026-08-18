@@ -30,11 +30,11 @@
 //! use rpi_hal::hid_report::USAGE_PAGE_BUTTON;
 //! use rpi_hal::usb::hid::gamepad::Gamepad;
 //!
-//! if let Some(mut gamepad) = Gamepad::from_device(dwc2, timer, device)? {
+//! if let Some(mut gamepad) = Gamepad::from_device(channel, timer, device)? {
 //!     let mut buf = [0u8; 64];
 //!     loop {
 //!         timer.delay_ms(gamepad.poll_interval_ms()); // pace polls
-//!         if let Some(report) = gamepad.poll(dwc2, timer, &mut buf)? {
+//!         if let Some(report) = gamepad.poll(channel, timer, &mut buf)? {
 //!             for field in gamepad.report_descriptor().fields() {
 //!                 if field.report_id != report.id {
 //!                     continue;
@@ -53,8 +53,8 @@ use crate::usb::control::{
     get_configuration_descriptor, get_report_descriptor, set_configuration, set_idle,
 };
 use crate::usb::descriptor::ConfigurationDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, TransferError, MAX_TRANSFER_LEN};
-use crate::usb::hid::{HidInterface, CHANNEL};
+use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError, MAX_TRANSFER_LEN};
+use crate::usb::hid::HidInterface;
 use crate::usb::Device;
 
 /// Bytes of configuration descriptor read while looking for the gamepad's
@@ -155,12 +155,12 @@ impl Gamepad {
     /// left configured — harmless, and what the boot drivers do too when
     /// they claim a device.
     pub fn from_device(
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         device: Device,
     ) -> Result<Option<Gamepad>, GamepadError> {
         let mut config = [0u8; CONFIG_BUFFER_LEN];
-        let len = get_configuration_descriptor(dwc2, timer, device.endpoint, 0, &mut config)
+        let len = get_configuration_descriptor(channel, timer, device.endpoint, 0, &mut config)
             .map_err(GamepadError::ConfigurationDescriptor)?;
         // Nothing to do at all for a device with no HID report endpoint --
         // checked before configuring so a non-HID device is left untouched.
@@ -173,7 +173,7 @@ impl Gamepad {
         };
         // Configure before reading any report descriptor: that request is
         // addressed to an interface, which only a configured device has.
-        set_configuration(dwc2, timer, device.endpoint, config_value)
+        set_configuration(channel, timer, device.endpoint, config_value)
             .map_err(GamepadError::SetConfiguration)?;
 
         // Every HID interface with a report endpoint is a candidate -- what
@@ -200,7 +200,7 @@ impl Gamepad {
             let mut raw_descriptor = [0u8; MAX_REPORT_DESCRIPTOR];
             let to_read = (interface.report_descriptor_len as usize).min(MAX_REPORT_DESCRIPTOR);
             let raw_descriptor_len = match get_report_descriptor(
-                dwc2,
+                channel,
                 timer,
                 device.endpoint,
                 interface.interface,
@@ -226,7 +226,7 @@ impl Gamepad {
 
             // Report-on-change only (idle duration 0); a STALL here is
             // harmless -- see this method's doc.
-            let _ = set_idle(dwc2, timer, device.endpoint, interface.interface, 0);
+            let _ = set_idle(channel, timer, device.endpoint, interface.interface, 0);
 
             return Ok(Some(Gamepad {
                 endpoint: ControlEndpoint {
@@ -305,10 +305,10 @@ impl Gamepad {
     /// The caller must pace polls at [`Self::poll_interval_ms`]: interrupt
     /// endpoints mustn't be hammered back-to-back, which wedges the
     /// controller's periodic scheduling — see
-    /// [`Dwc2Host::interrupt_in`](crate::usb::dwc2::Dwc2Host::interrupt_in).
+    /// [`Channel::interrupt_in`](crate::usb::dwc2::Channel::interrupt_in).
     pub fn poll<'a>(
         &mut self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         buf: &'a mut [u8],
     ) -> Result<Option<Report<'a>>, TransferError> {
@@ -316,8 +316,7 @@ impl Gamepad {
             .len()
             .min(self.endpoint.max_packet_size as usize)
             .min(MAX_TRANSFER_LEN);
-        let received = match dwc2.interrupt_in(
-            CHANNEL,
+        let received = match channel.interrupt_in(
             self.endpoint,
             self.report_endpoint,
             &mut self.toggle,
