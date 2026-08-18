@@ -43,7 +43,7 @@ pub extern "C" fn kmain() -> ! {
         halt();
     }
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -55,7 +55,7 @@ pub extern "C" fn kmain() -> ! {
         timer.delay_ms(100);
     }
 
-    let result = usb::enumerate(&mut dwc2, &timer, |_dwc2, _timer, device| {
+    let result = usb::enumerate(&dwc2, &timer, |_channel, _timer, device| {
         let _ = writeln!(
             uart,
             "port {}: {:04x}:{:04x} class={} -> address {}",

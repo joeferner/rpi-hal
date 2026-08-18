@@ -13,7 +13,7 @@ use crate::usb::control::{
     PORT_FEATURE_C_RESET,
 };
 use crate::usb::descriptor::ConfigurationDescriptor;
-use crate::usb::dwc2::{ControlEndpoint, Dwc2Host, SplitTarget};
+use crate::usb::dwc2::{Channel, ControlEndpoint, SplitTarget};
 use crate::usb::EnumerationError;
 
 /// How many times [`Hub::reset_port`] polls a port's status waiting for
@@ -81,19 +81,19 @@ impl Hub {
     /// its real `bMaxPacketSize0` (see
     /// [`control::probe_and_address`](crate::usb::control::probe_and_address)).
     pub fn configure(
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         endpoint: ControlEndpoint,
     ) -> Result<Hub, EnumerationError> {
         let mut config = [0u8; 64];
-        get_configuration_descriptor(dwc2, timer, endpoint, 0, &mut config)?;
+        get_configuration_descriptor(channel, timer, endpoint, 0, &mut config)?;
         let config_value = ConfigurationDescriptor::parse(&config)
             .ok_or(EnumerationError::MalformedDescriptor)?
             .value();
-        set_configuration(dwc2, timer, endpoint, config_value)?;
+        set_configuration(channel, timer, endpoint, config_value)?;
 
         let mut hub_descriptor = [0u8; 16];
-        let len = get_hub_descriptor(dwc2, timer, endpoint, &mut hub_descriptor)?;
+        let len = get_hub_descriptor(channel, timer, endpoint, &mut hub_descriptor)?;
         // bNbrPorts is byte 2; bPwrOn2PwrGood (byte 5) is in 2ms units.
         if len < 6 {
             return Err(EnumerationError::MalformedDescriptor);
@@ -102,7 +102,7 @@ impl Hub {
         let power_on_good_ms = hub_descriptor[5] as u32 * 2;
 
         for port in 1..=num_ports {
-            set_port_power(dwc2, timer, endpoint.address, port, endpoint.low_speed)?;
+            set_port_power(channel, timer, endpoint.address, port, endpoint.low_speed)?;
         }
         timer.delay_ms(power_on_good_ms);
 
@@ -116,12 +116,12 @@ impl Hub {
     /// Reads downstream `port`'s current [`PortStatus`] (1-based).
     pub fn port_status(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         port: u8,
     ) -> Result<PortStatus, EnumerationError> {
         let (status, _change) = get_port_status(
-            dwc2,
+            channel,
             timer,
             self.endpoint.address,
             port,
@@ -141,7 +141,7 @@ impl Hub {
     /// don't linger; a failure to acknowledge is non-fatal and ignored.
     pub fn reset_port(
         &self,
-        dwc2: &mut Dwc2Host,
+        channel: &mut Channel,
         timer: &Timer,
         port: u8,
     ) -> Result<PortStatus, EnumerationError> {
@@ -149,19 +149,19 @@ impl Hub {
         let low_speed = self.endpoint.low_speed;
 
         let _ = clear_port_feature(
-            dwc2,
+            channel,
             timer,
             hub_address,
             port,
             PORT_FEATURE_C_CONNECTION,
             low_speed,
         );
-        set_port_reset(dwc2, timer, hub_address, port, low_speed)?;
+        set_port_reset(channel, timer, hub_address, port, low_speed)?;
 
         let mut status = PortStatus(0);
         for _ in 0..PORT_RESET_POLLS {
             timer.delay_ms(PORT_RESET_POLL_MS);
-            if let Ok((s, _)) = get_port_status(dwc2, timer, hub_address, port, low_speed) {
+            if let Ok((s, _)) = get_port_status(channel, timer, hub_address, port, low_speed) {
                 status = PortStatus(s);
                 if status.enabled() {
                     break;
@@ -170,7 +170,7 @@ impl Hub {
         }
 
         let _ = clear_port_feature(
-            dwc2,
+            channel,
             timer,
             hub_address,
             port,

@@ -18,7 +18,7 @@ use rpi_hal::pac;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::lan9514::Lan9514;
 
 #[panic_handler]
@@ -56,7 +56,7 @@ pub extern "C" fn kmain() -> ! {
         }
     };
 
-    let mut dwc2 = Dwc2Host::init(
+    let dwc2 = Dwc2Host::init(
         peripherals.USB_OTG_GLOBAL,
         peripherals.USB_OTG_HOST,
         peripherals.USB_OTG_PWRCLK,
@@ -69,8 +69,8 @@ pub extern "C" fn kmain() -> ! {
     }
 
     // Enumerate the bus; bring the LAN9514 up and run traffic through it.
-    let result = usb::enumerate(&mut dwc2, &timer, |dwc2, timer, device| {
-        let mut lan9514 = match Lan9514::from_device(dwc2, timer, device) {
+    let result = usb::enumerate(&dwc2, &timer, |channel, timer, device| {
+        let mut lan9514 = match Lan9514::from_device(channel, timer, device) {
             Ok(Some(lan9514)) => lan9514,
             Ok(None) => return ControlFlow::Continue(()),
             Err(e) => {
@@ -79,7 +79,7 @@ pub extern "C" fn kmain() -> ! {
             }
         };
 
-        match lan9514.id_revision(dwc2, timer) {
+        match lan9514.id_revision(channel, timer) {
             Ok(id) => {
                 let _ = writeln!(
                     uart,
@@ -93,7 +93,7 @@ pub extern "C" fn kmain() -> ! {
             }
         }
 
-        run_ethernet(&mut uart, dwc2, timer, &mut lan9514, board_mac);
+        run_ethernet(&mut uart, channel, timer, &mut lan9514, board_mac);
         ControlFlow::Break(())
     });
 
@@ -107,19 +107,19 @@ pub extern "C" fn kmain() -> ! {
 /// prints a summary of each received frame forever.
 fn run_ethernet(
     uart: &mut Uart,
-    dwc2: &mut Dwc2Host,
+    channel: &mut Channel,
     timer: &Timer,
     lan9514: &mut Lan9514,
     mac: [u8; 6],
 ) {
-    if let Err(e) = lan9514.start(dwc2, timer, mac) {
+    if let Err(e) = lan9514.start(channel, timer, mac) {
         let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
         return;
     }
 
     let _ = writeln!(uart, "waiting for link...");
     loop {
-        match lan9514.is_link_up(dwc2, timer) {
+        match lan9514.is_link_up(channel, timer) {
             Ok(true) => break,
             Ok(false) => timer.delay_ms(100),
             Err(e) => {
@@ -137,7 +137,7 @@ fn run_ethernet(
     frame[0..6].copy_from_slice(&[0xff; 6]);
     frame[6..12].copy_from_slice(&mac);
     frame[12..14].copy_from_slice(&0x88b5u16.to_be_bytes());
-    match lan9514.send_frame(dwc2, timer, &frame) {
+    match lan9514.send_frame(channel, timer, &frame) {
         Ok(()) => {
             let _ = writeln!(uart, "sent {} byte frame", frame.len());
         }
@@ -151,7 +151,7 @@ fn run_ethernet(
         // Pace polls -- bulk endpoints mustn't be hammered back to back.
         timer.delay_ms(10);
 
-        match lan9514.receive_frame(dwc2, timer) {
+        match lan9514.receive_frame(channel, timer) {
             Ok(Some(frame)) => print_frame(uart, frame),
             // Nothing received this poll.
             Ok(None) => {}
@@ -159,7 +159,7 @@ fn run_ethernet(
                 let _ = writeln!(
                     uart,
                     "receive error: {e:?} (hcint=0x{:08x})",
-                    dwc2.last_channel_interrupt()
+                    channel.last_interrupt()
                 );
             }
         }
