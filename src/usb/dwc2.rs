@@ -1139,21 +1139,26 @@ impl Channel<'_> {
             ch.hcintmsk().write(|w| w.bits(HCINT_CHH));
         }
 
-        // Unmask this channel at the host level too. `HAINTMSK`
-        // (distinct from the per-channel `HCINTMSK` just above) is
-        // confirmed, on this exact SoC's own reference driver
-        // (Broadcom/Raspberry Pi Foundation's `dwc_otg`), to be
-        // OR'd in per channel right when that channel is assigned a
-        // transaction (`assign_and_init_hc()`), not written once at
-        // core init the way this driver first tried it -- which
-        // didn't stick on real hardware. Read-modify-write, not
-        // `.write()`, to only ever add this channel's bit rather than
-        // clobbering any other channel's.
-        unsafe {
-            self.regs()
-                .haintmsk()
-                .modify(|r, w| w.haintm().bits(r.haintm().bits() | (1 << self.index)));
-        }
+        // `HAINTMSK` -- which decides whether this channel's `HCINT`
+        // reaches `GINTSTS` and so the CPU -- is deliberately *not*
+        // touched here, even though this is where the reference driver
+        // for this SoC (Broadcom/Raspberry Pi Foundation's `dwc_otg`)
+        // sets it. It is managed by the async layer instead, per wait
+        // (see `asynch`'s `arm`/`disarm`).
+        //
+        // The distinction only matters once something routes USB to the
+        // ARM core, and then it matters a great deal. This function
+        // serves both the blocking and the async path. A blocking
+        // transfer wants no interrupt at all: it polls `HCINT` itself.
+        // If its channel were unmasked here, its halt would assert the
+        // controller's interrupt line, and the handler -- which
+        // services only channels an async transfer is waiting on, and
+        // must leave a polled channel's `HCINT` latched for its owner
+        // to read -- would return without acking it. The line is level
+        // triggered, so the core would re-enter the handler forever and
+        // the polling loop it interrupted would never resume. A hang,
+        // not a slow-down, and only in a program that mixes the two
+        // styles.
 
         // Split control (`HCSPLT`): for a device behind a high-speed
         // hub's transaction translator, enable the split and address

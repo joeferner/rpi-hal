@@ -175,6 +175,35 @@ fn any_frame_waiter(slots: &[Slot; MAX_CHANNELS]) -> bool {
     slots.iter().any(|slot| matches!(slot.wait, Wait::Frame(_)))
 }
 
+/// Lets `channel`'s `HCINT` reach `GINTSTS` (and so the CPU), or stops
+/// it.
+///
+/// This is per *wait*, not per transfer, and that is the whole point:
+/// only a channel an async transfer is parked on should be able to
+/// assert the controller's interrupt line. A channel driven by the
+/// blocking API polls its own `HCINT`, and [`on_irq`] must leave that
+/// latched for the polling loop to read — so if such a channel were
+/// unmasked, its halt would raise an interrupt the handler is obliged
+/// not to acknowledge. The line is level triggered, so the core would
+/// re-enter the handler forever and the polling loop would never
+/// resume: a hang, in any program that mixes the two styles on one
+/// controller.
+fn set_channel_interrupt(index: usize, enable: bool) {
+    // Safe to steal: this touches only `HAINTMSK`, and only the one bit
+    // belonging to a channel whose slot is being armed or disarmed here.
+    let host = unsafe { USB_OTG_HOST::steal() };
+    unsafe {
+        host.haintmsk().modify(|r, w| {
+            let bits = r.haintm().bits();
+            w.haintm().bits(if enable {
+                bits | (1 << index)
+            } else {
+                bits & !(1 << index)
+            })
+        });
+    }
+}
+
 /// Services the DWC2 controller's interrupt for channels an async
 /// transfer is waiting on: captures and acknowledges each halt, notes
 /// each awaited microframe, and wakes the futures concerned.
@@ -350,6 +379,11 @@ fn arm(index: usize, wait: Wait) {
         // endpoints' transfers past their deadlines.
         let global = unsafe { USB_OTG_GLOBAL::steal() };
         set_sof_mask(&global, any_frame_waiter(&slots));
+
+        // Only a halt wait needs the channel's interrupt: a microframe
+        // wait resolves on start-of-frame, and the channel is not even
+        // running.
+        set_channel_interrupt(index, matches!(wait, Wait::Halt));
     });
 }
 
@@ -368,6 +402,11 @@ fn disarm(index: usize) -> bool {
             let global = unsafe { USB_OTG_GLOBAL::steal() };
             set_sof_mask(&global, false);
         }
+
+        // Nothing is waiting on this channel any more, so it must stop
+        // asserting the interrupt line — including for whoever uses it
+        // next, which may well be the blocking API.
+        set_channel_interrupt(index, false);
         was_waiting
     })
 }
