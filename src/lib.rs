@@ -56,8 +56,16 @@ pub mod lic;
 pub mod mailbox;
 /// Blocking driver for the mini UART (UART1).
 pub mod mini_uart;
+/// Client for the VideoCore firmware's MMAL multimedia framework, over
+/// [`vchiq`] — components, ports, parameters, and buffer exchange.
+#[cfg(feature = "mmal")]
+pub mod mmal;
+/// Identity-mapped MMU bring-up, plus the one thing a driver may need to
+/// change about the map afterwards: taking a region of RAM out of the
+/// caches ([`mmu::set_uncached`]), for memory a bus master writes
+/// concurrently with this core.
 #[cfg(feature = "mmu")]
-mod mmu;
+pub mod mmu;
 #[cfg(all(feature = "rt", feature = "multicore"))]
 /// Bringing up secondary cores (1-3) — see the module's own doc
 /// comment for the wake-up handoff this builds on.
@@ -102,6 +110,15 @@ pub mod usb;
 /// Pi 3 (BCM2836/BCM2837) only.
 #[cfg(feature = "v3d")]
 pub mod v3d;
+/// VCHIQ: the shared-memory, doorbell-signalled message transport to the
+/// VideoCore firmware — everything the simple request/response
+/// [`mailbox`] can't carry.
+#[cfg(feature = "vchiq")]
+pub mod vchiq;
+/// Hardware H.264 video decode, driven through the VideoCore firmware's
+/// `ril.video_decode` MMAL component.
+#[cfg(feature = "mmal")]
+pub mod video_decode;
 /// Blocking driver for the PM block's watchdog timer.
 pub mod watchdog;
 /// Host control protocol (SDPCM/CDC) for the on-board BCM43430 Wi-Fi

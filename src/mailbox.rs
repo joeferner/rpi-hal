@@ -762,6 +762,30 @@ impl Mailbox {
         Ok(())
     }
 
+    /// Hands the firmware the base address of the VCHIQ shared slot memory
+    /// (tag `0x0004_8010`, "VCHIQ init"), returning the word it answers
+    /// with — zero on success, and whatever it made of the request
+    /// otherwise. Not interpreted here: the caller (`crate::vchiq`) is
+    /// the only thing that knows what a nonzero answer means for its own
+    /// bring-up. Not linked, for the same reason as
+    /// [`Self::set_enable_qpu`]'s note: this method is compiled
+    /// unconditionally but that module isn't, so a build without the
+    /// `vchiq` feature would have a broken intra-doc link.
+    ///
+    /// `slot_bus_address` must be a VideoCore *bus* address (see this
+    /// module's doc comment), and the memory it names must already hold a
+    /// fully initialized slot-zero structure: this call is the point at
+    /// which the firmware starts reading it.
+    ///
+    /// This is the one property tag that hands the firmware a permanent
+    /// reference to ARM memory rather than answering a question, so —
+    /// like [`Self::set_touch_buffer_address`] — that memory must stay
+    /// valid forever after.
+    pub fn vchiq_init(&mut self, slot_bus_address: u32) -> Result<u32, Error> {
+        let response = self.property_call(0x0004_8010, &[slot_bus_address], 1)?;
+        Ok(response[0])
+    }
+
     /// Tells the firmware to keep the DSI touchscreen's current touch
     /// points written into `address` from now on (tag `0x0004_801f`,
     /// "Set Touchbuffer") — `address` must stay valid and

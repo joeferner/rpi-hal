@@ -53,14 +53,36 @@ pub(crate) fn invalidate_range(address: u32, len: usize) {
     barrier();
 }
 
+/// Cleans *and* invalidates every cache line covering `len` bytes from
+/// `address`, then barriers — writes back anything this core had dirty and
+/// leaves nothing cached behind.
+///
+/// The one place this is needed rather than one of the two halves above is
+/// when memory stops being cacheable at all: a region about to be remapped
+/// Normal Non-cacheable (`crate::mmu::set_uncached`) must have no cached
+/// copy left, dirty or clean. A plain invalidate would discard writes that
+/// never reached RAM; a plain clean would leave clean lines that the new,
+/// non-cacheable accesses bypass, so a later eviction could still hand back
+/// pre-remap data.
+#[cfg(feature = "mmu")]
+pub(crate) fn clean_invalidate_range(address: u32, len: usize) {
+    let end = address + len as u32;
+    let mut line = address & !(MIN_CACHE_LINE - 1);
+    while line < end {
+        unsafe { clean_invalidate_line(line) };
+        line += MIN_CACHE_LINE;
+    }
+    barrier();
+}
+
 // The per-line ops and the barrier are the only architecture-specific
 // part. AArch32 uses CP15 cache-maintenance coprocessor writes (DCCMVAC
-// to clean, DCIMVAC to invalidate) and a bare `dsb`; AArch64 uses the
-// `dc cvac` / `dc ivac` cache-maintenance instructions and `dsb sy`. Both
-// operate to the point of coherency — the level shared with the bus
-// masters. On AArch64 the `{0:x}` operand selects the 64-bit view of the
-// (zero-extended, always < 4 GB on this SoC) address, since `dc` takes an
-// X register.
+// to clean, DCIMVAC to invalidate, DCCIMVAC for both) and a bare `dsb`;
+// AArch64 uses the `dc cvac` / `dc ivac` / `dc civac` cache-maintenance
+// instructions and `dsb sy`. All operate to the point of coherency — the
+// level shared with the bus masters. On AArch64 the `{0:x}` operand selects
+// the 64-bit view of the (zero-extended, always < 4 GB on this SoC)
+// address, since `dc` takes an X register.
 
 /// Cleans the single cache line containing `line` to the point of
 /// coherency.
@@ -94,19 +116,42 @@ unsafe fn invalidate_line(line: u32) {
     asm!("dc ivac, {0:x}", in(reg) line);
 }
 
-/// Data synchronization barrier over the full system domain — completes
-/// the cache maintenance above before the caller kicks off DMA.
-#[cfg(target_arch = "arm")]
+/// Cleans and invalidates the single cache line containing `line` to the
+/// point of coherency.
+#[cfg(all(feature = "mmu", target_arch = "arm"))]
 #[inline(always)]
-fn barrier() {
-    unsafe { asm!("dsb") };
+unsafe fn clean_invalidate_line(line: u32) {
+    asm!("mcr p15, 0, {0}, c7, c14, 1", in(reg) line);
+}
+
+/// Cleans and invalidates the single cache line containing `line` to the
+/// point of coherency.
+#[cfg(all(feature = "mmu", target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn clean_invalidate_line(line: u32) {
+    asm!("dc civac, {0:x}", in(reg) line);
 }
 
 /// Data synchronization barrier over the full system domain — completes
 /// the cache maintenance above before the caller kicks off DMA.
+///
+/// Also the ordering barrier for the VideoCore shared-memory protocols
+/// (`crate::vchiq`), whose region is mapped non-cacheable rather than
+/// maintained by hand: no maintenance is needed there, but plain
+/// Normal-memory accesses can still be reordered and merged, so publishing
+/// a structure before the flag that advertises it still needs this.
+#[cfg(target_arch = "arm")]
+#[inline(always)]
+pub(crate) fn barrier() {
+    unsafe { asm!("dsb") };
+}
+
+/// Data synchronization barrier over the full system domain — completes
+/// the cache maintenance above before the caller kicks off DMA. See the
+/// AArch32 definition's doc comment for its second use.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn barrier() {
+pub(crate) fn barrier() {
     unsafe { asm!("dsb sy") };
 }
 
