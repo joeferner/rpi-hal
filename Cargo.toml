@@ -224,6 +224,18 @@ embedded-sdmmc = ["dep:embedded-sdmmc"]
 # `smoltcp` `phy::Device` adapters over the LAN9514 Ethernet driver
 # (src/usb/lan9514.rs) and the Wi-Fi driver (src/wifi.rs).
 smoltcp = ["dep:smoltcp"]
+# VCHIQ (src/vchiq.rs): the shared-memory, doorbell-signalled message
+# transport to the VideoCore firmware -- the channel every firmware-mediated
+# subsystem beyond simple mailbox property queries goes through. Implies
+# `mmu`: its shared region has to be remapped non-cacheable (see that
+# module's doc comment), which needs this crate's translation tables to
+# remap. No dependency to gate; kept as its own feature because it is a
+# large subsystem, and 2MB of `.bss` for its shared region, that a consumer
+# who never talks to the firmware's services shouldn't pay for.
+vchiq = ["mmu"]
+# MMAL (src/mmal.rs) and the hardware H.264 decoder built on it
+# (src/video_decode.rs), over `vchiq`.
+mmal = ["vchiq"]
 # V3D 3D pipeline bring-up (src/v3d.rs) -- VideoCore IV's QPU shader
 # cores and the tile-based binning/render hardware around them. No
 # dependency to gate (the register block isn't in either PAC's SVD, so
@@ -330,6 +342,10 @@ required-features = ["smoltcp"]
 [[example]]
 name = "usb_ethernet_http_server"
 required-features = ["smoltcp"]
+
+[[example]]
+name = "h264_decode"
+required-features = ["mmal", "embedded-sdmmc"]
 
 [[example]]
 name = "v3d_probe"

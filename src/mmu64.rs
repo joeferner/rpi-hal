@@ -67,6 +67,9 @@ const SH_INNER: u64 = 0b11 << 8;
 const ATTR_NORMAL: u64 = 0 << 2;
 /// Bits[4:2] (AttrIndx) = 1: index into `MAIR_EL1` for Device memory.
 const ATTR_DEVICE: u64 = 1 << 2;
+/// Bits[4:2] (AttrIndx) = 2: index into `MAIR_EL1` for Normal
+/// Non-cacheable memory.
+const ATTR_NORMAL_UNCACHED: u64 = 2 << 2;
 /// Bit[54] (UXN) and bit[53] (PXN): execute-never at every privilege --
 /// nothing should fetch instructions from MMIO space.
 const EXEC_NEVER: u64 = (1 << 54) | (1 << 53);
@@ -78,6 +81,14 @@ const RAM_BLOCK_FLAGS: u64 = DESC_BLOCK | ATTR_NORMAL | SH_INNER | AF;
 /// Flags for a Device, execute-never block. `SH` left `0b00` -- Device
 /// memory is not cached, so shareability is not meaningful.
 const DEVICE_BLOCK_FLAGS: u64 = DESC_BLOCK | ATTR_DEVICE | AF | EXEC_NEVER;
+
+/// Flags for a RAM block with the caches taken out of the picture: still
+/// Normal memory (so unaligned accesses and the compiler's usual load/store
+/// merging remain legal), just non-cacheable. Installed by
+/// [`set_uncached_block`] over a region shared with the VideoCore; see
+/// [`crate::mmu::set_uncached`] for why that is necessary rather than a
+/// performance choice.
+const UNCACHED_BLOCK_FLAGS: u64 = DESC_BLOCK | ATTR_NORMAL_UNCACHED | SH_INNER | AF;
 
 /// A single 4KB-granule translation table. `UnsafeCell` because every
 /// entry is filled in at runtime by [`rpi_hal_mmu_init`] (the level-1
@@ -172,9 +183,11 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         }
 
         // MAIR_EL1: attr0 = Normal, Inner+Outer Write-Back non-transient
-        // Read/Write-Allocate (0xFF); attr1 = Device-nGnRE (0x04). These
-        // are the AttrIndx values baked into the descriptors above.
-        let mair: u64 = 0xFF | (0x04 << 8);
+        // Read/Write-Allocate (0xFF); attr1 = Device-nGnRE (0x04); attr2 =
+        // Normal, Inner+Outer Non-cacheable (0x44), used only by blocks
+        // `set_uncached_block` rewrites. These are the AttrIndx values
+        // baked into the descriptors above.
+        let mair: u64 = 0xFF | (0x04 << 8) | (0x44 << 16);
         asm!("msr mair_el1, {0}", in(reg) mair);
 
         // TCR_EL1: T0SZ=25 (39-bit VA), walk memory Inner+Outer Write-Back
@@ -212,6 +225,47 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
 
         // Architecturally required after enabling the MMU: the pipeline
         // may have fetched ahead using the old (MMU-off) translation.
+        asm!("isb");
+    }
+}
+
+/// Bytes covered by one level-2 descriptor -- see
+/// [`crate::mmu::UNCACHED_GRANULE`].
+pub(super) const UNCACHED_GRANULE: usize = BLOCK_2MB as usize;
+
+/// Rewrites the level-2 block descriptor covering `base` with
+/// [`UNCACHED_BLOCK_FLAGS`], then makes the change take effect everywhere.
+///
+/// No cache maintenance on the descriptor itself: `TCR_EL1` programs table
+/// walks as Write-Back cacheable and Inner Shareable (see
+/// [`rpi_hal_mmu_init`]), so the walker reads through the same coherent
+/// caches this store lands in, and a `dsb` is all that is needed to order
+/// it before the TLB operation. That operation is the inner-shareable,
+/// by-address form (`tlbi vaae1is`, whose operand is the virtual address
+/// shifted right by 12), so secondary cores walking these same tables drop
+/// their stale entry for this block too.
+///
+/// # Safety
+///
+/// `base` must be 2MB-aligned and within the RAM these tables map as Normal
+/// memory; see [`crate::mmu::set_uncached`], which checks both and is the
+/// only caller.
+pub(super) unsafe fn set_uncached_block(base: u32) {
+    let base = u64::from(base);
+    let region = (base / BLOCK_1GB) as usize;
+    let index = ((base % BLOCK_1GB) / BLOCK_2MB) as usize;
+
+    let entries = L2[region].0.get() as *mut u64;
+    unsafe {
+        entries
+            .add(index)
+            .write_volatile(base | UNCACHED_BLOCK_FLAGS)
+    };
+
+    unsafe {
+        asm!("dsb ishst");
+        asm!("tlbi vaae1is, {0}", in(reg) base >> 12);
+        asm!("dsb ish");
         asm!("isb");
     }
 }

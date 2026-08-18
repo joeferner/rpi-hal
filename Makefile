@@ -29,6 +29,9 @@ examples:
 	cargo build --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo build --release --features bcm2837,v3d --example v3d_probe --example gpu_cube
+	# And the video decoder, gated on `mmal` (which pulls in `vchiq`) plus
+	# `embedded-sdmmc` for the stream it plays off the card.
+	cargo build --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode
 
 fmt:
 	cargo fmt
@@ -49,6 +52,9 @@ clippy:
 	cargo clippy --release --features bcm2711 -- -D warnings
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo clippy --release --features bcm2837,v3d --example v3d_probe --example gpu_cube -- -D warnings
+	# And for the video decoder and the VCHIQ/MMAL stack under it, gated on
+	# `mmal` -- none of which a plain lint compiles either.
+	cargo clippy --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing -- broken intra-doc links are the main
@@ -73,7 +79,7 @@ clippy:
 # path lib.rs gates behind that cfg is exercised here rather than first
 # failing on the docs.rs builder after a release is already published.
 doc:
-	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,embassy-net-driver,v3d
+	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,embassy-net-driver,v3d,mmal
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,smoltcp,embassy-net-driver
 
 # A chip feature is not optional here, and the reason is easy to trip over:

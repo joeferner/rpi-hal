@@ -412,6 +412,44 @@ implementations where applicable, and all verified on real hardware:
   demosaic + gamma). Image-quality polish
   (white balance, a better demosaic, full resolution) is left to do — see
   [issue #27](https://github.com/joeferner/rpi-hal/issues/27).
+- **Hardware H.264 decode** (`src/video_decode.rs`, on `src/mmal.rs` and
+  `src/vchiq.rs`, Pi 3, behind the `mmal` feature): decoding through the
+  VideoCore's `ril.video_decode` component. Feed it a raw H.264 Annex B
+  byte stream in arbitrary chunks and whole I420 frames come back — the
+  firmware owns the bitstream front end, so there is no NAL parsing or
+  reference-picture management to do on the ARM side, and the mid-stream
+  format change the decoder announces once it has parsed the stream's
+  geometry is handled internally. `examples/h264_decode.rs` plays a file
+  off the SD card on the display.
+
+  Getting there meant the two layers underneath, which are the reusable
+  part: **VCHIQ** (`src/vchiq.rs`), the firmware's shared-memory message
+  transport — slot ring, service open/close, messages, and page-list bulk
+  DMA — and an **MMAL** client on top of it (`src/mmal.rs`) for
+  components, ports, parameters and buffer exchange. Every
+  firmware-mediated subsystem this crate doesn't reach today (the camera
+  ISP path, the encoders, audio) is an MMAL component, so it is the same
+  road for all of them. Neither is interrupt-driven: the application polls
+  (`Vchiq::poll`/`Mmal::poll`), which is what keeps the whole subsystem
+  free of the interrupt plumbing a doorbell would need. Both carry
+  `Stats` counters, because a shared-memory exchange that stalls reports
+  nothing about itself and sent-versus-returned is what makes one
+  diagnosable.
+
+  The one thing this changes outside itself: the shared region has to be
+  non-cacheable, because both sides write different fields of the same
+  cache line and no maintenance sequence survives that. `src/mmu.rs` grew
+  `mmu::set_uncached` for it — see "Virtual memory" below.
+
+  Pi 3 only in practice. The transport itself is chip-agnostic, but the
+  H.264 block on a Pi 4 is firmware-mediated in the same way while its
+  HEVC decoder is a real ARM-side register block with no driver here — see
+  [issue #28](https://github.com/joeferner/rpi-hal/issues/28). Getting a
+  decoded frame on *screen* is not something the driver does: output is
+  planar YUV and the mailbox framebuffer takes RGB, so something has to
+  convert, and where that belongs is an application decision — the
+  example does it on the ARM, a pass that costs more per frame than the
+  decode itself.
 
 Implemented against the same trait surface as their verified siblings
 above, and now hardware-verified too, but called out separately because
@@ -537,6 +575,19 @@ has what's left.
   (see `examples/usb_ethernet_smoltcp.rs`). Pulls `smoltcp` in with only
   `medium-ethernet`; the protocol/socket features a stack needs are the
   consumer's to add, since the stack itself is application policy.
+- **`vchiq`** (off by default, implies `mmu`): adds `vchiq::Vchiq`, the
+  shared-memory message transport to the VideoCore firmware — the channel
+  every firmware-mediated subsystem beyond `mailbox`'s simple property
+  queries goes through. Implies `mmu` because its shared region has to be
+  remapped non-cacheable (`mmu::set_uncached`), which needs this crate's
+  translation tables to remap. Its own feature because it is a large
+  subsystem, and 2MB of `.bss` for the shared region, that a consumer who
+  never talks to the firmware's services shouldn't pay for.
+- **`mmal`** (off by default, implies `vchiq`): adds `mmal::Mmal`, a
+  client for the firmware's multimedia framework (components, ports,
+  parameters, buffer exchange), and `video_decode::VideoDecoder`, the
+  hardware H.264 decoder built on it. Both are described under "Status"
+  above.
 - **`v3d`** (off by default): adds `v3d::V3d` and the control-list
   builders around it (`v3d::bcl`, `v3d::rcl`, `v3d::shader_record`,
   `v3d::texture`, `v3d::uniforms`) — the V3D 3D pipeline, VideoCore
@@ -682,6 +733,18 @@ attributes for `core::sync::atomic`, not to relocate anything. If a
 higher-half kernel or non-identity peripheral mapping is ever needed,
 either patch PAC generation to parameterize the base address, or wrap
 register access behind an indirection layer in this crate.
+
+The one thing that changes the map after boot is `mmu::set_uncached`,
+which remaps a region of RAM as Normal **Non-cacheable** — one 1MB
+section (AArch32) or 2MB block (AArch64) at a time, since that is the
+smallest thing a translation table entry covers. It exists for memory the
+VideoCore writes *concurrently* with this core, where the usual
+clean-before-give/invalidate-after-take maintenance every other bus-master
+driver here uses cannot work: both sides write different fields of the
+same cache line, so cleaning it publishes a stale copy of the peer's field
+and invalidating it discards this core's own. `vchiq` is the caller; it is
+the same trade Linux makes by allocating the same region with
+`dma_alloc_coherent`.
 
 ## Dynamic memory allocation (`alloc`)
 

@@ -8,6 +8,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **VCHIQ** (`vchiq` feature, implies `mmu`): the VideoCore firmware's
+  shared-memory message transport — slot ring, service open/close,
+  messages, and page-list bulk DMA — as `vchiq::Vchiq`. Polled rather than
+  interrupt-driven; see `vchiq::Vchiq::poll`.
+- **MMAL** (`mmal` feature, implies `vchiq`): `mmal::Mmal`, a client for
+  the firmware's multimedia framework — components, ports, parameters and
+  buffer exchange, with buffers moving by `&'static mut [u8]` ownership
+  transfer in both directions.
+- **Hardware H.264 decode** (`mmal` feature): `video_decode::VideoDecoder`,
+  driving the firmware's `ril.video_decode` component. Takes an H.264
+  Annex B byte stream in arbitrary chunks and returns whole I420 frames,
+  handling the mid-stream format change the decoder announces once it has
+  parsed the stream's geometry. `examples/h264_decode.rs` plays a file off
+  the SD card on the display, converting each frame to RGB on the ARM.
+- `mmu::set_uncached`, which remaps a granule-aligned region of RAM as
+  Normal Non-cacheable — what makes a shared-memory protocol with a second
+  bus master possible at all, and why `vchiq` implies `mmu`. The `mmu`
+  module is public for it.
+- `mailbox::Mailbox::vchiq_init`, the property tag that hands the firmware
+  the VCHIQ shared region.
+- `vchiq::Stats` and `mmal::Stats`: counts of what has crossed each
+  interface. A stalled shared-memory exchange reports nothing about
+  itself, so comparing what was sent against what came back is what makes
+  one diagnosable.
 - crates.io version and docs.rs badges in `README.md`, alongside CI.
 
 ### Fixed
