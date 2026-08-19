@@ -153,8 +153,36 @@ The ARM generic timer has better deadline primitives (per-core, 64-bit
 compare) but is the wrong choice for the global timebase: it runs at
 19.2 MHz on this hardware, for which `embassy-time` has no matching
 `tick-hz-*` rate, so it would need lossy scaling inside `now()` — the
-hottest function on the path. It remains the right primitive for per-core
-deadlines if per-core executors are added.
+hottest function on the path.
+
+## Cores 1-3
+
+Enable the `multicore` feature to run an executor on a secondary core as
+well as core 0, and see `examples/embassy_multicore.rs`. Each core builds
+its own `Executor` — `Executor` is `!Send`, so it has to be created on the
+core that will poll it, inside the diverging entry function handed to
+`rpi_hal::multicore`'s `spawn`.
+
+The feature adds no code here. What it selects is `rpi-hal`'s cross-core
+`critical-section` implementation, and the driver's timer queue needs it:
+without it, that critical section is a bare CPU interrupt mask, which
+excludes this core's own interrupt handler and nothing on any other core.
+
+One Compare 1 serves every core. Its interrupt is delivered to core 0
+alone, so a deadline belonging to a task on core 3 is serviced by core 0
+draining the shared queue, enqueuing that task onto core 3's run queue,
+and broadcasting `sev`; core 3 leaves `wfe` and polls. A consequence worth
+knowing is that secondary cores need no interrupts of their own for
+`embassy-time` to work on them — `wfe` returns on an event whatever the
+interrupt mask says — so a core that owns no peripheral can leave IRQs
+masked for the whole program, which is the state it boots in.
+
+Because the queue is global and ordered, whichever deadline is nearest
+across all four cores is the one Compare 1 is armed for. That is also what
+makes the ARM generic timer's per-core `CNTP` compare a possible future
+optimization rather than a requirement: it would let each core arm its own
+alarm and skip the detour through core 0's interrupt, at the cost of a
+second timebase to reconcile with `now()`.
 
 ## Building
 

@@ -120,6 +120,39 @@ picoserve = { version = "0.19.0", default-features = false, features = [
     "embassy",
 ] }
 
+[features]
+# Cross-core support: running an executor on cores 1-3 as well as core 0
+# (see `examples/embassy_multicore.rs`).
+#
+# No code in this crate is conditional on it. The executor and the time
+# driver are already written for more than one core -- `Executor` is
+# `!Send` so each core builds its own, the pender's `sev` is a broadcast
+# that reaches all of them, and the driver's timer queue is guarded by a
+# `critical-section`. What the feature changes is the *implementation* of
+# that critical section: `rpi-hal`'s `multicore` is what turns it from a
+# bare CPU interrupt mask, which excludes only this core's own handler,
+# into a genuine cross-core spinlock. Per-core executors without it would
+# leave the shared timer queue unguarded against the other cores, so the
+# requirement is expressed here rather than left to each application to
+# remember.
+#
+# This also pulls in `rpi-hal`'s `mmu`, which `multicore` implies: the
+# spinlock's `compare_exchange` compiles to `ldrex`/`strex`, and those are
+# UNPREDICTABLE until RAM has real Normal-memory attributes. That makes
+# this the one feature here that imposes a boot-time choice on the
+# application, which is why it is opt-in -- unlike the `bcm2837` PAC
+# selection above, without which the library does not build at all.
+multicore = ["rpi-hal/multicore"]
+
+# Auto-discovery covers every other example. This one needs an explicit
+# entry so it can declare `required-features`, which keeps a plain
+# `cargo build --examples` from failing on it and lets
+# `scripts/build-example.sh` pick the feature up from `cargo metadata`
+# rather than hardcoding a list.
+[[example]]
+name = "embassy_multicore"
+required-features = ["multicore"]
+
 [profile.dev]
 panic = "abort"
 

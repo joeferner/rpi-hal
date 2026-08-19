@@ -9,8 +9,14 @@
 build:
 	cargo build --release
 
+# Twice over, because the feature set changes which examples exist: the
+# default build is what a consumer taking this crate plainly would get, and
+# `--all-features` is the only way the `multicore`-gated example gets
+# compiled at all -- cargo silently skips a target whose
+# `required-features` are unmet rather than reporting it.
 examples:
 	cargo build --release --examples
+	cargo build --release --examples --all-features
 
 fmt:
 	cargo fmt
@@ -20,6 +26,7 @@ fmt-check:
 
 clippy:
 	cargo clippy --release --examples -- -D warnings
+	cargo clippy --release --examples --all-features -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing. What it does catch is broken intra-doc

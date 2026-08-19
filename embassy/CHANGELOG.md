@@ -4,6 +4,16 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A `multicore` feature, for running an executor on cores 1-3 as well as
+  core 0, and an `embassy_multicore` example demonstrating one per core.
+  The feature adds no code: it selects `rpi-hal`'s cross-core
+  `critical-section` implementation, which the driver's shared timer
+  queue needs once a second core can reach it.
+
 ## [0.1.0] - 2026-08-12
 
 ### Added

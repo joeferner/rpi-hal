@@ -45,10 +45,16 @@ jobs:
       # missing `rpi-link.x` or a stray RUSTFLAGS shows up. AArch64 is not
       # covered by the steps above, whose target comes from
       # .cargo/config.toml.
+      #
+      # `--all-features` on the second examples build for the same reason
+      # `make examples` runs twice: an example whose `required-features` are
+      # unmet is skipped silently, so without it the `multicore` one is
+      # never compiled for this architecture.
       - name: Build for AArch64 as well
         run: |
           cargo build --release --target aarch64-unknown-none-softfloat
           cargo build --release --examples --target aarch64-unknown-none-softfloat
+          cargo build --release --examples --all-features --target aarch64-unknown-none-softfloat
 
   # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
   # a comment that rots the first time a dependency or a `core` API moves.
