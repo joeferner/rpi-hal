@@ -256,6 +256,10 @@ name = "multicore_uart"
 required-features = ["multicore"]
 
 [[example]]
+name = "multicore_id"
+required-features = ["multicore"]
+
+[[example]]
 name = "sd_fat_read"
 required-features = ["embedded-sdmmc"]
 

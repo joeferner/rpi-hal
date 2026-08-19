@@ -58,6 +58,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   host stack has already addressed and configured — the counterpart to
   `from_device` when this crate's `enumerate` isn't the thing walking the
   bus.
+- `cpu::core_id`, the calling core's id from `MPIDR`. Deliberately not part
+  of `multicore`, which is compiled only behind its own feature: code that
+  runs on every core — an interrupt handler, a panic handler naming where
+  it died — needs to ask this without opting into the machinery for
+  *starting* cores, and `generic_timer` already needed it to address a
+  per-core register on a single-core build.
 
 ### Changed
 

@@ -213,7 +213,7 @@ impl embedded_hal::delay::DelayNs for GenericTimer {
 /// Read-modify-writes the calling core's ARM-local "timers interrupt
 /// control" register.
 fn modify_local_timer_ctl(f: impl FnOnce(u32) -> u32) {
-    let reg = (LOCAL_TIMER_IRQCTL_BASE + 4 * current_core()) as *mut u32;
+    let reg = (LOCAL_TIMER_IRQCTL_BASE + 4 * crate::cpu::core_id()) as *mut u32;
     // SAFETY: `reg` is the device-mapped ARM-local timer-IRQ control
     // register for the calling core (mapped by `mmu.rs`; a core only ever
     // addresses its own register, so the read-modify-write races with no
@@ -283,15 +283,6 @@ fn read_cntp_ctl() -> u32 {
     ctl
 }
 
-/// The calling core's id (0-3), from `MPIDR`'s Aff0 field.
-#[cfg(target_arch = "arm")]
-#[inline(always)]
-fn current_core() -> usize {
-    let mpidr: u32;
-    unsafe { asm!("mrc p15, 0, {}, c0, c0, 5", out(reg) mpidr) };
-    (mpidr & 3) as usize
-}
-
 /// See the AArch32 sibling above.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
@@ -340,13 +331,4 @@ fn read_cntp_ctl() -> u32 {
     let ctl: u64;
     unsafe { asm!("mrs {}, cntp_ctl_el0", out(reg) ctl) };
     ctl as u32
-}
-
-/// See the AArch32 sibling above.
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn current_core() -> usize {
-    let mpidr: u64;
-    unsafe { asm!("mrs {}, mpidr_el1", out(reg) mpidr) };
-    (mpidr & 3) as usize
 }

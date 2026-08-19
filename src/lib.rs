@@ -20,6 +20,9 @@ pub mod bluetooth;
 #[cfg(feature = "rt")]
 mod boot;
 mod cache;
+/// Identity of the core executing this code — see the module's own doc
+/// comment for why this is not part of `multicore`.
+pub mod cpu;
 #[cfg(feature = "rt")]
 mod critical_section;
 /// Blocking driver for the DMA controller.
