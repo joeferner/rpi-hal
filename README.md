@@ -197,7 +197,14 @@ implementations where applicable, and all verified on real hardware:
   nothing is ever written to the page being scanned out (there is also
   `wait_for_vsync`, for drawing straight into a single buffer).
   Resolution/timing negotiation with the attached display is handled
-  entirely by VideoCore firmware, not this crate. See `examples/display_test_pattern.rs`, `examples/
+  entirely by VideoCore firmware, not this crate — but `display_size`
+  reports what it settled on, which is what a framebuffer request should
+  be sized from, since the firmware scales a buffer that doesn't match
+  the real mode instead of refusing it. Mind the overscan border
+  (`overscan`/`set_overscan`): the reported size is the image *inside*
+  it, so a 1080p HDMI display answers 1824x984 with the stock 48-pixel
+  border, and covering the whole screen means clearing the border and
+  allocating at the size it was hiding. See `examples/display_test_pattern.rs`, `examples/
   display_page_flip.rs` (the same animation drawn both ways, so the
   tearing and its absence can be compared on a real display), and
   `examples/display_touch.rs` (combining it with the FT5406 touch

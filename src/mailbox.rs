@@ -54,8 +54,8 @@ use crate::pac::VCMAILBOX;
 const CHANNEL_PROPERTY_TAGS: u32 = 8;
 
 /// Largest tag value area (in words) any query in this module needs —
-/// currently 3, for "Set Clock Rate"'s (clock id, rate, skip-turbo)
-/// request; most tags need 2 (a 64-bit board serial, a memory base+size
+/// currently 4, for "Get Overscan"'s (top, bottom, left, right)
+/// response; most tags need 2 (a 64-bit board serial, a memory base+size
 /// pair, a clock id and its rate). Bump this if a wider tag is ever added.
 ///
 /// The value area is sized at this maximum for *every* call, not at the
@@ -63,7 +63,7 @@ const CHANNEL_PROPERTY_TAGS: u32 = 8;
 /// the firmware expects — the tag's response code reports how much it
 /// actually wrote — but it means an over-long call would silently overrun
 /// this buffer, so [`Mailbox::property_call`] checks each call against it.
-const MAX_VALUE_WORDS: usize = 3;
+const MAX_VALUE_WORDS: usize = 4;
 
 /// Total property buffer size in words: the 2-word message header
 /// (buffer size, request/response code), one 3-word tag header (tag
@@ -235,6 +235,39 @@ pub struct MemoryRegion {
     pub base_address: u32,
     /// Size of the region, in bytes.
     pub size_bytes: u32,
+}
+
+/// The display resolution the firmware is currently driving, as
+/// reported by [`Mailbox::display_size`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplaySize {
+    /// Width of the display, in pixels.
+    pub width: u32,
+    /// Height of the display, in pixels.
+    pub height: u32,
+}
+
+/// The blank border the firmware keeps around the displayed image, in
+/// pixels per edge — see [`Mailbox::overscan`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Overscan {
+    /// Blank rows above the image.
+    pub top: u32,
+    /// Blank rows below the image.
+    pub bottom: u32,
+    /// Blank columns left of the image.
+    pub left: u32,
+    /// Blank columns right of the image.
+    pub right: u32,
+}
+
+impl Overscan {
+    /// Whether every edge is zero — the displayed image is free to
+    /// cover the display's whole raster, with none of it held back as a
+    /// blank border.
+    pub fn is_zero(&self) -> bool {
+        self.top == 0 && self.bottom == 0 && self.left == 0 && self.right == 0
+    }
 }
 
 /// Pixel channel order for a framebuffer, passed to
@@ -558,6 +591,123 @@ impl Mailbox {
     pub fn get_expander_gpio(&mut self, pin: u32) -> Result<bool, Error> {
         let response = self.property_call(0x0003_0041, &[pin, 0], 2)?;
         Ok(response[1] != 0)
+    }
+
+    /// The resolution the firmware is currently driving the display at
+    /// (tag `0x0004_0003`, "Get Physical Width/Height").
+    ///
+    /// Worth asking *before* [`Self::allocate_framebuffer`], because
+    /// that call takes the size it is given: request 800×480 on a
+    /// display running at 1920×1080 and the firmware allocates the
+    /// small buffer and scales it up to the mode it negotiated, so
+    /// every pixel written lands on screen as a blurry block. Sizing
+    /// the request from this instead gives a framebuffer that maps 1:1
+    /// to the display.
+    ///
+    /// What "currently" means depends on the output. HDMI has a
+    /// negotiated mode — whatever the firmware picked from the sink's
+    /// EDID at boot, or was forced to by `config.txt`'s
+    /// `hdmi_group`/`hdmi_mode` — and this reports that choice, not
+    /// what the display is capable of. A MIPI DSI panel has one fixed
+    /// physical resolution and reports it.
+    ///
+    /// "Physical" here means the *displayed image*, not the display's
+    /// raster: what comes back is the mode with [`Self::overscan`]'s
+    /// blank border already subtracted. A 1920×1080 HDMI display with
+    /// the firmware's stock 48-pixel border on every edge reports
+    /// 1824×984, and a framebuffer that size is what maps 1:1 to
+    /// pixels inside the border — the missing 96 rows and columns are
+    /// raster the firmware is deliberately leaving blank, not an error
+    /// and not something scaling would recover.
+    ///
+    /// Recover the full mode by adding [`Self::overscan`]'s border back
+    /// on (`width + left + right`, `height + top + bottom`), *not* by
+    /// clearing the border and asking again. This tag reads back the
+    /// physical size the firmware's own boot-time framebuffer was
+    /// created with, and [`Self::set_overscan`] doesn't resize an
+    /// existing framebuffer: on a 1080p display, clearing the border to
+    /// zero and re-querying still answers 1824×984. The way to get a
+    /// full-raster framebuffer is to clear the border *and* pass the
+    /// recovered size to [`Self::allocate_framebuffer`], which sets the
+    /// physical size (tag `0x0004_8003`) as part of its request rather
+    /// than being limited by what this reports.
+    ///
+    /// Check the answer for a zero width or height before sizing an
+    /// allocation from it: the tag reports the mode firmware has
+    /// configured, and firmware with nothing plugged in has no mode to
+    /// report. A firmware too old to know the tag surfaces
+    /// [`Error::TagNotAnswered`]; either way the caller needs a
+    /// fallback resolution of its own, since this driver has no way to
+    /// learn one.
+    pub fn display_size(&mut self) -> Result<DisplaySize, Error> {
+        let response = self.property_call(0x0004_0003, &[], 2)?;
+        Ok(DisplaySize {
+            width: response[0],
+            height: response[1],
+        })
+    }
+
+    /// The blank border the firmware is keeping around the displayed
+    /// image (tag `0x0004_000A`, "Get Overscan").
+    ///
+    /// Overscan exists for televisions that crop the edges of their
+    /// input, and the firmware applies a border by default rather than
+    /// risk a picture whose edges are cut off on such a set. It is not
+    /// scaling: the border is raster the firmware leaves blank, and
+    /// [`Self::display_size`] reports the smaller image inside it, so a
+    /// framebuffer sized from that call is already pixel-exact — just
+    /// short of the display's full mode by the border on each edge.
+    ///
+    /// Query this to tell the two apart when a reported size doesn't
+    /// match the display's nameplate resolution: a border of 48 on
+    /// every edge accounts for exactly the 96 rows and columns missing
+    /// from a 1080p panel reporting 1824×984.
+    pub fn overscan(&mut self) -> Result<Overscan, Error> {
+        let response = self.property_call(0x0004_000A, &[], 4)?;
+        Ok(Overscan {
+            top: response[0],
+            bottom: response[1],
+            left: response[2],
+            right: response[3],
+        })
+    }
+
+    /// Sets the blank border around the displayed image (tag
+    /// `0x0004_800A`, "Set Overscan"), returning the border the
+    /// firmware actually applied.
+    ///
+    /// Passing an all-zero [`Overscan`] gives up the border and hands
+    /// the whole raster to the image, which is what a program wanting
+    /// every pixel of an HDMI display wants — the equivalent of
+    /// `disable_overscan=1` in `config.txt`, but decided by the program
+    /// rather than by whoever wrote the SD card.
+    ///
+    /// This changes the border only, not the size of any framebuffer
+    /// already allocated — see [`Self::display_size`], which keeps
+    /// answering with the pre-clear size. Clearing the border is
+    /// therefore half the job of going full-screen; the other half is
+    /// allocating at the size that border was hiding.
+    ///
+    /// The firmware clamps what it is given, so the returned value is
+    /// what to believe rather than the request. It also has the last
+    /// word on whether the border can go at all: a `config.txt` that
+    /// pins the overscan values can leave a non-zero border in place
+    /// here, which is why this returns the result instead of `()`. Even
+    /// the returned value is only the firmware's answer to this one
+    /// call — read it back with [`Self::overscan`] for independent
+    /// confirmation that the change took.
+    pub fn set_overscan(&mut self, overscan: Overscan) -> Result<Overscan, Error> {
+        let response = self.property_call(
+            0x0004_800A,
+            &[overscan.top, overscan.bottom, overscan.left, overscan.right],
+            4,
+        )?;
+        Ok(Overscan {
+            top: response[0],
+            bottom: response[1],
+            left: response[2],
+            right: response[3],
+        })
     }
 
     /// Allocates a `width`×`height` framebuffer at `depth_bits` bits per
