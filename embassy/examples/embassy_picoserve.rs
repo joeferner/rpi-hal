@@ -34,7 +34,7 @@ use picoserve::response::File;
 use picoserve::routing::{get, get_service};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::rng::Rng;
-use rpi_hal::usb::dwc2::Dwc2Host;
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::lan9514::{self, Lan9514, Lan9514Driver};
 use rpi_hal::{halt, irq, lic::Lic, pac, timer::Timer, uart::Uart, usb};
 use rpi_hal_embassy::{Executor, time_driver};
@@ -78,7 +78,7 @@ unsafe fn make_static<T>(t: &mut T) -> &'static mut T {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static>>) -> ! {
+async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static, 'static>>) -> ! {
     runner.run().await
 }
 
@@ -192,6 +192,13 @@ pub extern "C" fn kmain() -> ! {
         &timer,
     );
 
+    // Widened here rather than inside `run`, because a `Channel` borrows the
+    // controller it was allocated from: the driver holds its channel for the
+    // life of the program, so the controller has to be `'static` *before*
+    // `alloc_channel` is called, not after. Sound because `kmain` never
+    // returns.
+    let dwc2: &'static Dwc2Host = unsafe { make_static(&mut dwc2) };
+
     let _ = writeln!(uart, "waiting for the on-board hub...");
     let mut waited_ms = 0;
     while !dwc2.port_connected() {
@@ -204,14 +211,21 @@ pub extern "C" fn kmain() -> ! {
     }
 
     let mut uart = Some(uart);
-    let result = usb::enumerate(
-        &mut dwc2,
-        &timer,
-        |dwc2, timer, device| match Lan9514::from_device(dwc2, timer, device) {
-            Ok(Some(lan9514)) => run(uart.take().unwrap(), dwc2, timer, lan9514, mac),
+    let result = usb::enumerate(dwc2, &timer, |channel, timer, device| {
+        match Lan9514::from_device(channel, timer, device) {
+            Ok(Some(lan9514)) => {
+                // The stack needs a channel of its own: `channel` belongs to
+                // enumeration and is gone once this callback returns, while
+                // the driver keeps moving frames forever.
+                let Some(net_channel) = dwc2.alloc_channel() else {
+                    let _ = writeln!(uart.as_mut().unwrap(), "no free host channel for the stack");
+                    return core::ops::ControlFlow::Break(());
+                };
+                run(uart.take().unwrap(), net_channel, timer, lan9514, mac)
+            }
             _ => core::ops::ControlFlow::Continue(()),
-        },
-    );
+        }
+    });
 
     if let Some(mut uart) = uart {
         let _ = writeln!(uart, "no LAN9514 on the bus (enumerate: {result:?})");
@@ -238,12 +252,12 @@ pub extern "C" fn __irq_handler() {
 /// Brings the chip up and starts the stack. Never returns.
 fn run(
     mut uart: Uart,
-    dwc2: &mut Dwc2Host,
+    mut channel: Channel<'static>,
     timer: &Timer,
     mut lan9514: Lan9514,
     mac: [u8; 6],
 ) -> ! {
-    if let Err(e) = lan9514.start(dwc2, timer, mac) {
+    if let Err(e) = lan9514.start(&mut channel, timer, mac) {
         let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
         halt();
     }
@@ -254,10 +268,9 @@ fn run(
     irq::enable_irq();
 
     // Everything below outlives `run`, which never returns.
-    let dwc2: &'static mut Dwc2Host = unsafe { make_static(dwc2) };
     let timer: &'static Timer = unsafe { &*(timer as *const Timer) };
 
-    let driver = Lan9514Driver::new(lan9514, dwc2, timer, mac);
+    let driver = Lan9514Driver::new(lan9514, channel, timer, mac);
 
     let mut rng = Rng::new();
     let seed = (u64::from(rng.next_u32()) << 32) | u64::from(rng.next_u32());

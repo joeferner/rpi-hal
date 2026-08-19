@@ -14,6 +14,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `critical-section` implementation, which the driver's shared timer
   queue needs once a second core can reach it.
 
+### Changed
+
+- Requires `rpi-hal` 0.2.0. Nothing in this crate's own API changes, but the
+  two `embassy-net` examples move to 0.2.0's owned USB `Channel`: they
+  allocate a channel for the stack with `Dwc2Host::alloc_channel` rather
+  than lending the whole controller, and `Lan9514Driver` grew a second
+  lifetime for it. A consequence worth noting for anyone copying the
+  pattern — the controller has to be widened to `'static` *before*
+  `alloc_channel`, since a `Channel` borrows the controller it came from and
+  the driver keeps its channel for the life of the program.
+
 ## [0.1.0] - 2026-08-12
 
 ### Added

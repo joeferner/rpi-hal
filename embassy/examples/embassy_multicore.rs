@@ -43,10 +43,10 @@
 //   nothing else. `embassy_blink` sees the same thing between two tasks on
 //   one executor; the only new part here is that the read and the write are
 //   on different cores.
-// - `id=` is each task's own `MPIDR` affinity, read inside the task on
-//   whichever core polls it. This is the check that the work really is
-//   distributed rather than core 0 quietly running all of it; `id=-1` means
-//   the task has not been polled even once.
+// - `id=` is `rpi_hal::cpu::core_id`, called inside the task on whichever
+//   core polls it. This is the check that the work really is distributed
+//   rather than core 0 quietly running all of it; `id=-1` means the task has
+//   not been polled even once.
 // - `drift` is core 0's own deadline accuracy, the same measurement
 //   `embassy_blink` makes, and it should stay as flat here as it does
 //   there. Three extra cores contending for the driver's
@@ -61,6 +61,7 @@ use core::fmt::Write as _;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use embassy_time::{Duration, Instant, Ticker};
+use rpi_hal::cpu::core_id;
 use rpi_hal::halt;
 use rpi_hal::multicore::{Cores, Stack};
 use rpi_hal::{irq, lic::Lic, pac, timer::Timer, uart::Uart};
@@ -79,29 +80,6 @@ static TICKS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
 /// The core id each tick task observed for itself on its first poll, or
 /// -1 while it has never been polled.
 static OBSERVED_CORE: [AtomicI32; 3] = [const { AtomicI32::new(-1) }; 3];
-
-/// The calling core's id (0-3), from `MPIDR`'s Aff0 field.
-///
-/// `rpi-hal` reads this register internally for its own per-core work but
-/// does not expose it, so an example that wants to name the core it is
-/// running on reads it here.
-#[cfg(target_arch = "arm")]
-fn core_id() -> i32 {
-    let mpidr: u32;
-    // SAFETY: a read of a system register with no side effects, valid and
-    // unprivileged-safe at the privilege level this code runs at.
-    unsafe { core::arch::asm!("mrc p15, 0, {}, c0, c0, 5", out(reg) mpidr) };
-    (mpidr & 3) as i32
-}
-
-/// See the AArch32 sibling above.
-#[cfg(target_arch = "aarch64")]
-fn core_id() -> i32 {
-    let mpidr: u64;
-    // SAFETY: as above.
-    unsafe { core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr) };
-    (mpidr & 3) as i32
-}
 
 /// Widens a borrow of a local to `'static`.
 ///
@@ -129,7 +107,7 @@ static mut CORE3_STACK: Stack<0x4000> = Stack::new();
 async fn tick(slot: usize) {
     // Recorded on the first poll, which is the first moment this task is
     // running on the core that owns it.
-    OBSERVED_CORE[slot].store(core_id(), Ordering::Relaxed);
+    OBSERVED_CORE[slot].store(core_id() as i32, Ordering::Relaxed);
 
     let mut ticker = Ticker::every(Duration::from_millis(PERIODS_MS[slot]));
     loop {
