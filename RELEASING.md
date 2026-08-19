@@ -135,8 +135,20 @@ exists.
 ```sh
 gh release create v<version> \
   --title "rpi-hal <version>" \
-  --notes-file <(sed -n "/## \[<version>\]/,/^\[<version>\]:/p" CHANGELOG.md)
+  --notes-file <(awk -v v="## [<version>]" '
+    index($0, v) == 1 { inside = 1; next }
+    inside && /^## \[/ { exit }
+    inside { print }
+  ' CHANGELOG.md)
 ```
+
+The range has to end at the *next* `## [` heading, which is why this is
+`awk` and not the obvious `sed -n '/## \[<version>\]/,/^\[<version>\]:/p'`.
+That closing address matches the link reference at the bottom of the file,
+not anything near the section, so the range runs past every older heading
+and the "notes" become the entire changelog. It fails silently — `gh`
+accepts whatever it is handed — so the only symptom is an over-long
+release page nobody rereads.
 
 That's the release. Nothing further is required.
 
