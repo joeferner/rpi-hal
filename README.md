@@ -204,7 +204,12 @@ implementations where applicable, and all verified on real hardware:
   (`overscan`/`set_overscan`): the reported size is the image *inside*
   it, so a 1080p HDMI display answers 1824x984 with the stock 48-pixel
   border, and covering the whole screen means clearing the border and
-  allocating at the size it was hiding. See `examples/display_test_pattern.rs`, `examples/
+  allocating at the size it was hiding. `edid_block` reads the display's
+  own description of itself (the modes it supports, not just the one
+  firmware chose) as raw bytes; EDID is display-standard wire format with
+  no Pi in it, so parsing it is left to the consumer the same way TCP/IP
+  is left to smoltcp — `examples/display_edid.rs` does it. See
+  `examples/display_test_pattern.rs`, `examples/
   display_page_flip.rs` (the same animation drawn both ways, so the
   tearing and its absence can be compared on a real display), and
   `examples/display_touch.rs` (combining it with the FT5406 touch

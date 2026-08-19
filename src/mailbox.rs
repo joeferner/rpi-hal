@@ -270,6 +270,11 @@ impl Overscan {
     }
 }
 
+/// Length of one EDID block, in bytes — the unit
+/// [`Mailbox::edid_block`] reads in, fixed by the EDID standard rather
+/// than by anything the firmware chooses.
+pub const EDID_BLOCK_LEN: usize = 128;
+
 /// Pixel channel order for a framebuffer, passed to
 /// [`Mailbox::allocate_framebuffer`] (tag `0x0004_8006`, "Set Pixel
 /// Order").
@@ -708,6 +713,102 @@ impl Mailbox {
             left: response[2],
             right: response[3],
         })
+    }
+
+    /// Reads one 128-byte block of the attached display's EDID (tag
+    /// `0x0003_0020`, "Get EDID Block"), or `Ok(None)` if the firmware
+    /// answered the tag but has no such block.
+    ///
+    /// EDID is the display's own description of itself, read by the
+    /// firmware over the HDMI connector's I2C side-channel: which modes
+    /// it supports, which one it prefers, who made it. That is strictly
+    /// more than [`Self::display_size`] reports — that call gives the
+    /// one mode the firmware settled on, this gives the menu it chose
+    /// from.
+    ///
+    /// Block 0 is the base block every EDID has; its last-but-one byte
+    /// is a count of *extension* blocks, which are then blocks 1 up to
+    /// that count. `Ok(None)` is the normal answer for a display with
+    /// no EDID at all — a DSI panel has a fixed resolution and nothing
+    /// to describe, and nothing plugged in has nobody to answer — and
+    /// equally for a block number past the end, so iterating until it
+    /// appears is a valid way to read the lot.
+    ///
+    /// The bytes come back unvalidated and unparsed. EDID's structure
+    /// (the header magic, the per-block checksum, timing descriptors,
+    /// the CEA-861 extension blocks' mode lists) is display-standard
+    /// wire format with no Pi in it, so it is left to the caller the
+    /// same way TCP/IP is left to smoltcp and FAT to embedded-sdmmc —
+    /// see `examples/display_edid.rs`, which parses what it needs.
+    pub fn edid_block(&mut self, block: u32) -> Result<Option<[u8; EDID_BLOCK_LEN]>, Error> {
+        /// Value area, in words: the block number echoed back, the
+        /// status word, and [`EDID_BLOCK_LEN`] bytes of EDID.
+        const VALUE_WORDS: usize = 2 + EDID_BLOCK_LEN / 4;
+
+        /// Word count of the whole request/response buffer: the 2-word
+        /// message header, the 3-word tag header, the value area, and
+        /// the 1-word end tag.
+        ///
+        /// This tag gets its own buffer rather than the shared one
+        /// [`Mailbox::property_call`] builds: at 34 value words it is an
+        /// order of magnitude wider than any other tag here, and
+        /// widening `MAX_VALUE_WORDS` to fit would grow the stack
+        /// buffer of every unrelated two-word query alongside it.
+        const WORDS: usize = 2 + 3 + VALUE_WORDS + 1;
+
+        // 16-byte aligned for the same reason as `property_call`'s
+        // buffer: the low 4 bits of its address double as the mailbox
+        // channel number.
+        #[repr(C, align(16))]
+        struct Buffer {
+            words: [u32; WORDS],
+        }
+
+        let mut buffer = Buffer { words: [0; WORDS] };
+        buffer.words[0] = (WORDS * 4) as u32;
+        buffer.words[1] = 0;
+        buffer.words[2] = 0x0003_0020;
+        buffer.words[3] = (VALUE_WORDS * 4) as u32;
+        buffer.words[4] = 0;
+        buffer.words[5] = block;
+        // buffer.words[6..] (the status word, the EDID bytes, and the
+        // end tag) are already zero from the initializer above.
+
+        let address = &buffer as *const Buffer as u32;
+        clean_range(address, WORDS * 4);
+
+        let echoed = self.call_raw(CHANNEL_PROPERTY_TAGS, address);
+        if echoed != address {
+            return Err(Error::AddressMismatch);
+        }
+
+        invalidate_range(address, WORDS * 4);
+
+        if buffer.words[1] & RESPONSE_BIT == 0 {
+            return Err(Error::RequestFailed);
+        }
+        if buffer.words[4] & RESPONSE_BIT == 0 {
+            return Err(Error::TagNotAnswered);
+        }
+        // Status word: zero means this block came back, anything else
+        // that it didn't. Distinct from the tag going unanswered above —
+        // the firmware understood the request and is reporting that
+        // there is no such block to hand over.
+        if buffer.words[6] != 0 {
+            return Ok(None);
+        }
+
+        // The firmware wrote the block as 32 words; unpacked
+        // little-endian to match this core's byte order, the same way
+        // `mac_address` unpacks its two.
+        let mut bytes = [0u8; EDID_BLOCK_LEN];
+        for (word, chunk) in buffer.words[7..7 + EDID_BLOCK_LEN / 4]
+            .iter()
+            .zip(bytes.as_chunks_mut::<4>().0)
+        {
+            *chunk = word.to_le_bytes();
+        }
+        Ok(Some(bytes))
     }
 
     /// Allocates a `width`×`height` framebuffer at `depth_bits` bits per
