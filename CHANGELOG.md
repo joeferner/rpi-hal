@@ -4,7 +4,7 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-19
 
 ### Added
 
@@ -173,5 +173,5 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
-[Unreleased]: https://github.com/joeferner/rpi-hal/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.1.0
