@@ -23,7 +23,7 @@ examples:
 	# The multicore examples have required-features = ["multicore"], so a
 	# plain --examples build skips them -- build them explicitly so they're
 	# covered.
-	cargo build --release --features bcm2837,multicore --example multicore_blink --example multicore_uart
+	cargo build --release --features bcm2837,multicore --example multicore_blink --example multicore_uart --example multicore_id
 	# Likewise the integration-adapter examples are gated on their own
 	# features (embedded-sdmmc, smoltcp) and skipped by a plain build.
 	cargo build --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan
@@ -43,7 +43,7 @@ clippy:
 	cargo clippy --release --examples --features bcm2837 -- -D warnings
 	# Same as `examples` above: without the feature, the multicore code
 	# path (src/multicore.rs and the examples) isn't linted at all.
-	cargo clippy --release --features bcm2837,multicore --example multicore_blink --example multicore_uart -- -D warnings
+	cargo clippy --release --features bcm2837,multicore --example multicore_blink --example multicore_uart --example multicore_id -- -D warnings
 	# Same again for the integration-adapter examples and their src-side
 	# adapters, which a plain lint doesn't compile.
 	cargo clippy --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan -- -D warnings

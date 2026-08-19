@@ -27,6 +27,12 @@
 //! `Cargo.toml`): the secondary core's own `rpi_hal_mmu_init` call is what
 //! gives it Normal/Cacheable/Shareable RAM so `core::sync::atomic` (and
 //! hence `critical_section`) work once it's running alongside core 0.
+//!
+//! Code that ends up running on more than one core -- the entry functions
+//! here, but also the single `__irq_handler` and panic handler all of them
+//! share -- can ask which one it is on with [`crate::cpu::core_id`]. That
+//! lives outside this module on purpose, so it can be read without this
+//! feature.
 
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("secondary64.s"));
