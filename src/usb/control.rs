@@ -173,6 +173,58 @@ fn control_out(
     Ok(())
 }
 
+/// The async twin of [`retry_on_nak`], for the interrupt-driven control
+/// stages. Same budget, same reasoning; the only difference is that
+/// `attempt` is an async closure, so the future it returns can borrow the
+/// channel it drives.
+#[cfg(feature = "async")]
+async fn retry_on_nak_async<T>(
+    mut attempt: impl AsyncFnMut() -> Result<T, TransferError>,
+) -> Result<T, TransferError> {
+    for _ in 0..MAX_NAK_RETRIES {
+        match attempt().await {
+            Err(TransferError::Nak) => continue,
+            other => return other,
+        }
+    }
+    Err(TransferError::NakTimeout)
+}
+
+/// The async twin of [`control_in`], stage for stage.
+#[cfg(feature = "async")]
+async fn control_in_async(
+    channel: &mut Channel<'_>,
+    timer: &Timer,
+    endpoint: ControlEndpoint,
+    setup: Setup,
+    buf: &mut [u8],
+) -> Result<usize, TransferError> {
+    let setup = setup.to_bytes();
+    retry_on_nak_async(async || channel.control_setup_async(endpoint, &setup, timer).await).await?;
+    let received =
+        retry_on_nak_async(async || channel.control_data_in_async(endpoint, buf, timer).await)
+            .await?;
+    retry_on_nak_async(async || channel.control_status_out_async(endpoint, timer).await).await?;
+    Ok(received)
+}
+
+/// The async twin of [`control_out`], stage for stage.
+#[cfg(feature = "async")]
+async fn control_out_async(
+    channel: &mut Channel<'_>,
+    timer: &Timer,
+    endpoint: ControlEndpoint,
+    setup: Setup,
+    data: &[u8],
+) -> Result<(), TransferError> {
+    let setup = setup.to_bytes();
+    retry_on_nak_async(async || channel.control_setup_async(endpoint, &setup, timer).await).await?;
+    retry_on_nak_async(async || channel.control_data_out_async(endpoint, data, timer).await)
+        .await?;
+    retry_on_nak_async(async || channel.control_status_in_async(endpoint, timer).await).await?;
+    Ok(())
+}
+
 /// How many times a descriptor read is attempted before its failure is
 /// reported — see [`descriptor_in`].
 const DESCRIPTOR_TRIES: u32 = 3;
@@ -531,6 +583,59 @@ pub fn vendor_out(
         length: data.len() as u16,
     };
     control_out(channel, timer, device, setup, data)
+}
+
+/// The async twin of [`vendor_in`], for a caller running under an
+/// executor — the register-read half of a driver like
+/// [`crate::usb::lan9514`] once its frame path has moved onto the
+/// interrupt-driven primitives.
+///
+/// Available only with the `async` feature enabled.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+pub async fn vendor_in_async(
+    channel: &mut Channel<'_>,
+    timer: &Timer,
+    device: ControlEndpoint,
+    request: u8,
+    value: u16,
+    index: u16,
+    buf: &mut [u8],
+) -> Result<usize, TransferError> {
+    // bmRequestType=0xC0: device-to-host, vendor, recipient=device.
+    let setup = Setup {
+        request_type: 0xC0,
+        request,
+        value,
+        index,
+        length: buf.len() as u16,
+    };
+    control_in_async(channel, timer, device, setup, buf).await
+}
+
+/// The async twin of [`vendor_out`].
+///
+/// Available only with the `async` feature enabled.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+pub async fn vendor_out_async(
+    channel: &mut Channel<'_>,
+    timer: &Timer,
+    device: ControlEndpoint,
+    request: u8,
+    value: u16,
+    index: u16,
+    data: &[u8],
+) -> Result<(), TransferError> {
+    // bmRequestType=0x40: host-to-device, vendor, recipient=device.
+    let setup = Setup {
+        request_type: 0x40,
+        request,
+        value,
+        index,
+        length: data.len() as u16,
+    };
+    control_out_async(channel, timer, device, setup, data).await
 }
 
 /// Selects the HID protocol on `interface` of `device` (HID spec

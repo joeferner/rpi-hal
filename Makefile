@@ -79,8 +79,8 @@ clippy:
 # path lib.rs gates behind that cfg is exercised here rather than first
 # failing on the docs.rs builder after a release is already published.
 doc:
-	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,embassy-net-driver,v3d,mmal
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,smoltcp,embassy-net-driver
+	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,v3d,mmal
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,smoltcp
 
 # A chip feature is not optional here, and the reason is easy to trip over:
 # `cargo package` and `cargo publish` finish by building the packaged tarball,
