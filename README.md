@@ -462,6 +462,22 @@ implementations where applicable, and all verified on real hardware:
   convert, and where that belongs is an application decision — the
   example does it on the ARM, a pass that costs more per frame than the
   decode itself.
+- **HDMI audio** (`src/audio_render.rs`, on the same `mmal`/`vchiq` stack
+  and behind the same feature): audio out through the VideoCore's
+  `ril.audio_render` component. HDMI carries audio inside the video signal,
+  which is a link this side never programs — the display's timing and
+  audio capabilities are negotiated by the firmware — so like the decoder
+  above this is messages rather than a register-level driver.
+  `AudioRenderer::new` names the destination (`Destination::Hdmi`, or
+  `Destination::Local` for the 3.5 mm jack the PWM path already reaches by
+  driving the hardware directly), and `feed` hands it interleaved
+  signed-16-bit samples. Nothing has to keep time: the renderer takes
+  samples no faster than it plays them, so feeding until `feed` returns
+  zero is paced by the audio clock — after the third of a second it queues
+  up front, which is also why the last buffer coming back is not the last
+  sample being played.
+  `examples/hdmi_audio.rs` plays a stereo tone and prints the rate the
+  hardware consumed it at.
 
 Implemented against the same trait surface as their verified siblings
 above, and now hardware-verified too, but called out separately because
@@ -611,9 +627,10 @@ has what's left.
   never talks to the firmware's services shouldn't pay for.
 - **`mmal`** (off by default, implies `vchiq`): adds `mmal::Mmal`, a
   client for the firmware's multimedia framework (components, ports,
-  parameters, buffer exchange), and `video_decode::VideoDecoder`, the
-  hardware H.264 decoder built on it. Both are described under "Status"
-  above.
+  parameters, buffer exchange), and the two drivers built on it —
+  `video_decode::VideoDecoder`, the hardware H.264 decoder, and
+  `audio_render::AudioRenderer`, audio out over HDMI or the analog jack.
+  All three are described under "Status" above.
 - **`v3d`** (off by default): adds `v3d::V3d` and the control-list
   builders around it (`v3d::bcl`, `v3d::rcl`, `v3d::shader_record`,
   `v3d::texture`, `v3d::uniforms`) — the V3D 3D pipeline, VideoCore

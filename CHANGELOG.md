@@ -8,6 +8,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **HDMI audio** (`mmal` feature): `audio_render::AudioRenderer`, audio out
+  through the firmware's `ril.audio_render` component —
+  `Destination::Hdmi`, or `Destination::Local` for the 3.5 mm jack.
+  Interleaved signed-16-bit samples in, paced by the renderer itself rather
+  than by any timer on this side. `examples/hdmi_audio.rs` plays a stereo
+  tone.
+- `mmal::AudioFormat`, and `mmal::PortInfo::audio` alongside the existing
+  `video`: the two are the same bytes read two ways, since the message
+  carries one type-specific union, and `port_info_set` now writes whichever
+  the port's `es_type` names.
+- `mmal::parameter_set_string` and `mmal::ENCODING_PCM_SIGNED_LE`, the
+  parameter shape and the encoding the audio renderer is configured with.
+
 - **Async LAN9514** (`async` feature): `send_frame_async`,
   `receive_frame_async`, `start_async`, `is_link_up_async` and the
   register accessors behind them, as twins of the blocking methods.

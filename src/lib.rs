@@ -11,6 +11,10 @@
 // nightly-only rustdoc feature.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+/// Audio out through the VideoCore firmware's `ril.audio_render` MMAL
+/// component — HDMI, or the analog jack.
+#[cfg(feature = "mmal")]
+pub mod audio_render;
 /// Blocking driver for the auxiliary SPI controllers SPI1 and SPI2.
 pub mod aux_spi;
 /// HCI bring-up for the on-board BCM43438 Bluetooth controller (Pi 3):

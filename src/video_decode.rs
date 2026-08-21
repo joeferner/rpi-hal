@@ -76,7 +76,7 @@
 //! rather
 //! than a truncated frame.
 
-use crate::mmal::{self, Component, Event, Mmal, PortAction, PortInfo};
+use crate::mmal::{self, Component, Event, Mmal, Pool, PortAction, PortInfo};
 use crate::timer::Timer;
 use crate::vchiq::Vchiq;
 
@@ -86,7 +86,7 @@ const COMPONENT: &str = "ril.video_decode";
 /// Buffers this module will hold for one port. Four in and four out is
 /// enough to keep the hardware busy; the ceiling exists only because the
 /// pools are fixed-size arrays.
-pub const MAX_PORT_BUFFERS: usize = 6;
+pub const MAX_PORT_BUFFERS: usize = mmal::POOL_CAPACITY;
 
 /// Errors from [`VideoDecoder`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,59 +173,6 @@ pub struct Frame {
     pub format: FrameFormat,
 }
 
-/// A pool of buffers waiting to be handed to the firmware.
-struct Pool {
-    /// The free buffers.
-    buffers: [Option<&'static mut [u8]>; MAX_PORT_BUFFERS],
-    /// How many were ever added, which is what the port is told to expect.
-    total: usize,
-}
-
-impl Pool {
-    /// An empty pool.
-    const fn new() -> Self {
-        Self {
-            buffers: [const { None }; MAX_PORT_BUFFERS],
-            total: 0,
-        }
-    }
-
-    /// Adds a buffer, failing once the pool is full.
-    fn add(&mut self, buffer: &'static mut [u8]) -> Result<(), Error> {
-        let slot = self
-            .buffers
-            .iter_mut()
-            .find(|slot| slot.is_none())
-            .ok_or(Error::TooManyBuffers)?;
-        *slot = Some(buffer);
-        self.total += 1;
-        Ok(())
-    }
-
-    /// Puts a buffer back after the firmware has returned it.
-    fn put(&mut self, buffer: &'static mut [u8]) {
-        if let Some(slot) = self.buffers.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(buffer);
-        }
-    }
-
-    /// Takes a free buffer, if there is one.
-    fn take(&mut self) -> Option<&'static mut [u8]> {
-        self.buffers.iter_mut().find_map(|slot| slot.take())
-    }
-
-    /// The smallest buffer in the pool, which is the size every buffer can
-    /// be relied on to have.
-    fn smallest(&self) -> usize {
-        self.buffers
-            .iter()
-            .flatten()
-            .map(|buffer| buffer.len())
-            .min()
-            .unwrap_or(0)
-    }
-}
-
 /// The hardware H.264 decoder.
 pub struct VideoDecoder {
     /// The MMAL client, which owns the transport.
@@ -300,7 +247,10 @@ impl VideoDecoder {
         if self.started {
             return Err(Error::WrongState);
         }
-        self.input_pool.add(buffer)
+        if !self.input_pool.add(buffer) {
+            return Err(Error::TooManyBuffers);
+        }
+        Ok(())
     }
 
     /// Adds a buffer for decoded frames. Call before [`Self::start`].
@@ -312,7 +262,10 @@ impl VideoDecoder {
         if self.started {
             return Err(Error::WrongState);
         }
-        self.output_pool.add(buffer)
+        if !self.output_pool.add(buffer) {
+            return Err(Error::TooManyBuffers);
+        }
+        Ok(())
     }
 
     /// Configures and enables the component, after which the decoder is
@@ -327,7 +280,7 @@ impl VideoDecoder {
         if self.started {
             return Err(Error::WrongState);
         }
-        if self.input_pool.total == 0 || self.output_pool.total == 0 {
+        if self.input_pool.total() == 0 || self.output_pool.total() == 0 {
             return Err(Error::NoBuffers);
         }
 
@@ -340,7 +293,7 @@ impl VideoDecoder {
         }
         self.input.buffer_num = self
             .input_pool
-            .total
+            .total()
             .max(self.input.buffer_num_min as usize) as u32;
         self.input.buffer_size = smallest as u32;
         self.mmal.port_info_set(&mut self.input, timer)?;
@@ -353,7 +306,7 @@ impl VideoDecoder {
         self.output.encoding_variant = 0;
         self.output.buffer_num = self
             .output_pool
-            .total
+            .total()
             .max(self.output.buffer_num_min as usize) as u32;
         self.mmal.port_info_set(&mut self.output, timer)?;
 
@@ -551,7 +504,10 @@ impl VideoDecoder {
         self.output.encoding = mmal::ENCODING_I420;
         self.output.encoding_variant = 0;
         self.output.video = changed.video;
-        self.output.buffer_num = self.output_pool.total.max(changed.buffer_num_min as usize) as u32;
+        self.output.buffer_num = self
+            .output_pool
+            .total()
+            .max(changed.buffer_num_min as usize) as u32;
         self.output.buffer_size = changed.buffer_size_min.max(changed.buffer_size_recommended);
 
         let smallest = self.output_pool.smallest();

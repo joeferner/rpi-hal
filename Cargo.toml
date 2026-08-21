@@ -345,6 +345,10 @@ name = "h264_decode"
 required-features = ["mmal", "embedded-sdmmc"]
 
 [[example]]
+name = "hdmi_audio"
+required-features = ["mmal"]
+
+[[example]]
 name = "v3d_probe"
 required-features = ["v3d"]
 
