@@ -30,8 +30,10 @@ examples:
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo build --release --features bcm2837,v3d --example v3d_probe --example gpu_cube
 	# And the video decoder, gated on `mmal` (which pulls in `vchiq`) plus
-	# `embedded-sdmmc` for the stream it plays off the card.
+	# `embedded-sdmmc` for the stream it plays off the card, and the audio
+	# renderer on the same `mmal` stack.
 	cargo build --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode
+	cargo build --release --features bcm2837,mmal --example hdmi_audio
 
 fmt:
 	cargo fmt
@@ -52,9 +54,11 @@ clippy:
 	cargo clippy --release --features bcm2711 -- -D warnings
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo clippy --release --features bcm2837,v3d --example v3d_probe --example gpu_cube -- -D warnings
-	# And for the video decoder and the VCHIQ/MMAL stack under it, gated on
-	# `mmal` -- none of which a plain lint compiles either.
+	# And for the video decoder, the audio renderer, and the VCHIQ/MMAL
+	# stack under them, gated on `mmal` -- none of which a plain lint
+	# compiles either.
 	cargo clippy --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode -- -D warnings
+	cargo clippy --release --features bcm2837,mmal --example hdmi_audio -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing -- broken intra-doc links are the main

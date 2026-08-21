@@ -108,6 +108,11 @@ const EXTRADATA_MAX: usize = 128;
 /// rather than by bulk transfer.
 const SHORT_DATA_MAX: usize = 128;
 
+/// Longest string [`Mmal::parameter_set_string`] can carry, including the
+/// terminating NUL. The parameters shaped this way name a destination, a
+/// source or a URI, so this is generous rather than a real constraint.
+const PARAMETER_STRING_MAX: usize = 128;
+
 /// Bytes of event payload carried inline in an event message.
 const EVENT_DATA_MAX: usize = 256;
 
@@ -143,6 +148,11 @@ pub const ENCODING_H264: u32 = fourcc(*b"H264");
 pub const ENCODING_I420: u32 = fourcc(*b"I420");
 /// Semi-planar YUV 4:2:0 (a Y plane then one interleaved UV plane).
 pub const ENCODING_NV12: u32 = fourcc(*b"NV12");
+/// Signed linear PCM, little-endian, channels interleaved sample by
+/// sample — the encoding the firmware's audio renderer takes
+/// ([`crate::audio_render`]). How wide one sample is comes from the
+/// format's [`AudioFormat::bits_per_sample`], not from the encoding.
+pub const ENCODING_PCM_SIGNED_LE: u32 = fourcc(*b"pcms");
 
 // Buffer header flags, as [`Event::Buffer`] reports them and
 // [`Mmal::send_buffer`] accepts them.
@@ -275,6 +285,22 @@ pub struct VideoFormat {
     pub color_space: u32,
 }
 
+/// The audio-specific half of an elementary stream format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioFormat {
+    /// Channels per frame, interleaved sample by sample — 1 for mono, 2
+    /// for stereo.
+    pub channels: u32,
+    /// Frames per second.
+    pub sample_rate: u32,
+    /// Bits in one sample of one channel.
+    pub bits_per_sample: u32,
+    /// Bytes in one block of the encoding, for the block-based encodings
+    /// that have one. Zero for linear PCM, where a frame's size follows
+    /// from the two fields above.
+    pub block_align: u32,
+}
+
 /// A port's configuration and format, as
 /// [`Mmal::port_info_get`] reads it and [`Mmal::port_info_set`] writes it
 /// back.
@@ -324,7 +350,17 @@ pub struct PortInfo {
     pub flags: u32,
     /// Video geometry, meaningful when [`Self::es_type`] is
     /// [`ES_TYPE_VIDEO`] — writable.
+    ///
+    /// This and [`Self::audio`] are two readings of the same bytes: the
+    /// message carries one type-specific union, not both halves, so
+    /// [`Mmal::port_info_set`] writes whichever [`Self::es_type`] names
+    /// and [`Mmal::port_info_get`] fills in both from the same union —
+    /// only the one matching the type means anything.
     pub video: VideoFormat,
+    /// Sample rate and channel layout, meaningful when [`Self::es_type`]
+    /// is [`ES_TYPE_AUDIO`] — writable. Shares the message's union with
+    /// [`Self::video`]; see there.
+    pub audio: AudioFormat,
 }
 
 /// The payload of an [`EVENT_FORMAT_CHANGED`] event, as
@@ -622,6 +658,7 @@ impl Mmal {
             bitrate: get_u32(reply, format + 16),
             flags: get_u32(reply, format + 20),
             video: read_video_format(reply, es),
+            audio: read_audio_format(reply, es),
         })
     }
 
@@ -656,7 +693,12 @@ impl Mmal {
         self.put_u32(format + 8, port.encoding_variant);
         self.put_u32(format + 16, port.bitrate);
         self.put_u32(format + 20, port.flags);
-        self.write_video_format(es, &port.video);
+        // One union, so only one of the two halves can go out; the stream
+        // type is what says which of them the firmware will read.
+        match port.es_type {
+            ES_TYPE_AUDIO => self.write_audio_format(es, &port.audio),
+            _ => self.write_video_format(es, &port.video),
+        }
 
         let reply = self.request(
             es + ES_FIELDS_SIZE + EXTRADATA_MAX,
@@ -725,6 +767,31 @@ impl Mmal {
             timer,
         )?;
         status(get_u32(reply, HEADER_SIZE))
+    }
+
+    /// Sets a port parameter whose value is a string — the shape a
+    /// handful of them take, the audio renderer's destination
+    /// ([`crate::audio_render`]) among them.
+    ///
+    /// The value the firmware is given is the string *and* its
+    /// terminating NUL, which is what the size in the parameter header
+    /// counts. Sending the bytes without the terminator leaves the
+    /// firmware reading a string that doesn't end where the parameter
+    /// does.
+    pub fn parameter_set_string(
+        &mut self,
+        port: &PortInfo,
+        id: u32,
+        value: &str,
+        timer: &Timer,
+    ) -> Result<(), Error> {
+        let mut bytes = [0u8; PARAMETER_STRING_MAX];
+        let Some(terminated) = bytes.get_mut(..value.len() + 1) else {
+            return Err(Error::TooLarge);
+        };
+        terminated[..value.len()].copy_from_slice(value.as_bytes());
+        let length = terminated.len();
+        self.parameter_set(port, id, &bytes[..length], timer)
     }
 
     /// Reads a port parameter into `value`, returning how many bytes the
@@ -1178,6 +1245,16 @@ impl Mmal {
         self.put_u32(offset + 40, video.color_space);
     }
 
+    /// Writes the audio-specific half of a format. Shorter than the video
+    /// one it shares its union with, so the caller zeroes the whole union
+    /// first and the tail stays zero.
+    fn write_audio_format(&mut self, offset: usize, audio: &AudioFormat) {
+        self.put_u32(offset, audio.channels);
+        self.put_u32(offset + 4, audio.sample_rate);
+        self.put_u32(offset + 8, audio.bits_per_sample);
+        self.put_u32(offset + 12, audio.block_align);
+    }
+
     /// Shared shape of the component messages, which all carry nothing but
     /// a component handle.
     fn component_request(
@@ -1200,6 +1277,73 @@ impl Mmal {
     /// Writes a 64-bit field of the outgoing message.
     fn put_i64(&mut self, offset: usize, value: i64) {
         self.tx[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Buffers one port's pool can hold — the ceiling on what a single port
+/// can have in flight, shared by the drivers built on this client
+/// ([`crate::video_decode::MAX_PORT_BUFFERS`],
+/// [`crate::audio_render::MAX_BUFFERS`]). Enough to keep a port busy
+/// while the application works on another buffer; the ceiling exists only
+/// because the pool is a fixed-size array.
+pub(crate) const POOL_CAPACITY: usize = 6;
+
+/// A pool of buffers waiting to be handed to a port, holding them between
+/// the firmware giving one back and the driver sending it out again.
+pub(crate) struct Pool {
+    /// The free buffers.
+    buffers: [Option<&'static mut [u8]>; POOL_CAPACITY],
+    /// How many were ever added, which is what the port is told to expect.
+    total: usize,
+}
+
+impl Pool {
+    /// An empty pool.
+    pub(crate) const fn new() -> Self {
+        Self {
+            buffers: [const { None }; POOL_CAPACITY],
+            total: 0,
+        }
+    }
+
+    /// Adds a buffer, answering `false` — and keeping the buffer, which is
+    /// `'static` and so leaks nothing — once the pool is full.
+    pub(crate) fn add(&mut self, buffer: &'static mut [u8]) -> bool {
+        let Some(slot) = self.buffers.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some(buffer);
+        self.total += 1;
+        true
+    }
+
+    /// Puts a buffer back after the firmware has returned it.
+    pub(crate) fn put(&mut self, buffer: &'static mut [u8]) {
+        if let Some(slot) = self.buffers.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(buffer);
+        }
+    }
+
+    /// Takes a free buffer, if there is one.
+    pub(crate) fn take(&mut self) -> Option<&'static mut [u8]> {
+        self.buffers.iter_mut().find_map(|slot| slot.take())
+    }
+
+    /// How many buffers were ever added — what the port is told to expect,
+    /// which is not how many are free right now.
+    pub(crate) fn total(&self) -> usize {
+        self.total
+    }
+
+    /// The smallest buffer in the pool, which is the size every buffer can
+    /// be relied on to have.
+    pub(crate) fn smallest(&self) -> usize {
+        self.buffers
+            .iter()
+            .flatten()
+            .map(|buffer| buffer.len())
+            .min()
+            .unwrap_or(0)
     }
 }
 
@@ -1348,6 +1492,16 @@ fn read_video_format(data: &[u8], offset: usize) -> VideoFormat {
         par_num: get_u32(data, offset + 32) as i32,
         par_den: get_u32(data, offset + 36) as i32,
         color_space: get_u32(data, offset + 40),
+    }
+}
+
+/// Reads the audio-specific half of a format out of a message.
+fn read_audio_format(data: &[u8], offset: usize) -> AudioFormat {
+    AudioFormat {
+        channels: get_u32(data, offset),
+        sample_rate: get_u32(data, offset + 4),
+        bits_per_sample: get_u32(data, offset + 8),
+        block_align: get_u32(data, offset + 12),
     }
 }
 

@@ -62,12 +62,21 @@ jobs:
             --target aarch64-unknown-none-softfloat
 
       # Run from outside the checkout, reaching back in with
-      # `--manifest-path`. `.cargo/config.toml` is discovered from the
-      # working directory, and its `[unstable] build-std` is nightly-only --
-      # inside the repo, a stable toolchain refuses the whole invocation
-      # before compiling anything. Standing outside is what makes this a
-      # real test of the claim: rustup's precompiled `core`/`alloc` cover
-      # both targets, so no `-Zbuild-std` is needed to build the library.
+      # `--manifest-path`, so none of this repo's `.cargo/config.toml` is
+      # in scope -- cargo discovers that file from the working directory,
+      # not from the manifest's directory. That reproduces a consumer's
+      # situation, which is the claim being tested: with nothing but
+      # rustup's precompiled `core`/`alloc`, which cover both targets, the
+      # library builds without `-Zbuild-std`.
+      #
+      # Standing outside is what gives the job its meaning, not what makes
+      # it run. A stable toolchain does not refuse the repo's `[unstable]
+      # build-std`; it ignores the `[unstable]` table silently (only a
+      # command-line `-Z` flag is rejected off nightly), so this same
+      # build also succeeds from inside the checkout. It would just be
+      # succeeding with this crate's own config in scope, and would go on
+      # passing if the library ever came to depend on something that
+      # config supplies.
       #
       # Every feature except `smoltcp`, whose own manifest requires 1.91 --
       # cargo would reject the build naming smoltcp, which is exactly why
