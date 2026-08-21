@@ -4,6 +4,49 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Async LAN9514** (`async` feature): `send_frame_async`,
+  `receive_frame_async`, `start_async`, `is_link_up_async` and the
+  register accessors behind them, as twins of the blocking methods.
+  `receive_frame_async` differs from its twin in more than spelling: it
+  leaves the bulk IN parked on an empty receive FIFO rather than first
+  asking `RX_FIFO_INF` whether a frame is waiting, so the receive becomes
+  interrupt-driven instead of polled. The blocking method cannot do that
+  — the DWC2 retries a NAK'd bulk transfer in hardware without halting
+  the channel, so it would spin out its whole transfer timeout on every
+  idle poll — which is why the pre-check stays there and only there.
+- `usb::lan9514::Lan9514::split` (`async` feature), returning
+  `Lan9514Rx`/`Lan9514Tx`: the two bulk endpoints borrowed apart, so a
+  receive can stay parked on one host channel while transmits go out on
+  another. Without it a transmit could only happen by cancelling a parked
+  receive, which loses any frame the chip was part-way through handing
+  over.
+- `usb::control::vendor_in_async` / `vendor_out_async`, the vendor
+  register access those methods are built on.
+- `usb::lan9514::MTU` is now unconditional rather than gated on an
+  adapter feature — it is a property of Ethernet and of this chip, and an
+  out-of-crate adapter needs the same number.
+
+### Removed
+
+- **The `embassy-net-driver` feature**, with `usb::lan9514::Lan9514Driver`
+  and `usb::lan9514::wake_rx`. The `embassy-net` adapter now lives in the
+  `rpi-hal-embassy` crate, built on `Lan9514::split` and the async methods
+  above, and is a `Driver` plus a runner task rather than a `Driver` that
+  does its own USB work. `embassy_net_driver::Driver` is synchronous, so
+  an adapter shaped that way could never have awaited anything.
+
+  `wake_rx` goes with it, and that is the point of the exercise: an
+  application no longer has to poll the driver on a ticker and guess an
+  interval, because there is now a real event to wake on.
+
+  Nothing here affects the `smoltcp` adapter or the blocking frame
+  methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
+  those stay exactly as they were.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

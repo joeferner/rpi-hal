@@ -79,7 +79,7 @@ jobs:
             cargo +1.88 build --release \
               --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" \
               --target "$target" \
-              --features bcm2837,multicore,async,embedded-sdmmc,embassy-net-driver,v3d
+              --features bcm2837,multicore,async,embedded-sdmmc,v3d
           done
 
   # `cargo package` finishes by building the packaged tarball, which catches

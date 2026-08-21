@@ -564,6 +564,21 @@ has what's left.
     An async transfer therefore has no timeout of its own; drop the
     future to impose one, which aborts the channel. See
     `examples/usb_irq.rs`.
+  - `usb::control::{vendor_in_async, vendor_out_async}` — the vendor
+    register access a device driver is built on, over those primitives.
+  - `usb::lan9514` — async twins of the LAN9514's frame and register
+    methods (`send_frame_async`, `receive_frame_async`, `start_async`,
+    `is_link_up_async`), plus `Lan9514::split`, which borrows the two
+    bulk endpoints apart so a receive can stay parked on one host
+    channel while transmits go out on another. `receive_frame_async` is
+    the one that is not merely the blocking method with awaits in it:
+    the blocking twin has to ask `RX_FIFO_INF` whether a frame is
+    waiting, because a bulk IN against an empty FIFO NAKs and the DWC2
+    retries it in hardware without halting — which would burn the whole
+    transfer timeout on every idle poll. Parked on an interrupt that
+    same behaviour is free, so the receive becomes event-driven rather
+    than polled. The `rpi-hal-embassy` crate's `embassy-net` adapter is
+    built on this.
 
   Each is driven by the same interrupt the blocking API already exposes,
   with the application routing it to `gpio::on_irq`, `uart::on_irq` or
@@ -574,25 +589,6 @@ has what's left.
   executor dependency, so any executor drives them — see the
   `rpi-hal-embassy` crate for one, and `examples/usb_irq.rs` for a
   hand-rolled `block_on` that needs none.
-- **`embassy-net-driver`** (off by default): adds
-  `usb::lan9514::Lan9514Driver`, an adapter implementing `embassy-net`'s
-  `Driver` trait over the LAN9514 Ethernet driver — the async counterpart
-  to the `smoltcp` adapter below, for applications running an executor.
-  Unlike the Embassy *time* driver (which lives in the separate
-  `rpi-hal-embassy` crate because it installs a link-time singleton),
-  `embassy-net-driver` is trait definitions only, so this adapter belongs
-  here beside the `phy::Device` one it parallels.
-
-  It needs the application to call `lan9514::wake_rx` periodically. The
-  chip is reached over USB bulk endpoints, and a bulk IN with no frame
-  waiting simply NAKs — so however the transfer itself is driven, there
-  is no event that says "a frame arrived", only an answer to a question
-  the host has to keep asking. (The `async` feature's USB interrupt
-  changes how a transfer *completes*, not that one has to be issued.)
-  `embassy-net`'s contract requires waking its waker when a frame lands,
-  and this is the only honest way to do it. The polling interval is the
-  application's choice because it is a latency-versus-wake-ups trade only
-  it can make.
 - **`embedded-sdmmc`** (off by default): adds `sd::SdCard`, an adapter
   implementing `embedded-sdmmc`'s `BlockDevice` trait over the SD
   driver, so a FAT filesystem can be layered on the card (see

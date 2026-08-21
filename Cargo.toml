@@ -47,7 +47,7 @@ rust-version = "1.88"
 # the published page would be a build failure instead of documentation.
 # So name a chip explicitly, plus every optional feature, or the
 # feature-gated modules (`async`, `multicore`, `v3d`, and the smoltcp/
-# embassy-net/embedded-sdmmc adapters) would be missing from the docs
+# embedded-sdmmc adapters) would be missing from the docs
 # rather than merely unlabelled.
 #
 # One build can only cover one chip: with both features on, `bcm2711`
@@ -70,7 +70,6 @@ features = [
     "bcm2837",
     "multicore",
     "async",
-    "embassy-net-driver",
     "embedded-sdmmc",
     "smoltcp",
     "v3d",
@@ -107,12 +106,6 @@ embedded-io-async = { version = "0.7.0", default-features = false, optional = tr
 # want the corresponding adapter, and the underlying drivers work without
 # either.
 embedded-sdmmc = { version = "0.9.0", default-features = false, optional = true }
-# The `embassy-net` device trait, behind a feature of the same name. Trait
-# definitions only, with no global state and no executor dependency --
-# unlike the Embassy *time* driver, which is why that one lives in a
-# separate crate and this adapter can sit here next to its smoltcp
-# counterpart.
-embassy-net-driver = { version = "0.2.0", optional = true }
 # `medium-ethernet` is what the `phy::Device` adapter needs; `proto-ipv4`
 # and `socket-udp` are the minimum on top of that for smoltcp itself to
 # compile at all (its address and socket enums are empty with no protocol/
@@ -215,10 +208,6 @@ bcm2711 = ["dep:bcm2711-lpa"]
 # them. Off by default because each implementation carries a waker slot
 # a purely blocking consumer shouldn't pay for.
 async = ["dep:embedded-hal-async", "dep:embedded-io-async"]
-# `embassy-net` `Driver` adapter over the LAN9514 Ethernet driver
-# (src/usb/lan9514.rs), the async counterpart to the `smoltcp` adapter
-# below. Needs the application to poll it -- see `lan9514::wake_rx`.
-embassy-net-driver = ["dep:embassy-net-driver"]
 # `embedded-sdmmc` `BlockDevice` adapter over the SD driver (src/sd.rs).
 embedded-sdmmc = ["dep:embedded-sdmmc"]
 # `smoltcp` `phy::Device` adapters over the LAN9514 Ethernet driver

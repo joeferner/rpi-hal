@@ -19,6 +19,19 @@
 //! over vendor control transfers, and the MII PHY is reachable for link
 //! status ([`is_link_up`](crate::usb::lan9514::Lan9514::is_link_up)).
 //!
+//! Every method above has an interrupt-driven `async` twin under the
+//! `async` feature —
+//! [`send_frame_async`](crate::usb::lan9514::Lan9514::send_frame_async),
+//! [`receive_frame_async`](crate::usb::lan9514::Lan9514::receive_frame_async)
+//! and the register accessors behind them — so a driver running under an
+//! executor gives the CPU back for the time a transfer spends on the bus
+//! instead of busy-waiting on it. The blocking methods are not deprecated
+//! by them: `smoltcp`'s `phy::Device` is synchronous by construction, so
+//! the adapter below could not use the async ones even if it wanted to.
+//! [`split`](crate::usb::lan9514::Lan9514::split) hands out the two
+//! directions separately, for a caller that wants a receive parked on one
+//! host channel while transmits go out on another.
+//!
 //! This driver only moves raw frames; a TCP/IP stack goes on top as
 //! application code. With the `smoltcp` feature enabled,
 //! [`Lan9514Phy`](crate::usb::lan9514::Lan9514Phy) wraps
@@ -26,7 +39,9 @@
 //! [`receive_frame`](crate::usb::lan9514::Lan9514::receive_frame) as a
 //! `smoltcp` `phy::Device` so a stack can run on top; the
 //! `usb_ethernet_smoltcp` example uses it, leasing an address over DHCP
-//! and running a poll loop that answers pings.
+//! and running a poll loop that answers pings. For `embassy-net`, the
+//! `rpi-hal-embassy` crate builds its adapter on
+//! [`split`](crate::usb::lan9514::Lan9514::split) and the async methods.
 //!
 //! Register offsets, framing, and the bring-up sequence here follow
 //! rsta2's `circle` `smsc951x` driver (in turn from the Linux `smsc95xx`
@@ -37,6 +52,13 @@ use crate::usb::control::{get_configuration_descriptor, set_configuration, vendo
 use crate::usb::descriptor::{ConfigurationDescriptor, Descriptors, EndpointDescriptor};
 use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
 use crate::usb::Device;
+
+/// The `async` twins of this driver's transfer methods.
+#[cfg(feature = "async")]
+mod asynch;
+
+#[cfg(feature = "async")]
+pub use asynch::{Lan9514Rx, Lan9514Tx};
 
 /// USB vendor ID of the LAN9514 (SMSC/Microchip).
 pub const VENDOR_ID: u16 = 0x0424;
@@ -143,16 +165,34 @@ pub struct IdRevision {
     pub revision: u16,
 }
 
+/// The receive half of a [`Lan9514`]: the bulk IN endpoint and the DMA
+/// buffer frames land in.
+///
+/// Split from the transmit half so the two directions borrow disjointly.
+/// Nothing in the blocking API needs that, but the `embassy-net` runner
+/// does: it keeps a receive parked on one host channel while transmits go
+/// out on another, which is only expressible if the two futures don't
+/// both want `&mut Lan9514`.
+struct Rx {
+    bulk_in: BulkEndpoint,
+    buffer: FrameBuffer,
+}
+
+/// The transmit half of a [`Lan9514`] — the counterpart to [`Rx`], and
+/// split out for the same reason.
+struct Tx {
+    bulk_out: BulkEndpoint,
+    buffer: FrameBuffer,
+}
+
 /// A configured LAN9514 Ethernet function: its endpoint 0 (for register
 /// access) and bulk IN/OUT endpoints (for frame RX/TX), plus DMA frame
 /// buffers. Build it with [`Self::from_device`], [`Self::start`] it, then
 /// move frames with [`Self::send_frame`]/[`Self::receive_frame`].
 pub struct Lan9514 {
     endpoint: ControlEndpoint,
-    bulk_in: BulkEndpoint,
-    bulk_out: BulkEndpoint,
-    rx_buffer: FrameBuffer,
-    tx_buffer: FrameBuffer,
+    rx: Rx,
+    tx: Tx,
 }
 
 /// Picks the bulk IN and OUT endpoints out of a configuration
@@ -179,6 +219,76 @@ fn find_bulk_endpoints(config: &[u8]) -> Option<(BulkEndpoint, BulkEndpoint)> {
         }
     }
     Some((bulk_in?, bulk_out?))
+}
+
+impl Rx {
+    /// The bulk IN endpoint as a [`ControlEndpoint`]: the device's
+    /// address and speed with this endpoint's max packet size.
+    fn endpoint(&self, device: ControlEndpoint) -> ControlEndpoint {
+        ControlEndpoint {
+            max_packet_size: self.bulk_in.max_packet_size,
+            ..device
+        }
+    }
+
+    /// Turns the `received` bytes now in [`Self::buffer`] into a frame,
+    /// stripping the chip's 4-byte RX status word and the Ethernet CRC.
+    ///
+    /// `None` for anything that isn't a frame the caller wants: a
+    /// zero-length or truncated transfer (the chip had nothing to give),
+    /// or one the status word flags as errored.
+    fn frame(&self, received: usize) -> Option<&[u8]> {
+        // Every received frame is prefixed by a 4-byte RX status word.
+        if received < 4 {
+            return None;
+        }
+        let status = u32::from_le_bytes([
+            self.buffer.0[0],
+            self.buffer.0[1],
+            self.buffer.0[2],
+            self.buffer.0[3],
+        ]);
+        if status & RX_STATUS_ERROR != 0 {
+            return None;
+        }
+
+        // The status word's frame length counts the 4-byte Ethernet CRC,
+        // which the caller doesn't want. Frame data starts just past the
+        // status word (index 4), so dropping the CRC leaves it in
+        // `buffer[4..4 + (frame_length - 4)]` == `buffer[4..frame_length]`.
+        let frame_length = ((status & RX_STATUS_FRAME_LENGTH) >> 16) as usize;
+        if frame_length <= 4 {
+            return None;
+        }
+        let end = frame_length.min(received);
+        Some(&self.buffer.0[4..end])
+    }
+}
+
+impl Tx {
+    /// The bulk OUT endpoint as a [`ControlEndpoint`] — see
+    /// [`Rx::endpoint`].
+    fn endpoint(&self, device: ControlEndpoint) -> ControlEndpoint {
+        ControlEndpoint {
+            max_packet_size: self.bulk_out.max_packet_size,
+            ..device
+        }
+    }
+
+    /// Lays `frame` out in [`Self::buffer`] behind the chip's 8-byte TX
+    /// command header, and returns how many bytes of the buffer to send.
+    fn stage(&mut self, frame: &[u8]) -> usize {
+        debug_assert!(frame.len() <= FRAME_BUFFER_SIZE - 8);
+        let length = frame.len();
+
+        // TX command: one whole segment, byte length in both words.
+        let command_a = TX_CMD_A_FIRST_SEG | TX_CMD_A_LAST_SEG | length as u32;
+        let command_b = length as u32;
+        self.buffer.0[0..4].copy_from_slice(&command_a.to_le_bytes());
+        self.buffer.0[4..8].copy_from_slice(&command_b.to_le_bytes());
+        self.buffer.0[8..8 + length].copy_from_slice(frame);
+        8 + length
+    }
 }
 
 impl Lan9514 {
@@ -215,13 +325,7 @@ impl Lan9514 {
 
         set_configuration(channel, timer, device.endpoint, config_value)?;
 
-        Ok(Some(Lan9514 {
-            endpoint: device.endpoint,
-            bulk_in,
-            bulk_out,
-            rx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
-            tx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
-        }))
+        Ok(Some(Lan9514::new(device.endpoint, bulk_in, bulk_out)))
     }
 
     /// Brings up a LAN9514 that something *else* has already addressed
@@ -253,13 +357,23 @@ impl Lan9514 {
             return Ok(None);
         };
 
-        Ok(Some(Lan9514 {
+        Ok(Some(Lan9514::new(endpoint, bulk_in, bulk_out)))
+    }
+
+    /// Assembles the driver around endpoints already located by one of
+    /// the constructors above.
+    fn new(endpoint: ControlEndpoint, bulk_in: BulkEndpoint, bulk_out: BulkEndpoint) -> Self {
+        Lan9514 {
             endpoint,
-            bulk_in,
-            bulk_out,
-            rx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
-            tx_buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
-        }))
+            rx: Rx {
+                bulk_in,
+                buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
+            },
+            tx: Tx {
+                bulk_out,
+                buffer: FrameBuffer([0; FRAME_BUFFER_SIZE]),
+            },
+        }
     }
 
     /// Reads one 32-bit device register at offset `register` via a vendor
@@ -388,12 +502,12 @@ impl Lan9514 {
 
     /// The bulk-IN (frame receive) endpoint's max packet size.
     pub fn bulk_in_max_packet_size(&self) -> u16 {
-        self.bulk_in.max_packet_size
+        self.rx.bulk_in.max_packet_size
     }
 
     /// The bulk-OUT (frame transmit) endpoint's max packet size.
     pub fn bulk_out_max_packet_size(&self) -> u16 {
-        self.bulk_out.max_packet_size
+        self.tx.bulk_out.max_packet_size
     }
 
     /// Whether the Ethernet link is up, read from the PHY's basic-mode
@@ -413,26 +527,14 @@ impl Lan9514 {
         timer: &Timer,
         frame: &[u8],
     ) -> Result<(), TransferError> {
-        debug_assert!(frame.len() <= FRAME_BUFFER_SIZE - 8);
-        let length = frame.len();
-
-        // TX command: one whole segment, byte length in both words.
-        let command_a = TX_CMD_A_FIRST_SEG | TX_CMD_A_LAST_SEG | length as u32;
-        let command_b = length as u32;
-        self.tx_buffer.0[0..4].copy_from_slice(&command_a.to_le_bytes());
-        self.tx_buffer.0[4..8].copy_from_slice(&command_b.to_le_bytes());
-        self.tx_buffer.0[8..8 + length].copy_from_slice(frame);
-
-        let number = self.bulk_out.number;
-        let endpoint = ControlEndpoint {
-            max_packet_size: self.bulk_out.max_packet_size,
-            ..self.endpoint
-        };
+        let staged = self.tx.stage(frame);
+        let endpoint = self.tx.endpoint(self.endpoint);
+        let number = self.tx.bulk_out.number;
         channel.bulk_out(
             endpoint,
             number,
-            &mut self.bulk_out.toggle,
-            &self.tx_buffer.0[..8 + length],
+            &mut self.tx.bulk_out.toggle,
+            &self.tx.buffer.0[..staged],
             timer,
         )?;
         Ok(())
@@ -457,16 +559,13 @@ impl Lan9514 {
             return Ok(None);
         }
 
-        let number = self.bulk_in.number;
-        let endpoint = ControlEndpoint {
-            max_packet_size: self.bulk_in.max_packet_size,
-            ..self.endpoint
-        };
+        let endpoint = self.rx.endpoint(self.endpoint);
+        let number = self.rx.bulk_in.number;
         let received = match channel.bulk_in(
             endpoint,
             number,
-            &mut self.bulk_in.toggle,
-            &mut self.rx_buffer.0,
+            &mut self.rx.bulk_in.toggle,
+            &mut self.rx.buffer.0,
             timer,
         ) {
             Ok(received) => received,
@@ -475,30 +574,7 @@ impl Lan9514 {
             Err(error) => return Err(error),
         };
 
-        // Every received frame is prefixed by a 4-byte RX status word.
-        if received < 4 {
-            return Ok(None);
-        }
-        let status = u32::from_le_bytes([
-            self.rx_buffer.0[0],
-            self.rx_buffer.0[1],
-            self.rx_buffer.0[2],
-            self.rx_buffer.0[3],
-        ]);
-        if status & RX_STATUS_ERROR != 0 {
-            return Ok(None);
-        }
-
-        // The status word's frame length counts the 4-byte Ethernet CRC,
-        // which the caller doesn't want. Frame data starts just past the
-        // status word (index 4), so dropping the CRC leaves it in
-        // `rx_buffer[4..4 + (frame_length - 4)]` == `rx_buffer[4..frame_length]`.
-        let frame_length = ((status & RX_STATUS_FRAME_LENGTH) >> 16) as usize;
-        if frame_length <= 4 {
-            return Ok(None);
-        }
-        let end = frame_length.min(received);
-        Ok(Some(&self.rx_buffer.0[4..end]))
+        Ok(self.rx.frame(received))
     }
 
     /// Reads MII (PHY) register `index` (see [`Self::is_link_up`]). The
@@ -536,10 +612,14 @@ use smoltcp::phy::{Device as PhyDevice, DeviceCapabilities, Medium, RxToken, TxT
 #[cfg(feature = "smoltcp")]
 use smoltcp::time::Instant;
 
-/// Largest Ethernet frame the [`Lan9514Phy`] adapter moves, in bytes: the
-/// 14-byte header plus a 1500-byte payload (the chip appends the 4-byte
-/// CRC itself, so it isn't counted here).
-#[cfg(any(feature = "smoltcp", feature = "embassy-net-driver"))]
+/// Largest Ethernet frame this driver carries, in bytes: the 14-byte
+/// header plus a 1500-byte payload (the chip appends the 4-byte CRC
+/// itself, so it isn't counted here).
+///
+/// Unconditional, and not tied to any one adapter's feature, because it
+/// is a property of Ethernet and of this chip — an out-of-crate adapter
+/// (`rpi-hal-embassy`'s `embassy-net` one, say) needs the same number and
+/// should not have to restate it.
 pub const MTU: usize = 1514;
 
 /// A [`smoltcp`] [`Device`] over a [`Lan9514`]: it moves the stack's
@@ -683,243 +763,6 @@ impl TxToken for Lan9514TxToken<'_, '_> {
     /// dropped: smoltcp treats transmission as best-effort (retransmission
     /// is a higher layer's job), and `consume` has no channel to report an
     /// error on anyway.
-    fn consume<R, F>(self, len: usize, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        let result = f(&mut self.scratch[..len]);
-        let _ = self
-            .lan9514
-            .send_frame(self.channel, self.timer, &self.scratch[..len]);
-        result
-    }
-}
-
-/// Woken by [`wake_rx`] so a parked `embassy-net` runner re-polls
-/// `Lan9514Driver`'s `receive`.
-///
-/// A single slot, not a table: there is one LAN9514 on this hardware.
-#[cfg(feature = "embassy-net-driver")]
-static RX_WAKER: critical_section::Mutex<core::cell::RefCell<Option<core::task::Waker>>> =
-    critical_section::Mutex::new(core::cell::RefCell::new(None));
-
-/// Tells a parked [`Lan9514Driver`] that a frame may have arrived.
-///
-/// **An application must call this periodically** — typically from a task
-/// on an `embassy-time` ticker — or received frames are never picked up.
-///
-/// This exists because the chip is reached by polling, not by interrupt:
-/// its frames come over USB bulk endpoints, and neither this crate nor the
-/// SoC's interrupt controller has any USB interrupt wired up, so nothing
-/// can tell the driver a packet landed. `embassy-net`'s `Driver` contract
-/// requires waking the waker when one does, and this is the only honest
-/// way to satisfy it. The polling interval is the application's to choose
-/// because it is a latency-versus-wake-ups trade only it can make; this
-/// crate takes no dependency on a time source to make it.
-///
-/// Cheap when idle: with the runner already awake or nothing parked, it
-/// does nothing.
-#[cfg(feature = "embassy-net-driver")]
-pub fn wake_rx() {
-    critical_section::with(|cs| {
-        if let Some(waker) = RX_WAKER.borrow_ref_mut(cs).take() {
-            waker.wake();
-        }
-    });
-}
-
-/// An [`embassy_net_driver::Driver`] over a [`Lan9514`], moving
-/// `embassy-net`'s Ethernet frames through the driver's bulk endpoints.
-/// Construct it with [`Lan9514Driver::new`] and hand it to
-/// `embassy_net::new`.
-///
-/// The sibling of [`Lan9514Phy`], which does the same job for `smoltcp`.
-/// They are deliberately parallel rather than shared: the two token
-/// traits differ just enough — a waker in the signatures here, `&[u8]`
-/// versus `&mut [u8]` in `RxToken::consume` — that unifying them would
-/// need generics obscuring both, and the part actually worth sharing (the
-/// frame moving itself) already is, in [`Lan9514::receive_frame`] and
-/// [`Lan9514::send_frame`].
-///
-/// Requires the application to call [`wake_rx`] periodically; see its
-/// documentation for why.
-///
-/// Available only with the `embassy-net-driver` feature enabled.
-#[cfg(feature = "embassy-net-driver")]
-pub struct Lan9514Driver<'a, 'c> {
-    lan9514: Lan9514,
-    channel: Channel<'c>,
-    timer: &'a Timer,
-    mac: [u8; 6],
-    /// Scratch the TX token fills for the stack and hands to the driver.
-    tx_scratch: [u8; MTU + 2],
-}
-
-#[cfg(feature = "embassy-net-driver")]
-impl<'a, 'c> Lan9514Driver<'a, 'c> {
-    /// Wraps an already-[`started`](Lan9514::start) LAN9514 as an
-    /// `embassy-net` device, taking the host channel it drives frames
-    /// through and borrowing the timer.
-    ///
-    /// The channel is owned rather than borrowed, so the rest of the
-    /// controller's channels stay free for other endpoints — a keyboard
-    /// polled from another task, say — while the stack runs.
-    ///
-    /// `mac` must be the address passed to [`Lan9514::start`]: the driver
-    /// programs it into the chip but doesn't retain it, and
-    /// `embassy-net` needs it to answer ARP.
-    pub fn new(lan9514: Lan9514, channel: Channel<'c>, timer: &'a Timer, mac: [u8; 6]) -> Self {
-        Self {
-            lan9514,
-            channel,
-            timer,
-            mac,
-            tx_scratch: [0; MTU + 2],
-        }
-    }
-}
-
-#[cfg(feature = "embassy-net-driver")]
-impl<'c> embassy_net_driver::Driver for Lan9514Driver<'_, 'c> {
-    type RxToken<'t>
-        = Lan9514NetRxToken
-    where
-        Self: 't;
-    type TxToken<'t>
-        = Lan9514NetTxToken<'t, 'c>
-    where
-        Self: 't;
-
-    /// Pulls a frame from the chip if one is waiting, pairing it with a
-    /// transmit token so a reply can be built from it without allocating.
-    ///
-    /// With nothing to return, registers `cx`'s waker for [`wake_rx`] —
-    /// the frame did not arrive on an interrupt, so only the
-    /// application's polling can report the next one.
-    ///
-    /// The received bytes are copied into the RX token, leaving the TX
-    /// token the sole borrower of the driver: both are handed out from
-    /// one `&mut self`, and the bus underneath can only serve one.
-    fn receive(
-        &mut self,
-        cx: &mut core::task::Context,
-    ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let frame = match self.lan9514.receive_frame(&mut self.channel, self.timer) {
-            Ok(Some(frame)) => frame,
-            // A transfer error is reported the same way as an empty queue:
-            // there is no frame to hand up either way, and the stack's
-            // recovery for both is to ask again.
-            Ok(None) | Err(_) => {
-                critical_section::with(|cs| {
-                    *RX_WAKER.borrow_ref_mut(cs) = Some(cx.waker().clone());
-                });
-                return None;
-            }
-        };
-
-        let len = frame.len().min(MTU);
-        let mut rx = Lan9514NetRxToken {
-            buffer: [0; MTU],
-            len,
-        };
-        rx.buffer[..len].copy_from_slice(&frame[..len]);
-
-        let tx = Lan9514NetTxToken {
-            lan9514: &mut self.lan9514,
-            channel: &mut self.channel,
-            timer: self.timer,
-            scratch: &mut self.tx_scratch,
-        };
-        Some((rx, tx))
-    }
-
-    /// Returns a transmit token borrowing the driver.
-    ///
-    /// Never `None`, so the waker goes unused: sending is synchronous
-    /// here, with no queue that can fill up and later drain.
-    fn transmit(&mut self, _cx: &mut core::task::Context) -> Option<Self::TxToken<'_>> {
-        Some(Lan9514NetTxToken {
-            lan9514: &mut self.lan9514,
-            channel: &mut self.channel,
-            timer: self.timer,
-            scratch: &mut self.tx_scratch,
-        })
-    }
-
-    /// Always reports the link as up.
-    ///
-    /// Not because the real state is unavailable — [`Lan9514::is_link_up`]
-    /// reads it from the PHY — but because reading it costs MII access
-    /// over USB control transfers, and `embassy-net` calls this on every
-    /// pass of its runner. Since those passes are driven by the
-    /// application's [`wake_rx`] cadence, the cost would scale with the
-    /// polling rate: at a millisecond interval the link check alone could
-    /// crowd out the frame traffic it is meant to be supporting.
-    ///
-    /// The consequence is that an unplugged cable surfaces as transfers
-    /// failing rather than as a link-down transition, and
-    /// `Stack::wait_link_up` returns immediately. An application that
-    /// needs better can call [`Lan9514::is_link_up`] on its own schedule,
-    /// which is also the only place that knows how often is often enough.
-    fn link_state(&mut self, _cx: &mut core::task::Context) -> embassy_net_driver::LinkState {
-        embassy_net_driver::LinkState::Up
-    }
-
-    /// Reports [`MTU`] and a one-frame burst — the driver's frame calls
-    /// are synchronous and one at a time.
-    fn capabilities(&self) -> embassy_net_driver::Capabilities {
-        let mut caps = embassy_net_driver::Capabilities::default();
-        caps.max_transmission_unit = MTU;
-        caps.max_burst_size = Some(1);
-        caps
-    }
-
-    /// The Ethernet address this device was started with.
-    fn hardware_address(&self) -> embassy_net_driver::HardwareAddress {
-        embassy_net_driver::HardwareAddress::Ethernet(self.mac)
-    }
-}
-
-/// An owned copy of one received frame, produced by
-/// `Lan9514Driver`'s `receive`. Owning the bytes is what lets the driver
-/// go to the TX token handed out alongside it.
-///
-/// Available only with the `embassy-net-driver` feature enabled.
-#[cfg(feature = "embassy-net-driver")]
-pub struct Lan9514NetRxToken {
-    buffer: [u8; MTU],
-    len: usize,
-}
-
-#[cfg(feature = "embassy-net-driver")]
-impl embassy_net_driver::RxToken for Lan9514NetRxToken {
-    /// Hands the received frame's bytes to `f`.
-    fn consume<R, F>(mut self, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        f(&mut self.buffer[..self.len])
-    }
-}
-
-/// A pending transmit from [`Lan9514Driver`]: the stack fills the scratch
-/// buffer via [`consume`](embassy_net_driver::TxToken::consume), then the
-/// frame goes out the driver's bulk-OUT endpoint.
-///
-/// Available only with the `embassy-net-driver` feature enabled.
-#[cfg(feature = "embassy-net-driver")]
-pub struct Lan9514NetTxToken<'a, 'c> {
-    lan9514: &'a mut Lan9514,
-    channel: &'a mut Channel<'c>,
-    timer: &'a Timer,
-    scratch: &'a mut [u8],
-}
-
-#[cfg(feature = "embassy-net-driver")]
-impl embassy_net_driver::TxToken for Lan9514NetTxToken<'_, '_> {
-    /// Lets `f` fill the frame buffer, then sends it. A failed send is
-    /// dropped: `consume` has no channel to report an error on, and
-    /// retransmission belongs to a higher layer.
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
