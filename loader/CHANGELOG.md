@@ -8,6 +8,18 @@ The firmware and the host CLI share one version and ship as one release:
 they are two halves of a wire protocol, and a version that identifies
 only one of them says nothing useful about compatibility.
 
+## [Unreleased]
+
+### Fixed
+
+- Terminal mode no longer puts the invoking terminal into raw mode when
+  stdin is not a terminal. `crossterm`'s `enable_raw_mode` does not consult
+  stdin — on Unix it falls back to opening `/dev/tty` — so redirecting stdin
+  did not prevent it, and a caller that stopped the loader with a signal
+  never reached the restore, handing back a shell with no echo and `\n` no
+  longer implying `\r`. Affected anything driving `boot` or `terminal` from
+  a script rather than a keyboard.
+
 ## [0.1.0] - 2026-08-12
 
 ### Added

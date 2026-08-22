@@ -34,7 +34,7 @@
 //! FAIL) -- the mirror of the host->device chunk flow.
 //! ```
 
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::sleep;
@@ -640,7 +640,20 @@ struct RawMode {
 
 impl RawMode {
     /// Enters raw mode if stdin is a terminal.
+    ///
+    /// The stdin check has to be explicit, because `enable_raw_mode` does
+    /// not make it: on Unix crossterm uses stdin only when stdin is already
+    /// a terminal, and otherwise opens `/dev/tty` — so with stdin redirected
+    /// from a pipe or a file it succeeds anyway, against the *invoking*
+    /// terminal. That terminal belongs to whoever launched this, not to a
+    /// session there is no interactive user for, and the damage outlives the
+    /// process: a caller that stops the loader with a signal never reaches
+    /// the restore in `Drop`, and hands back a shell with no echo and `\n`
+    /// no longer implying `\r`.
     fn enable() -> Self {
+        if !std::io::stdin().is_terminal() {
+            return Self { active: false };
+        }
         Self {
             active: enable_raw_mode().is_ok(),
         }
@@ -661,4 +674,28 @@ fn crc32(data: &[u8]) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(data);
     hasher.finalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Raw mode must stay off when stdin is not a terminal.
+    ///
+    /// Guards against reverting to a bare `enable_raw_mode().is_ok()`, which
+    /// looks equivalent and is not: crossterm falls back to `/dev/tty`, so
+    /// that form succeeds against the invoking terminal even with stdin
+    /// redirected, and a caller that signals this process then never reaches
+    /// the restore in `Drop`.
+    ///
+    /// Only observable where stdin is not a tty — which is how CI runs, and
+    /// how anything scripting this runs. Run from an interactive shell the
+    /// condition under test does not exist, so there is nothing to assert.
+    #[test]
+    fn raw_mode_stays_off_without_a_terminal_on_stdin() {
+        if std::io::stdin().is_terminal() {
+            return;
+        }
+        assert!(!RawMode::enable().active);
+    }
 }
