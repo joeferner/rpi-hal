@@ -1,0 +1,64 @@
+[project]
+name = "hilbench"
+version = "0.1.0"
+description = "Host-side runner for the rpi-hal hardware-in-the-loop bench"
+requires-python = ">=3.10"
+dependencies = ["pyusb>=1.2", "pyserial>=3.5"]
+
+[project.optional-dependencies]
+# Witnesses that only some rigs own. Kept optional so a contributor with one
+# board and a serial cable can install the runner without pulling in OpenCV.
+av = ["opencv-python-headless>=4.9", "numpy>=1.24"]
+net = ["scapy>=2.5"]
+ble = ["bumble>=0.0.190"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hilbench*"]
+
+[tool.ruff]
+# Matches `requires-python` rather than whatever interpreter happens to be
+# running, so the `UP` rules do not rewrite code into syntax the oldest
+# supported Python cannot parse.
+target-version = "py310"
+
+[tool.ruff.lint]
+# Selected explicitly, never left to ruff's default. The default set moves
+# between releases, so a check that runs on every commit would start failing
+# on untouched code the day someone's `uvx` fetches a newer ruff -- which
+# reads as "my change broke the lint" and is the fastest way to teach people
+# to skip it.
+#
+# `E`/`F`/`W` are the pyflakes/pycodestyle baseline, `I` keeps imports
+# ordered, `UP` catches syntax left behind by a version bump, `B` the
+# bugbear traps (mutable defaults, loop-variable capture), `SIM`
+# simplifications, and `RUF` ruff's own. Deliberately not `PYI`: its
+# `__enter__`-returns-`Self` rule wants `typing.Self`, which is 3.11.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Capability skips are the normal case, not noise worth hiding.
+# Board tests need a wired-up Pi and take a minute, so they are opt-in via
+# `-m board` (see `make test-board`). Everything else must stay runnable on a
+# laptop with nothing attached, or it stops being run at all.
+addopts = "-ra -m 'not board'"
+markers = ["board: needs a board under test wired to the fixture"]
+filterwarnings = [
+    # pyusb's libusb0 backend declares ctypes Structures with `_pack_` but no
+    # `_layout_`, which Python 3.14 deprecates. It fires three times at import
+    # and says nothing about this project. Matched on the message rather than
+    # the module because ctypes reports it against the caller's frame, so a
+    # module filter would not catch it reliably.
+    #
+    # Filtered this narrowly on purpose: a blanket ignore would also hide
+    # deprecations in our own code, and unread warnings are how a rig starts
+    # lying to you.
+    "ignore:Due to '_pack_':DeprecationWarning",
+]
