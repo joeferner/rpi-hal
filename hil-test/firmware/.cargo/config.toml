@@ -1,0 +1,20 @@
+# Kept here rather than at the repository root: a config.toml at the root
+# would retarget the whole crate, and rpi-hal must keep building for the Pi.
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+runner = "elf2uf2-rs -d"
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tlink-rp.x",
+]
+
+[target.thumbv8m.main-none-eabihf]
+runner = "picotool load -u -v -x -t elf"
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tlink-rp.x",
+]

@@ -1,0 +1,64 @@
+# Detached from the rpi-hal workspace on purpose: this builds for
+# thumbv6m/thumbv8m, not for the Pi, so it must not be pulled into the
+# parent's target selection or lockfile.
+[workspace]
+
+[package]
+name = "hil-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Hardware-in-the-loop bench fixture firmware for rpi-hal"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["rp2040"]
+# The Pico/RP2040 fixture: 26 GPIO, so a reduced pin map.
+rp2040 = ["embassy-rp/rp2040"]
+# The Olimex PICO2-XL/RP2350B fixture: all 48 GPIO.
+rp235x = ["embassy-rp/rp235xb"]
+
+[dependencies]
+embassy-executor = { version = "0.9", features = [
+    "arch-cortex-m",
+    "executor-thread",
+] }
+embassy-rp = { version = "0.10", default-features = false, features = [
+    # `rt` is embassy-rp's only default feature and it is not optional in
+    # practice: it pulls in rp-pac/rt, which populates the device interrupt
+    # vector table. Without it `bind_interrupts!` still compiles and still
+    # generates handlers, but nothing dispatches to them -- so USB never
+    # enumerates and the time driver's TIMER interrupt never fires, leaving
+    # every `Timer::after` pending forever. Silent at build time, total at
+    # run time.
+    "rt",
+    "time-driver",
+    "critical-section-impl",
+    # Exposes `embassy_rp::pac`, which the console handoff needs: moving
+    # GP0/GP1 between the UART and SIO is a FUNCSEL write, and the HAL only
+    # offers it as a side effect of constructing or dropping a driver. Going
+    # through a driver would mean giving up the `BufferedUart` and rebuilding
+    # it, which resets the baud the host negotiated -- see `console_pins`.
+    # Reaching for rp-pac directly instead would risk a second, differently
+    # versioned copy of the same registers.
+    "unstable-pac",
+] }
+embassy-usb = { version = "0.6", default-features = false }
+embassy-futures = "0.1"
+embassy-sync = "0.7"
+embassy-time = "0.5"
+embedded-io-async = "0.7"
+# Cortex-M0+ has no atomic compare-exchange, so the crates that want one get
+# it emulated through a critical section. Enabled here rather than left to
+# feature unification by accident, since a missing CAS shows up as an
+# unrelated-looking build failure deep in a dependency.
+portable-atomic = { version = "1", features = ["critical-section"] }
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+panic-halt = "1"
+static_cell = "2"
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = "s"

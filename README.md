@@ -15,17 +15,11 @@ Supported Devices:
 
 - Pi 2 Model B rev 1.1 (BCM2836, Cortex-A7)
 - Pi 3 Model B v1.2 (BCM2837, Cortex-A53)
-- Pi 4 (BCM2711, Cortex-A72) — **preliminary**: the `bcm2711` feature
-  selects the relocated peripheral memory map and PAC. HW-verified on
-  real Pi 4 hardware in both 32-bit (`armv7a-none-eabi`) and 64-bit
-  (`aarch64-unknown-none-softfloat`) builds: boot/GPIO/System Timer
-  (`blink`), the MMU identity map and mailbox coherency
-  (`aarch64_smoke`), the UART console, and the SD card via the
-  BCM2711-specific `EMMC2` controller (`sd_read`, `rpi-loader`'s
-  `sd-list`/`sd-read`/etc.). Most other drivers are still untested and
-  there is no interrupt controller at all yet — see
-  [issue #29](https://github.com/joeferner/rpi-hal/issues/29) for exactly
-  what's verified and the bring-up plan for the rest.
+- Pi 4 (BCM2711, Cortex-A72) — **preliminary**
+
+Which drivers have actually been exercised on which board, and what the
+newer chips have that this crate does not drive yet, is tracked in
+[docs/compatibility.md](docs/compatibility.md).
 
 Building for any of these requires picking exactly one of the
 `bcm2837`/`bcm2711` features (see "Features" below) — neither is a

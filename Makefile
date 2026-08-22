@@ -2,7 +2,7 @@
 # already pinned in .cargo/config.toml, so plain `cargo` invocations
 # pick them up without repeating flags here.
 
-.PHONY: build-bcm2837 build-bcm2711 examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build-bcm2837 build-bcm2711 examples fmt fmt-check clippy doc package hil pre-commit clean
 
 # `bcm2837`/`bcm2711` (see Cargo.toml) are chip selection: neither is a
 # default feature, since there's no sensible default target chip, so
@@ -120,7 +120,19 @@ doc:
 package:
 	cargo package --features bcm2837
 
-pre-commit: fmt clippy build-bcm2837 build-bcm2711 examples doc
+# The hardware-in-the-loop bench, which is three toolchains of its own --
+# thumbv6m firmware, armv7a/aarch64 case binaries, and a Python host runner --
+# none of which share this workspace, so nothing above reaches them.
+# Delegated rather than spelled out here so the bench's own Makefile stays the
+# single place that knows how to build it.
+#
+# The Python half is checked with `ruff` and `ty`, fetched on demand by `uvx`.
+# They are not project dependencies: a contributor with one board and a serial
+# cable should not have to install a linter to run a test.
+hil:
+	$(MAKE) -C hil-test pre-commit
+
+pre-commit: fmt clippy build-bcm2837 build-bcm2711 examples doc hil
 
 clean:
 	cargo clean

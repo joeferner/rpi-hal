@@ -1,0 +1,415 @@
+"""Marker-pin edge timestamping: what resolution and depth PIO actually gives.
+
+The single highest-leverage primitive on the bench. PWM frequency and duty,
+UART baud, SPI clock rate, IRQ latency, DMA completion and page-flip interval
+are all one measurement — when did this edge arrive — and they all rest on
+this. It costs one pin on the schematic, so getting it wrong is cheap to
+rework; but if PIO cannot deliver the resolution or the capture depth, a large
+part of the test plan needs a different instrument, and that is worth knowing
+before the plan is written.
+
+Two tiers here, and the split matters when something fails:
+
+- The fixture pulsing its own marker pin and timestamping the result. No
+  board, no wire, no case — this is the capture path in isolation, and it is
+  what says whether a bad board measurement is the bench's fault.
+- The board toggling the marker pin, which additionally proves the wire, and
+  gives the cross-clock comparison that sets the tolerance for every timing
+  assertion the suite will ever make.
+"""
+
+from __future__ import annotations
+
+import itertools
+import statistics
+
+import pytest
+
+from hilbench import Cap, Fixture, ProtocolError
+from hilbench.loader import load_addr_for
+
+BOOT_TIMEOUT = 90.0
+
+
+def _require_marker(bench: Fixture) -> None:
+    """Skips if the fixture does not claim marker timestamping.
+
+    A capability check rather than a firmware-version one, because this is the
+    first thing in the suite that a *different* fixture might legitimately
+    lack — an RP2040 with no spare pin, say. `_require_drive` in the shadow
+    tests fails instead, and the difference is deliberate: there the command
+    is part of the console the whole bench depends on.
+    """
+    absent = bench.missing(Cap.MARKER_TIMESTAMP)
+    if absent:
+        pytest.skip(f"fixture lacks {', '.join(absent)}")
+
+
+def intervals(stamps: list[int]) -> list[int]:
+    """Ticks between consecutive edges."""
+    return [b - a for a, b in itertools.pairwise(stamps)]
+
+
+def periods(stamps: list[int]) -> list[int]:
+    """Ticks between every *second* edge, i.e. whole periods.
+
+    Whole periods rather than half ones because the two edge directions are
+    detected a cycle apart — leaving the program's high-wait costs one
+    instruction and the low-wait two — and that difference cancels exactly
+    over a full period while biasing every half period by the same 8 ns.
+    """
+    return [b - a for a, b in zip(stamps, stamps[2:], strict=False)]
+
+
+def test_marker_capacity_and_resolution_are_reported(bench: Fixture) -> None:
+    """The fixture publishes its own timebase, rather than the host assuming.
+
+    This is the answer the TODO item is asking for, and it is a number the
+    fixture has to state: the tick rate follows its system clock, so a host
+    that hardcoded it would keep reporting confident measurements after a
+    firmware clock change silently rescaled them all.
+    """
+    _require_marker(bench)
+    status = bench.marker_status()
+    print(f"\n{status}")
+    print(
+        f"  resolution {1e9 / status.tick_hz:.1f} ns/tick, "
+        f"depth {status.capacity} edges, "
+        f"wraps every {2**32 / status.tick_hz:.1f} s"
+    )
+
+    assert status.tick_hz > 1_000_000, (
+        f"a {status.tick_hz} Hz timebase cannot resolve anything this bench "
+        "wants to measure"
+    )
+    assert status.capacity >= 1024, f"only {status.capacity} edges of depth"
+
+
+def test_the_fixture_times_its_own_pulse_train(bench: Fixture) -> None:
+    """The capture path end to end, with nothing external involved.
+
+    The fixture drives its own marker pin and timestamps the result, so a
+    failure here is the PIO program, the FIFO, the DMA or the readout — never
+    the wire or the board. Worth having as the first thing to reach for,
+    because that is four suspects eliminated in one call.
+    """
+    _require_marker(bench)
+
+    count, half_period_us = 50, 100
+    bench.marker_arm()
+    bench.marker_pulse(count, half_period_us)
+
+    status = bench.marker_status()
+    assert not status.overflowed, "the state machine stalled; edges were dropped"
+    # Two edges per pulse. The first may be missed if the pin was already high
+    # when the capture was armed, so this is a lower bound rather than exact.
+    assert status.captured >= 2 * count - 1, (
+        f"drove {count} pulses ({2 * count} edges) and captured {status.captured}"
+    )
+
+    stamps = bench.marker_read()
+    whole = periods(stamps)
+    measured_us = statistics.median(whole) * 1e6 / status.tick_hz
+    print(
+        f"\nasked for {2 * half_period_us} us periods, measured "
+        f"{measured_us:.2f} us over {len(whole)} of them"
+    )
+
+    # A wide bound on purpose. Both sides are the fixture's own clock, so this
+    # is not a clock comparison — it is asking whether the capture path is
+    # recording the right thing at all, and the pulse train is generated by a
+    # busy-wait whose own overhead is unmeasured.
+    assert abs(measured_us - 2 * half_period_us) < 0.2 * 2 * half_period_us, (
+        f"measured {measured_us:.2f} us against a requested {2 * half_period_us} us"
+    )
+
+
+def test_a_capture_can_be_rearmed(bench: Fixture) -> None:
+    """Arming twice does not leave the previous capture's edges in the buffer.
+
+    The failure this guards is quiet and nasty: a stale first timestamp is
+    against the *previous* counter, so it reads as one enormous interval at
+    the front of an otherwise perfect capture, and the obvious reaction is to
+    discard it as a start-up artefact rather than to distrust the run.
+    """
+    _require_marker(bench)
+
+    bench.marker_arm()
+    bench.marker_pulse(10, 100)
+    first = bench.marker_status().captured
+    assert first > 0, "the first capture recorded nothing"
+
+    bench.marker_arm()
+    assert bench.marker_status().captured == 0, (
+        "re-arming left the previous capture's edges in the buffer"
+    )
+
+    bench.marker_pulse(10, 100)
+    second = bench.marker_read()
+    assert len(second) > 0
+    # Whatever the first capture held, the second must be internally
+    # consistent: a leaked timestamp shows up as one interval far larger than
+    # the rest.
+    spans = intervals(second)
+    assert max(spans) < 4 * statistics.median(spans), (
+        f"one interval dwarfs the others ({max(spans)} vs a median of "
+        f"{statistics.median(spans)}), which is what a stale timestamp looks "
+        "like"
+    )
+
+
+def test_reading_past_the_buffer_is_refused(bench: Fixture) -> None:
+    """An out-of-range read must be an error, not silent zeroes.
+
+    Zeroes decode as perfectly good timestamps, so a readout that ran off the
+    end would produce a plausible-looking capture rather than a complaint.
+    """
+    _require_marker(bench)
+    from hilbench.proto import Cmd
+
+    capacity = bench.marker_status().capacity
+    with pytest.raises(ProtocolError, match="BAD_ARGS"):
+        bench.request(Cmd.MARKER_READ, capacity.to_bytes(2, "little") + bytes([1]))
+
+
+def test_an_overlong_pulse_train_is_refused(bench: Fixture) -> None:
+    """The fixture busy-waits to generate pulses, starving its own USB.
+
+    Bounded in firmware rather than trusted to the caller: a request for a
+    second's worth would stop answering the host for longer than the runner's
+    own request timeout, which presents as a dead fixture rather than as a bad
+    argument.
+    """
+    _require_marker(bench)
+    with pytest.raises(ProtocolError, match="BAD_ARGS"):
+        bench.marker_pulse(1000, 1000)
+
+
+# ---------------------------------------------------------------------------
+# Everything below needs the marker wire to a board.
+
+
+@pytest.fixture(scope="module")
+def marker_run(request, loader, case_image, case_target, bench: Fixture):
+    """Runs `hil_marker`, arming the capture as the case announces itself.
+
+    No console handoff here, and that is the point of a dedicated marker pin:
+    the console stays up for the whole measurement, so the case can narrate
+    what it is doing while the fixture watches a different wire.
+    """
+    _require_marker(bench)
+    request.getfixturevalue("board_arch")
+    request.getfixturevalue("board_ready")()
+
+    armed: list[bool] = []
+
+    def on_line(line: str) -> None:
+        if "#HIL marker=ready" in line and not armed:
+            bench.marker_arm()
+            armed.append(True)
+
+    result = loader.boot(
+        str(case_image("hil_marker")),
+        load_addr_for(case_target),
+        timeout=BOOT_TIMEOUT,
+        on_line=on_line,
+    )
+    status = bench.marker_status()
+    stamps = bench.marker_read()
+    return result, stamps, status, bool(armed)
+
+
+def segments(stamps: list[int], gap: int) -> list[list[int]]:
+    """Splits a capture wherever the gap between edges exceeds `gap` ticks.
+
+    The case separates its patterns by pauses two orders of magnitude longer
+    than any interval inside one, so this needs no knowledge of the pattern —
+    which matters, because a threshold that had to track the case would be one
+    more thing to keep in step across two languages.
+    """
+    out: list[list[int]] = [[]]
+    previous: int | None = None
+    for stamp in stamps:
+        if previous is not None and stamp - previous > gap:
+            out.append([])
+        out[-1].append(stamp)
+        previous = stamp
+    return [s for s in out if len(s) > 1]
+
+
+@pytest.mark.board
+def test_the_capture_was_armed_and_did_not_overflow(marker_run) -> None:
+    """Bench health, checked before any measurement is read out of it."""
+    result, stamps, status, armed = marker_run
+    transcript = result.output.decode("utf-8", "replace")
+    assert armed, (
+        f"the case never announced itself, so nothing was armed:\n{transcript}"
+    )
+    assert not result.timed_out, f"the case never finished:\n{transcript}"
+    assert stamps, f"the fixture captured no edges at all:\n{transcript}"
+    assert not status.overflowed, (
+        f"the state machine stalled: {status.captured} edges captured, but "
+        "some are missing from the middle and every interval around the gap "
+        "still looks plausible"
+    )
+    print(f"\n{status}")
+    for key, value in result.report.notes.items():
+        print(f"  note {key} = {value}")
+
+
+@pytest.mark.board
+def test_every_segment_arrived(marker_run) -> None:
+    """The three patterns are all present and the right size.
+
+    Separate from the measurements below because it fails for a different
+    reason: a missing segment is a wire, an arming race or a buffer that
+    filled, none of which say anything about how well the bench measures.
+    """
+    _result, stamps, status, _armed = marker_run
+    # A gap is 20 ms in the case; anything over 5 ms is unambiguously one,
+    # since the longest interval inside a segment is 500 us.
+    found = segments(stamps, gap=status.tick_hz // 200)
+    sizes = [len(s) for s in found]
+    print(f"\nsegments: {sizes}")
+    assert len(found) == 4, f"expected four segments, got {sizes}"
+
+    square, narrow, burst, _runts = found
+    assert len(square) >= 195, f"square wave: {len(square)} of ~200 edges"
+    assert len(narrow) >= 35, f"1 us pulses: {len(narrow)} of ~40 edges"
+    assert len(burst) >= 995, f"depth burst: {len(burst)} of ~1000 edges"
+    # The runt segment is deliberately not bounded here — how many of those
+    # survive is the measurement in `test_the_shortest_measurable_pulse`, not
+    # a property anything should assert.
+
+
+@pytest.mark.board
+def test_the_two_clocks_agree(marker_run) -> None:
+    """The Pi's System Timer against the fixture's PIO timebase.
+
+    The most valuable number this whole item produces. Two independent
+    crystals, and their disagreement is the floor under every timing tolerance
+    the suite will ever set — quoting a measurement to a percent is only
+    honest if this is well inside one.
+
+    Measured over the whole square-wave segment rather than a single period,
+    so the 16 ns resolution divides down by the hundred periods in it and what
+    is left is the clocks.
+    """
+    result, stamps, status, _armed = marker_run
+    notes = result.report.notes
+    board_us = int(notes["marker_square_us"])
+
+    square = segments(stamps, gap=status.tick_hz // 200)[0]
+
+    # From the first edge to the last edge *of the same direction*, which is
+    # the only span that is a whole number of periods. Getting this wrong is
+    # not subtle in its effect and is very subtle to spot: taking the last
+    # edge of either direction spans an extra half period, which on a
+    # hundred-period segment reads as the two clocks disagreeing by 5000 ppm —
+    # a plausible-looking number, and entirely an artefact of the arithmetic.
+    last_same_direction = ((len(square) - 1) // 2) * 2
+    periods_seen = last_same_direction // 2
+    fixture_us = (square[last_same_direction] - square[0]) * 1e6 / status.tick_hz
+
+    fixture_period = fixture_us / periods_seen
+    board_period = board_us / (len(square) // 2)
+    error = abs(fixture_period - board_period) / board_period
+
+    print(
+        f"\nboard {board_period:.3f} us/period, fixture {fixture_period:.3f} "
+        f"us/period over {periods_seen} periods -> {error * 1e6:.0f} ppm"
+    )
+
+    # 1000 ppm is roughly thirty times the spec of either crystal, so this is
+    # not a tolerance on the oscillators — it is a bound loose enough that the
+    # segment-edge accounting above cannot trip it and tight enough that a
+    # wrong tick rate, a divider mistake or a missed edge cannot hide.
+    assert error < 1e-3, (
+        f"the two clocks disagree by {error * 1e6:.0f} ppm, which is far more "
+        "than two crystals should; suspect the reported tick rate rather than "
+        "the oscillators"
+    )
+
+
+@pytest.mark.board
+def test_a_one_microsecond_pulse_is_measured_accurately(marker_run) -> None:
+    """The narrowest pulse a case can deliberately ask for is measured right.
+
+    One microsecond is the System Timer's own resolution, so it is the floor
+    on any width a case can *choose*, and 62 ticks of the fixture's timebase.
+    If the bench measures this correctly then the marker convention covers
+    every event on the wish list — the shortest of them, an IRQ latency, is
+    hundreds of nanoseconds at worst.
+    """
+    _result, stamps, status, _armed = marker_run
+    narrow = segments(stamps, gap=status.tick_hz // 200)[1]
+    widths_ns = [d * 1e9 / status.tick_hz for d in intervals(narrow)]
+    median_ns = statistics.median(widths_ns)
+    print(
+        f"\n{len(narrow)} edges at a requested 1000 ns half-period: "
+        f"median {median_ns:.0f} ns, range {min(widths_ns):.0f}-"
+        f"{max(widths_ns):.0f} ns"
+    )
+    # Generous, because the board's own 1 us delay is one tick of a 1 MHz
+    # counter and therefore anywhere from just over 0 to just under 2 us
+    # depending on where in the tick it started. What this rules out is the
+    # bench being wrong by an order of magnitude, or merging the pulses.
+    assert 500 < median_ns < 3000, (
+        f"a requested 1 us half-period measured {median_ns:.0f} ns"
+    )
+
+
+@pytest.mark.board
+def test_where_the_bench_stops_seeing_pulses(marker_run) -> None:
+    """How narrow is too narrow — measured, and expected to be a limit.
+
+    The stimulus is a bare `set_high`/`set_low` pair with no delay, which is
+    not a controlled width at all: those writes are posted, so what lands on
+    the wire is whatever the peripheral bus makes it. The fixture is *expected*
+    to lose most of them, and how many survive is the number worth having,
+    because it is what tells a case author how long a marker has to be held.
+
+    Recorded rather than bounded. A pulse narrower than the two-cycle
+    detection loop shows up as two timestamps with zero ticks between them —
+    the program leaves its wait immediately and stamps X unchanged — so a zero
+    interval here is the signature of an unmeasurably short pulse rather than
+    a broken capture, and asserting it away would discard the finding.
+    """
+    result, stamps, status, _armed = marker_run
+    notes = result.report.notes
+    emitted = int(notes["marker_runt_pulses"])
+    runt_us = int(notes["marker_runt_us"])
+
+    runts = segments(stamps, gap=status.tick_hz // 200)[3]
+    widths = intervals(runts)
+    unresolvable = sum(1 for d in widths if d == 0)
+    tick_ns = 1e9 / status.tick_hz
+
+    print(
+        f"\n{emitted} back-to-back toggles in {runt_us} us "
+        f"({runt_us * 1000 / (2 * emitted):.0f} ns per edge by the board's clock)"
+    )
+    print(
+        f"  fixture resolved {len(runts)} of {2 * emitted} edges "
+        f"({100 * len(runts) / (2 * emitted):.0f}%), "
+        f"{unresolvable} of them below the {tick_ns:.0f} ns timebase"
+    )
+    measurable = [d for d in widths if d]
+    if measurable:
+        print(f"  narrowest measurable interval {min(measurable) * tick_ns:.0f} ns")
+
+    assert len(runts) >= 2, (
+        "not one runt pulse reached the fixture, which is a wire or an arming "
+        "problem rather than a resolution limit"
+    )
+
+
+@pytest.mark.board
+def test_board_side_checks_pass(marker_run) -> None:
+    """What the board could judge for itself: its own delays came out right."""
+    result, _stamps, _status, _armed = marker_run
+    report = result.report
+    assert not report.panic, f"case panicked: {report.panic}"
+    assert report.complete, report.summary()
+    failed = [c for c in report.cases if c.status == "FAIL"]
+    assert not failed, "\n".join(f"{c.name}: {c.detail}" for c in failed)
