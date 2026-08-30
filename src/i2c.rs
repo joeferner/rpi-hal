@@ -2,11 +2,14 @@
 //!
 //! Generic over the BSC instance: [`I2c<BSC1>`](crate::i2c::I2c) drives I2C1 on
 //! GPIO2 (SDA1)/GPIO3 (SCL1), the general-purpose bus on the 40-pin header,
-//! and [`I2c<BSC0>`](crate::i2c::I2c) drives BSC0 on GPIO44 (SDA0)/GPIO45
-//! (SCL0), the routing the camera/display connectors use on a Pi 3. The
+//! and [`I2c<BSC0>`](crate::i2c::I2c) drives BSC0, on either of its two
+//! routings — GPIO44 (SDA0)/GPIO45 (SCL0), the one the camera/display
+//! connectors use on a Pi 3 ([`I2c::<BSC0>::init`](crate::i2c::I2c::init)),
+//! or GPIO0 (ID_SD)/GPIO1 (ID_SC), the HAT ID EEPROM bus on the 40-pin
+//! header ([`I2c::<BSC0>::init_id`](crate::i2c::I2c::init_id)). The
 //! register layout is identical across instances (both deref to the same PAC
 //! register block); only the pin mux and the peripheral token differ, so
-//! the transfer logic is shared and each instance gets its own `init`.
+//! the transfer logic is shared and each routing gets its own constructor.
 //!
 //! Every transfer is bounded against the System Timer, which is why
 //! [`I2c::init`](crate::i2c::I2c::init) takes a [`Timer`](crate::timer::Timer). I2C is the one
@@ -106,15 +109,20 @@ impl embedded_hal::i2c::Error for Error {
 /// Blocking driver for a BCM2835 BSC I2C controller, generic over the
 /// instance `I` (defaulting to [`BSC1`] so `I2c` alone means the
 /// general-purpose header bus). Construct with [`I2c::<BSC1>::init`] for
-/// I2C1 on GPIO2/3, or [`I2c::<BSC0>::init`] for BSC0 on GPIO44/45.
+/// I2C1 on GPIO2/3, [`I2c::<BSC0>::init`] for BSC0 on GPIO44/45, or
+/// [`I2c::<BSC0>::init_id`] for BSC0 on GPIO0/1.
 ///
-/// A note on BSC0: it can be pin-muxed to two different routings —
-/// GPIO0/1 (reserved for HAT EEPROM ID detection) and GPIO44/45 (the
-/// camera/display connector bus on a Pi 3). This driver only ever drives
-/// the GPIO44/45 routing; it never touches GPIO0/1. BSC0 is also nominally
-/// owned by the VideoCore firmware, which arbitrates the camera/display
-/// bus — so a program using this should have taken the machine over rather
-/// than leaving the firmware's camera stack running to race on the bus.
+/// A note on BSC0: one controller, two routings this crate can select
+/// between — GPIO44/45 (the camera/display connector bus on a Pi 3) and
+/// GPIO0/1 (`ID_SD`/`ID_SC`, the HAT ID EEPROM bus on the 40-pin header).
+/// They are electrically different buses sharing one peripheral, so the
+/// choice is a separate constructor rather than an argument that is easy
+/// to skim past, and only one of them can be live at a time. BSC0 is also
+/// nominally owned by the VideoCore firmware, which arbitrates the
+/// camera/display bus — so a program driving the GPIO44/45 routing should
+/// have taken the machine over rather than leaving the firmware's camera
+/// stack running to race on the bus. The GPIO0/1 routing is quieter; see
+/// [`I2c::<BSC0>::init_id`] for why.
 ///
 /// Implements `embedded_hal::i2c::I2c` via its single required
 /// `transaction` method — every [`embedded_hal::i2c::Operation`] in a
@@ -168,8 +176,9 @@ impl<'a> I2c<'a, BSC1> {
 
 impl<'a> I2c<'a, BSC0> {
     /// Routes GPIO44/45 to BSC0 (ALT1: SDA0, SCL0) — the camera/display
-    /// connector bus on a Pi 3, *not* BSC0's GPIO0/1 HAT-EEPROM routing —
-    /// sets the clock divider, and enables the peripheral.
+    /// connector bus on a Pi 3, not BSC0's GPIO0/1 HAT-EEPROM routing
+    /// ([`init_id`](Self::init_id)) — sets the clock divider, and enables
+    /// the peripheral.
     ///
     /// See [`I2c::<BSC1>::init`] on why `clock_divider` is a raw `CDIV`
     /// value rather than a target frequency; the same reasoning applies.
@@ -178,6 +187,46 @@ impl<'a> I2c<'a, BSC0> {
     pub fn init(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
         gpio.gpfsel4()
             .modify(|_, w| w.fsel44().sda0().fsel45().scl0());
+        Self::configure(bsc0, clock_divider, timer)
+    }
+
+    /// Routes GPIO0/1 to BSC0 (ALT0: SDA0, SCL0) — `ID_SD`/`ID_SC` on
+    /// pins 27/28 of the 40-pin header, the HAT ID EEPROM bus — sets the
+    /// clock divider, and enables the peripheral.
+    ///
+    /// The *same* controller as [`init`](Self::init), on the other
+    /// routing: one of the two, not both, since enabling a pin's ALT
+    /// function is what connects it to the peripheral. Taking this one
+    /// therefore gives up the camera/display bus, and a driver written
+    /// against `I2c<BSC0>` (say [`crate::ov5647`]) will be talking to
+    /// whichever pair was muxed last.
+    ///
+    /// Despite the "reserved for HAT ID EEPROM detection" warning these
+    /// pins carry in Raspberry Pi's own documentation, a bare-metal
+    /// program is free to use them: the VideoCore firmware reads the
+    /// EEPROM (address 0x50, per the HAT specification) early in boot,
+    /// before the kernel image runs at all, and then leaves the pins
+    /// alone — the warning is aimed at Linux userspace, where the ID
+    /// bus is also how an add-on board's overlay gets loaded. The board
+    /// fits 1.8kΩ pull-ups on both lines, so nothing external is needed
+    /// to make the bus work either. What the warning does still mean is
+    /// that anything a fitted HAT put on this bus is shared with that
+    /// boot-time probe, and that a HAT may itself expect to be the only
+    /// thing here.
+    ///
+    /// See [`I2c::<BSC1>::init`] on why `clock_divider` is a raw `CDIV`
+    /// value rather than a target frequency; the same reasoning applies.
+    /// The HAT specification requires the ID EEPROM to work at 100kHz,
+    /// and a HAT's designer had no reason to design for more, so this is
+    /// the routing least worth overclocking. See this type's doc comment
+    /// on `timer` bounding every transfer.
+    pub fn init_id(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
+        // Pulls are left as they are, as in the other two `init`s. GPIO0/1
+        // power up pulled high, which is the direction an I2C line wants,
+        // and the board's 1.8kΩ external pull-ups are what actually hold
+        // the bus up regardless.
+        gpio.gpfsel0()
+            .modify(|_, w| w.fsel0().sda0().fsel1().scl0());
         Self::configure(bsc0, clock_divider, timer)
     }
 }

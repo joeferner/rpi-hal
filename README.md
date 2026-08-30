@@ -150,10 +150,21 @@ implementations where applicable, and all verified on real hardware:
   Examples on that bus: `examples/i2c_scan.rs`, `i2c_sh1106_oled.rs`,
   `i2c_sht41.rs` (an SHT41 temperature/humidity sensor) and
   `i2c_ads1115.rs` (an ADS1115 16-bit ADC).
-  `I2c<BSC0>` drives BSC0 on GPIO44/45 (ALT1) — the Pi 3
-  camera/display connector bus, *not* BSC0's GPIO0/1 HAT-EEPROM routing —
-  used to read an OV5647 camera sensor's chip ID (see
-  `examples/camera_probe.rs`).
+  `I2c<BSC0>` drives BSC0 on either of its two routings, one controller
+  and two pin pairs: `init` takes GPIO44/45 (ALT1), the Pi 3
+  camera/display connector bus, used to read an OV5647 camera sensor's
+  chip ID (see `examples/camera_probe.rs`); `init_id` takes GPIO0/1
+  (ALT0), `ID_SD`/`ID_SC` on header pins 27/28 — the HAT ID EEPROM bus,
+  where a board's identity and per-unit calibration live (see
+  `examples/i2c_hat_eeprom.rs`). Only one of the two can be live at a
+  time, which is why the choice is a constructor rather than an argument.
+
+  Despite the "reserved for HAT ID EEPROM detection" warning those pins
+  carry in Raspberry Pi's own documentation, a bare-metal program is free
+  to take them: the firmware reads the EEPROM early in boot, before the
+  kernel image runs, and then leaves the pins alone, and the board fits
+  1.8k pull-ups on both lines. What the warning still means is that a
+  fitted HAT may expect to be the only thing on that bus.
 
   `init` takes a `&Timer` because every transfer is bounded against the
   System Timer. I2C is the one bus here where a *foreign* device decides

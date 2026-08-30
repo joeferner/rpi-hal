@@ -62,6 +62,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`i2c::I2c::<BSC0>::init_id`**: BSC0 on its GPIO0/1 (ALT0) routing —
+  `ID_SD`/`ID_SC` on header pins 27/28, the HAT ID EEPROM bus — beside the
+  existing `init`, which stays on GPIO44/45. One controller, two
+  electrically separate buses, so the routing is a constructor rather than
+  an argument, and only one of them can be live at a time. Previously the
+  ID bus was unreachable from this crate, which put any board-identity or
+  per-unit calibration part sitting on it out of reach too.
+  `examples/i2c_hat_eeprom.rs` reads a HAT EEPROM's vendor info atom over
+  it.
 - **`stack`** (`rt` feature): `stack::headroom`, `used`, `pointer`,
   `bottom`, `top` and `size` — how much of the main stack is left, from
   inside the running program. `headroom`/`used` are `Option` because a
