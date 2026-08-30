@@ -8,7 +8,7 @@ The firmware and the host CLI share one version and ship as one release:
 they are two halves of a wire protocol, and a version that identifies
 only one of them says nothing useful about compatibility.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-30
 
 ### Added
 
@@ -29,12 +29,24 @@ only one of them says nothing useful about compatibility.
   New wire commands `EEPROM_READ` (9) and `EEPROM_WRITE` (10), and error
   codes 7 (I2C transfer failed), 8 (read-back mismatch), 9 (a request
   outside what the device will address) and 10 (the part never answered
-  the read-back). A loader
-  predating them answers an unknown command byte with `FAIL` and then
-  reads the arguments that followed as further commands, answering each
-  the same way: the CLI reports the command as failed, and the next
-  invocation's handshake clears what is left. Both halves ship as one
-  release, so that combination should only ever be a stale flash.
+  the read-back).
+
+### Changed
+
+- **The handshake's protocol version is now 2**, in both halves. It is a
+  bump for an addition rather than a change, which the version byte
+  cannot express — but the mismatch it names is the ordinary one for this
+  project, not an exotic one: the loader image is flashed once and left on
+  the card for months while the CLI is reinstalled from crates.io
+  whenever, so a newer CLI meeting an older loader is the expected way for
+  the two to drift.
+
+  Without it, `eeprom-write` against a 0.1.0 loader comes back as
+  `error code 0` — the unknown command byte answered with `FAIL` — which
+  reads as a fault on the I2C bus rather than as a stale image on the SD
+  card. With it, the handshake says `device protocol version 1, expected
+  2` first. A mismatch stays a warning, so an older CLI keeps driving a
+  newer loader for every command they share.
 
 ### Fixed
 
@@ -65,4 +77,5 @@ only one of them says nothing useful about compatibility.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
 
+[0.2.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.1.0

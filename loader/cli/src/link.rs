@@ -55,7 +55,14 @@ const HELLO: &[u8; 4] = b"RPIL";
 const ACK: &[u8; 4] = b"LIPR";
 /// Protocol version this client speaks; a mismatch is a warning, not an
 /// error, so a newer device can still be driven for the parts that match.
-const PROTOCOL_VERSION: u8 = 1;
+///
+/// 2 is the version that has the `eeprom-*` commands. A loader still
+/// answering 1 is the mismatch worth naming: this tool is installed from
+/// crates.io whenever, while the image on the SD card is flashed once and
+/// left, so the pair drifting apart in that direction is ordinary rather
+/// than exotic — and the warning is what stops an `eeprom-write` against
+/// an old loader looking like a bus fault.
+const PROTOCOL_VERSION: u8 = 2;
 /// Status byte meaning the device accepted the last thing it was sent.
 const OK: u8 = 1;
 /// Status byte meaning it did not.

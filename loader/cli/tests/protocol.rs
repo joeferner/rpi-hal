@@ -32,8 +32,9 @@ use nix::unistd::{ttyname, Pid};
 const HELLO: &[u8; 4] = b"RPIL";
 /// Magic the device answers with, followed by a version byte.
 const ACK: &[u8; 4] = b"LIPR";
-/// Protocol version the device claims.
-const VERSION: u8 = 1;
+/// Protocol version the device claims — the one this CLI speaks, so the
+/// scripted exchanges below model a matched pair.
+const VERSION: u8 = 2;
 /// Status byte for success.
 const OK: u8 = 1;
 /// Status byte for failure.
@@ -138,6 +139,12 @@ impl FakeDevice {
     /// Answers the host's HELLO, skipping anything before the magic the
     /// way the real device's framing does.
     fn handshake(&mut self) {
+        self.handshake_as(VERSION);
+    }
+
+    /// The same, claiming `version` — for scripting a loader older than
+    /// the CLI driving it.
+    fn handshake_as(&mut self, version: u8) {
         let mut matched = 0;
         while matched < HELLO.len() {
             let b = self.read_u8();
@@ -150,7 +157,7 @@ impl FakeDevice {
             };
         }
         let mut reply = ACK.to_vec();
-        reply.push(VERSION);
+        reply.push(version);
         self.write_all(&reply);
     }
 
@@ -416,6 +423,33 @@ fn mem_write_at_base_baud_skips_negotiation() {
     fx.device.recv_chunks(total, chunk, false);
     fx.device.write_all(&[OK]);
     assert_success(&fx.finish());
+}
+
+/// A loader older than the CLI must be *named* as that, and must still be
+/// driven for the commands it does have.
+///
+/// This is what the version byte is for, and the case it exists to catch
+/// is the ordinary one for this project: the image is flashed once and
+/// left on the card for months while the CLI is reinstalled from
+/// crates.io. Without the warning, a command the old loader has never
+/// heard of comes back as an unknown-command `FAIL` and reads as a fault
+/// in the hardware it was talking to.
+#[test]
+fn an_older_loader_warns_but_still_works() {
+    let mut fx = Fixture::spawn(&["exec", "0x8000"]);
+
+    fx.device.handshake_as(VERSION - 1);
+    fx.device.expect_command(CMD_EXEC);
+    assert_eq!(fx.device.read_u32(), 0x8000);
+    fx.device.write_all(&[OK]);
+
+    let output = fx.finish();
+    assert_success(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("protocol version"),
+        "the mismatch should be named, not swallowed: {stderr:?}"
+    );
 }
 
 #[test]

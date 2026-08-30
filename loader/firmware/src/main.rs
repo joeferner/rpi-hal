@@ -31,7 +31,17 @@ const HELLO: &[u8; 4] = b"RPIL";
 /// causing a false-positive version match. A 4-byte ACK match is far
 /// less likely to happen by accident.
 const ACK: &[u8; 4] = b"LIPR";
-const PROTOCOL_VERSION: u8 = 1;
+/// What this loader answers a handshake with, so a host can tell which
+/// commands it will understand. 2 adds the `CMD_EEPROM_*` pair to 1's
+/// set.
+///
+/// Bumped for an addition, not just a change, because of how this loader
+/// is used: it is flashed once and left there for months while the host
+/// CLI is updated whenever. A newer CLI meeting an older loader is
+/// therefore the *likely* mismatch, and without a version to compare it
+/// shows up as an unknown command answered with `FAIL` — an error code
+/// that says nothing about the real cause.
+const PROTOCOL_VERSION: u8 = 2;
 const OK: u8 = 1;
 const FAIL: u8 = 0;
 
