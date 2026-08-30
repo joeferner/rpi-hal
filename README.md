@@ -142,7 +142,9 @@ implementations where applicable, and all verified on real hardware:
   hardware-driven chip-selects (`ChipSelect::Cs0`/`Cs1`) or
   externally-managed (`ChipSelect::None`). Verified against a real
   independent STM32 fixture (see `bench-link`, below), not just a
-  MOSI→MISO loopback.
+  MOSI→MISO loopback. `init` takes a raw `CDIV`; `spi::divider_for`
+  turns a target SCLK into one — see the note under I2C below, which
+  applies to both buses.
 - **I2C** (`src/i2c.rs`): `embedded_hal::i2c::I2c`, master-only
   (matches this hardware), generic over the BSC instance. `I2c<BSC1>`
   drives I2C1 on the 40-pin header (GPIO2/3), verified against three real
@@ -165,6 +167,24 @@ implementations where applicable, and all verified on real hardware:
   kernel image runs, and then leaves the pins alone, and the board fits
   1.8k pull-ups on both lines. What the warning still means is that a
   fitted HAT may expect to be the only thing on that bus.
+
+  Both buses take a raw divider rather than a frequency, because the
+  core clock they divide is not a constant: it moves with `config.txt`
+  and with the firmware's own scaling. The reset default of 1500 is
+  called 100kHz on the strength of the datasheet's nominal 150MHz core,
+  and is 166kHz on a board running 250MHz. `i2c::divider_for(core_hz,
+  target_hz)` and `spi::divider_for` do the conversion, including the
+  rounding these registers need — always upwards, so the bus never
+  clocks faster than asked, since what a device states is a maximum:
+
+  ```rust
+  let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+  let i2c = I2c::init(&gpio, bsc1, i2c::divider_for(core_hz, 100_000), &timer);
+  ```
+
+  The mailbox query stays in the caller's hands rather than being folded
+  into `init`: it can fail, it costs a round trip to the GPU, and an
+  application that brings up several buses wants to ask once.
 
   `init` takes a `&Timer` because every transfer is bounded against the
   System Timer. I2C is the one bus here where a *foreign* device decides

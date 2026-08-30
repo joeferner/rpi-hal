@@ -106,6 +106,50 @@ impl embedded_hal::i2c::Error for Error {
     }
 }
 
+/// The `DIV.CDIV` value that clocks SCL at or below `target_hz`, given
+/// the SoC core clock `core_hz` — the arithmetic behind `init`'s
+/// `clock_divider`, in one place rather than in every application.
+///
+/// SCL is `core_hz / CDIV`, so this is that division rounded *up*, and
+/// then up again to the even value the hardware requires (it rounds an
+/// odd `CDIV` down, so asking for 1 would land on 0, which means 32768 —
+/// the slowest rate on the bus, not the fastest). Rounding up means the
+/// result never clocks faster than asked, which is the direction that
+/// matters: an I2C part states a maximum bus rate, so erring low makes a
+/// 400kHz device run slightly slow, while erring high makes it fail
+/// intermittently at some temperature you were not testing at. The rate
+/// actually produced is `core_hz / returned`.
+///
+/// `core_hz` has to come from the firmware rather than a constant, which
+/// is the whole reason `init` does not take a frequency itself:
+///
+/// ```ignore
+/// let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+/// let i2c = I2c::init(gpio, bsc1, i2c::divider_for(core_hz, 100_000), &timer);
+/// ```
+///
+/// The core clock moves with `config.txt` and with the firmware's own
+/// scaling, and the gap is not academic: the reset default of 1500 is
+/// documented as 100kHz because the datasheet assumes a 150MHz core, and
+/// is 166kHz on a board running 250MHz.
+///
+/// The result is clamped to what the field can usefully express, 2 to
+/// 65534. `CDIV = 0` would be one step slower still, but a zero handed
+/// back from a function like this reads as an error or a divide-by-zero
+/// everywhere it is subsequently used, and `core_hz / 65534` is under
+/// 4kHz on any Pi — far below anything an I2C part will answer.
+pub fn divider_for(core_hz: u32, target_hz: u32) -> u16 {
+    // `target_hz.max(1)` rather than a `Result` or a panic: zero is not a
+    // frequency, and the useful reading of "as slow as possible" is the
+    // largest divider, which is exactly what the clamp below produces.
+    let exact = core_hz.div_ceil(target_hz.max(1));
+    // Round up to even by adding the odd bit back, rather than
+    // `next_multiple_of(2)`, which overflows on an odd `u32::MAX` — a
+    // nonsense argument, but a public function should clamp it rather
+    // than panic in a debug build and wrap in a release one.
+    exact.saturating_add(exact % 2).clamp(2, 65534) as u16
+}
+
 /// Blocking driver for a BCM2835 BSC I2C controller, generic over the
 /// instance `I` (defaulting to [`BSC1`] so `I2c` alone means the
 /// general-purpose header bus). Construct with [`I2c::<BSC1>::init`] for
@@ -161,9 +205,12 @@ impl<'a> I2c<'a, BSC1> {
     /// an assumed core clock would silently be wrong on a board
     /// configured differently. The reset default (`0x5dc` = 1500)
     /// gives 100kHz standard mode at BCM2835's typical 150MHz core
-    /// clock; halve it for 400kHz fast mode at that same clock, or
-    /// compute against the real core clock (queried via the
-    /// VideoCore mailbox) if precision matters.
+    /// clock; halve it for 400kHz fast mode at that same clock.
+    ///
+    /// To pick one from a frequency instead — which is the only way to
+    /// get the rate you asked for on a board whose core clock is not
+    /// 150MHz — ask the mailbox for the real core clock and hand it to
+    /// [`divider_for`].
     ///
     /// `timer` bounds every transfer this driver performs — see this
     /// type's doc comment.
