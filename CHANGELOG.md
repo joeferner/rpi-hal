@@ -62,6 +62,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`i2c::divider_for` and `spi::divider_for`**: `(core_hz, target_hz)`
+  to the raw `CDIV` those drivers' `init` takes. Every consumer was
+  writing the same arithmetic and getting the same chance to be wrong,
+  the reset default of 1500 being documented as 100kHz against a nominal
+  150MHz core clock and actually being 166kHz on a board running
+  250MHz. Rounding is upwards in both, so the bus never clocks faster
+  than asked — what a device states is a maximum, and erring the other
+  way fails intermittently rather than visibly.
+
+  `core_hz` is still the caller's to fetch (`Mailbox::clock_rate_hz`
+  with `ClockId::Core`) rather than something `init` queries: it can
+  fail, it costs a round trip to the GPU, and an application bringing up
+  several buses should ask once.
 - **`i2c::I2c::<BSC0>::init_id`**: BSC0 on its GPIO0/1 (ALT0) routing —
   `ID_SD`/`ID_SC` on header pins 27/28, the HAT ID EEPROM bus — beside the
   existing `init`, which stays on GPIO44/45. One controller, two
