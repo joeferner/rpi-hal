@@ -247,9 +247,19 @@ implementations where applicable, and all verified on real hardware:
   below for how to supply your own table instead.
 - **Mailbox / 2D framebuffer** (`src/mailbox.rs`): the VideoCore
   property-interface RPC channel — clock rates, board/firmware info,
-  ARM/VC memory split, power-domain control, and a mailbox-allocated
+  ARM/VC memory split, power-domain control, die temperature and
+  throttling status, and a mailbox-allocated
   scanout framebuffer (`Framebuffer::flush()` writes back cache lines
-  before VideoCore reads them). Tear-free output is available too:
+  before VideoCore reads them).
+
+  `temperature_millicelsius` is the SoC's own thermometer (`58_000` is
+  58°C), and it is worth reading with `throttled` beside it: the
+  firmware caps the ARM clock as the die heats, so thermal throttling
+  reaches a bare-metal program as its code inexplicably getting slower
+  rather than as any kind of event. `throttled`'s word has two halves —
+  bits 0-3 for what is happening now, bits 16-19 sticky since boot,
+  which is the only way to see an under-voltage dip that has already
+  passed. `examples/soc_temperature.rs` prints all three once a second. Tear-free output is available too:
   `allocate_framebuffer_paged` asks for a buffer several screens tall and
   `set_virtual_offset` brings a finished page on screen in one step, so
   nothing is ever written to the page being scanned out (there is also
