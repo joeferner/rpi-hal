@@ -55,6 +55,10 @@ rpi-loader --device $DEV sd-write ./app.bin /APP.BIN
 rpi-loader --device $DEV sd-delete /APP.BIN
 rpi-loader --device $DEV sd-mkdir /LOGS
 
+# The board's ID EEPROM, on the HAT bus (GPIO0/1)
+rpi-loader --device $DEV eeprom-write ./myboard.eep
+rpi-loader --device $DEV eeprom-read ./readback.eep
+
 # Lower-level memory control
 rpi-loader --device $DEV mem-write 0x8000 path/to/kernel7.img
 rpi-loader --device $DEV exec 0x8000 --terminal
@@ -84,7 +88,8 @@ caller state their intent about.
 
 The handshake and terminal always run at 115200, matching the loader's
 own UART bring-up and a freshly booted kernel's default. The bulk
-transfers (`boot`, `mem-write`, `sd-read`, `sd-write`) negotiate up to
+transfers (`boot`, `mem-write`, `sd-read`, `sd-write`, `eeprom-read`,
+`eeprom-write`) negotiate up to
 `--baud` (1500000 by default) and always drop back to 115200 before
 returning, so the next invocation — and any kernel that gets booted —
 finds the link at the rate it expects.
@@ -96,6 +101,22 @@ can recover:
 ```sh
 rpi-loader --device $DEV boot --load-addr 0x8000 --baud 921600 kernel7.img
 ```
+
+## The ID EEPROM
+
+`eeprom-write` and `eeprom-read` reach a serial EEPROM on the HAT ID bus
+(GPIO0/1, header pins 27 and 28) — where a board keeps its own identity,
+including the image Raspberry Pi's `eepmake` produces from a settings
+file. The device verifies the write page by page: a write-protected part
+acknowledges every byte and stores none, so nothing but a read-back can
+tell a real write from that.
+
+`--page-size` defaults to 32 bytes, the page of the smallest part the HAT
+specification allows and a divisor of every larger part's page. A 24C256
+takes `--page-size 64` and programs in half the time; naming one larger
+than the part's own page corrupts data rather than failing, because a
+page write that overruns wraps to the start of the same page. Addressing
+is two bytes, so 64 KiB is the ceiling.
 
 ## Serial port access without sudo
 

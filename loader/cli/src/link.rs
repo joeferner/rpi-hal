@@ -27,6 +27,11 @@
 //!              host->device chunks; then a final OK / FAIL+errcode.
 //!   SD_DELETE  [path] -> OK / FAIL+errcode.
 //!   SD_MKDIR   [path] -> OK / FAIL+errcode.
+//!   EEPROM_READ  [addr u8][offset,length u32 LE] -> OK / FAIL+errcode; on
+//!              OK a device->host stream.
+//!   EEPROM_WRITE [addr u8][offset,total,chunk,page u32 LE] -> OK /
+//!              FAIL+errcode; on OK host->device chunks; then a final
+//!              OK / FAIL+errcode.
 //!
 //! A path is a u16 LE length followed by that many UTF-8 bytes. A
 //! device->host stream is [total_len,chunk_size u32 LE] then chunks
@@ -76,6 +81,10 @@ const CMD_SD_WRITE: u8 = 6;
 const CMD_SD_DELETE: u8 = 7;
 /// Create a directory on the SD card.
 const CMD_SD_MKDIR: u8 = 8;
+/// Stream bytes out of an EEPROM on the HAT ID bus.
+const CMD_EEPROM_READ: u8 = 9;
+/// Program an image into an EEPROM on the HAT ID bus.
+const CMD_EEPROM_WRITE: u8 = 10;
 
 /// Baud the handshake and terminal always run at (matches the device's
 /// UART bring-up and a loaded kernel's default). The bulk transfers
@@ -94,6 +103,13 @@ const MAX_CHUNK_RETRIES: u32 = 5;
 /// power-up poll), so an `sd-*` command's first status byte gets several
 /// timeout windows.
 const SD_STATUS_ATTEMPTS: u32 = 3;
+/// Timeout windows an `eeprom-write` chunk's ACK gets. A chunk is
+/// programmed a page at a time and every page costs an internal write
+/// cycle of a few milliseconds, so a full 4 KiB chunk takes seconds on the
+/// device — far longer than any other command spends between a chunk and
+/// its ACK, and the ACK is the flow control that keeps the transfer
+/// lockstep.
+const EEPROM_STATUS_ATTEMPTS: u32 = 4;
 /// How long the terminal keeps printing what the device already sent
 /// after the exit key, before giving up on a device that never pauses.
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
@@ -108,6 +124,12 @@ fn err_name(code: u8) -> String {
         4 => "directory listing too large".into(),
         5 => "bad path".into(),
         6 => "write failed".into(),
+        7 => "I2C transfer failed (nothing answering at that address, or the bus is held)".into(),
+        8 => "read-back did not match what was written (is the EEPROM write-protected?)".into(),
+        9 => "the device will not address that range (offset + length past 64 KiB, \
+              or an implausible page size)"
+            .into(),
+        10 => "a page was written, but the part never answered the read that checks it".into(),
         other => format!("error code {other}"),
     }
 }
@@ -294,7 +316,13 @@ impl Link {
     /// the host resends the same chunk on FAIL, up to
     /// [`MAX_CHUNK_RETRIES`] — the self-healing transfer the loader's
     /// protocol exists to provide.
-    fn send_chunked(&mut self, data: &[u8]) -> Result<()> {
+    ///
+    /// `ack_attempts` is how many timeout windows that per-chunk ACK gets.
+    /// One is right where the device only has to store the chunk; a
+    /// command that does slow work per chunk before ACKing (programming an
+    /// EEPROM page by page) needs more, or the host starts resending
+    /// chunks the device is still working through.
+    fn send_chunked(&mut self, data: &[u8], ack_attempts: u32) -> Result<()> {
         let total = data.len();
         for (offset, chunk) in (0..).step_by(CHUNK_SIZE).zip(data.chunks(CHUNK_SIZE)) {
             let mut packet = crc32(chunk).to_le_bytes().to_vec();
@@ -304,7 +332,7 @@ impl Link {
             for attempt in 1..=MAX_CHUNK_RETRIES {
                 self.check_interrupt()?;
                 self.write_all(&packet)?;
-                if self.read_status(1)? == Some(OK) {
+                if self.read_status(ack_attempts)? == Some(OK) {
                     sent = true;
                     break;
                 }
@@ -397,7 +425,7 @@ impl Link {
             bail!("device rejected header (bad size/address?)");
         }
         eprintln!("Sending {} bytes to {addr:#x}...", data.len());
-        self.send_chunked(data)?;
+        self.send_chunked(data, 1)?;
         if self.read_status(1)? != Some(OK) {
             bail!("device reported overall checksum mismatch");
         }
@@ -471,7 +499,7 @@ impl Link {
             bail!("sd-write failed: {reason}");
         }
         eprintln!("Sending {} bytes -> {remote}...", data.len());
-        self.send_chunked(data)?;
+        self.send_chunked(data, 1)?;
         if self.read_status(SD_STATUS_ATTEMPTS)? != Some(OK) {
             let reason = self.fail_reason()?;
             bail!("sd-write did not commit: {reason}");
@@ -488,6 +516,57 @@ impl Link {
     /// the parent directories must already exist.
     pub fn sd_mkdir(&mut self, remote: &str) -> Result<()> {
         self.start_sd_command(CMD_SD_MKDIR, remote, "sd-mkdir")
+    }
+
+    /// Reads `length` bytes from `offset` in the EEPROM at the 7-bit
+    /// I2C `address` on the HAT ID bus.
+    pub fn eeprom_read(&mut self, address: u8, offset: u32, length: u32) -> Result<Vec<u8>> {
+        let mut packet = vec![CMD_EEPROM_READ, address];
+        packet.extend_from_slice(&offset.to_le_bytes());
+        packet.extend_from_slice(&length.to_le_bytes());
+        self.write_all(&packet)?;
+        if self.read_status(EEPROM_STATUS_ATTEMPTS)? != Some(OK) {
+            let reason = self.fail_reason()?;
+            bail!("eeprom-read failed: {reason}");
+        }
+        self.recv_chunked()
+    }
+
+    /// Programs `data` into the EEPROM at the 7-bit I2C `address` on the
+    /// HAT ID bus, starting at `offset`.
+    ///
+    /// `page_size` is the part's page size: the device writes a page at a
+    /// time and a write crossing a page boundary wraps within the page
+    /// instead of carrying, so naming it too large corrupts data rather
+    /// than failing. The device reads every page back after programming
+    /// it, so a success here means the bytes are actually in the part.
+    pub fn eeprom_write(
+        &mut self,
+        address: u8,
+        offset: u32,
+        page_size: u32,
+        data: &[u8],
+    ) -> Result<()> {
+        let mut packet = vec![CMD_EEPROM_WRITE, address];
+        packet.extend_from_slice(&offset.to_le_bytes());
+        packet.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        packet.extend_from_slice(&(CHUNK_SIZE as u32).to_le_bytes());
+        packet.extend_from_slice(&page_size.to_le_bytes());
+        self.write_all(&packet)?;
+        if self.read_status(EEPROM_STATUS_ATTEMPTS)? != Some(OK) {
+            let reason = self.fail_reason()?;
+            bail!("eeprom-write failed: {reason}");
+        }
+        eprintln!(
+            "Programming {} bytes at offset {offset} of 0x{address:02x}...",
+            data.len()
+        );
+        self.send_chunked(data, EEPROM_STATUS_ATTEMPTS)?;
+        if self.read_status(EEPROM_STATUS_ATTEMPTS)? != Some(OK) {
+            let reason = self.fail_reason()?;
+            bail!("eeprom-write did not commit: {reason}");
+        }
+        Ok(())
     }
 
     /// Acts as a bidirectional passthrough terminal: what the device

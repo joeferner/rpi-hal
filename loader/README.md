@@ -61,6 +61,11 @@ with `--device`, then takes its own arguments:
 - `sd-delete <remote>` — delete `<remote>` from the SD card.
 - `sd-mkdir <remote>` — create the directory `<remote>` on the SD card
   (a single level; the parent directories must already exist).
+- `eeprom-read <local>` — copy an EEPROM on the HAT ID bus (GPIO0/1) to
+  the `<local>` file. With no `--length`, reads the image length out of
+  the HAT header first.
+- `eeprom-write <local>` — program `<local>` into that EEPROM, verifying
+  every page as it goes. See below.
 - `boot <image>` — convenience: `mem-write` the image, `exec` its load
   address, then act as a terminal. Requires `--load-addr` (`0x8000` for
   a 32-bit `kernel7.img`, `0x80000` for a 64-bit `kernel8.img`).
@@ -73,7 +78,8 @@ with `--device`, then takes its own arguments:
   find what to pass to `--device`. The only subcommand that neither
   opens a port nor needs one.
 
-The bulk commands (`mem-write`, `sd-read`, `sd-write`, `boot`) also take
+The bulk commands (`mem-write`, `sd-read`, `sd-write`, `boot`,
+`eeprom-read`, `eeprom-write`) also take
 `--baud` to pick the transfer rate (see below). Booting an uploaded
 image is just `mem-write` + `exec`; `boot` chains them plus the terminal
 to reproduce the classic one-shot upload flow.
@@ -262,6 +268,10 @@ rpi-loader --device $DEV sd-write ./app.bin /APP.BIN
 rpi-loader --device $DEV sd-delete /APP.BIN
 rpi-loader --device $DEV sd-mkdir /LOGS
 
+# The board's ID EEPROM, on the HAT bus (GPIO0/1)
+rpi-loader --device $DEV eeprom-write ./myboard.eep
+rpi-loader --device $DEV eeprom-read ./readback.eep
+
 # Lower-level memory control
 rpi-loader --device $DEV mem-write 0x8000 path/to/kernel7.img
 rpi-loader --device $DEV exec 0x8000 --terminal
@@ -316,6 +326,47 @@ rpi-loader --device <device> boot --load-addr 0x80000 \
 
 Seeing `[rpi-loader: 64-bit payload running]` in the passthrough
 terminal confirms the handoff.
+
+### The ID EEPROM
+
+`eeprom-write` and `eeprom-read` reach a serial EEPROM on BSC0's GPIO0/1
+routing — `ID_SD`/`ID_SC`, pins 27 and 28 of the 40-pin header — which is
+where a board keeps its own identity: the HAT specification's image
+(vendor, product, UUID, GPIO map, an optional device tree overlay), and
+whatever a design adds beside it, such as per-unit calibration. The
+firmware reads that EEPROM early in boot and then leaves the bus alone,
+so the loader has it to itself.
+
+```sh
+# Program an image produced by Raspberry Pi's `eepmake`, then read it back
+rpi-loader --device $DEV eeprom-write ./myboard.eep
+rpi-loader --device $DEV eeprom-read ./readback.eep
+cmp ./myboard.eep ./readback.eep
+```
+
+Four things worth knowing:
+
+- **The write is verified on the device.** Every page is read back after
+  it is programmed, and a mismatch fails the command. This is not
+  belt-and-braces: a write-protected part (`WP` tied high, which on a
+  board that puts write protect on a solder jumper is the default state)
+  acknowledges every byte and stores none, so without the read-back a
+  write to a protected EEPROM would report a clean success.
+- **`--page-size` must not exceed the part's own page.** The default, 32
+  bytes, is the page of a 24C32 — the smallest part the HAT specification
+  allows — and divides every larger part's page, so it is always safe. A
+  24C256's page is 64 bytes and programs in half the time. Naming one too
+  large corrupts data rather than failing: a page write that runs past the
+  boundary wraps to the start of the same page instead of carrying.
+- **Addressing is two bytes**, so 64 KiB is the ceiling, and parts below
+  the 24C32 (which address with one byte) are not supported.
+- **`--address` defaults to `0x50`**, what the HAT specification assigns
+  the ID EEPROM. Another part on the same bus can be reached by naming
+  its address.
+
+Producing the `.eep` image is a separate job, and the Raspberry Pi
+`hats` repository's `eepmake` is the tool for it: it turns a text
+settings file into the binary this command programs.
 
 ## Limitations
 

@@ -2,8 +2,11 @@
 #![no_main]
 
 use core::fmt::Write;
+use embedded_hal::i2c::I2c as _;
 use embedded_sdmmc::{Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager};
+use rpi_hal::i2c::I2c;
 use rpi_hal::mailbox::Mailbox;
+use rpi_hal::pac::BSC0;
 use rpi_hal::sd::{Sd, SdCard, SdCardError};
 use rpi_hal::timer::Timer;
 use rpi_hal::{pac, uart::Uart};
@@ -48,7 +51,8 @@ const FAIL: u8 = 0;
 // `u32` LE baud; the device ACKs at the *current* baud, then switches.
 // `CMD_EXEC` is followed by a `u32` LE address to jump to. The `CMD_SD_*`
 // commands read/write/list/delete files and create directories on the SD
-// card's FAT boot partition.
+// card's FAT boot partition. The `CMD_EEPROM_*` commands read and write a
+// serial EEPROM on the HAT ID bus (see [`init_i2c`]).
 const CMD_MEM_WRITE: u8 = 1;
 const CMD_SET_BAUD: u8 = 2;
 const CMD_EXEC: u8 = 3;
@@ -57,6 +61,8 @@ const CMD_SD_READ: u8 = 5;
 const CMD_SD_WRITE: u8 = 6;
 const CMD_SD_DELETE: u8 = 7;
 const CMD_SD_MKDIR: u8 = 8;
+const CMD_EEPROM_READ: u8 = 9;
+const CMD_EEPROM_WRITE: u8 = 10;
 
 // Error codes, sent as the byte right after a leading `FAIL` when a
 // command can't even begin (bad path, SD bring-up failed, filesystem
@@ -68,6 +74,10 @@ const ERR_FS: u8 = 3;
 const ERR_TOO_LARGE: u8 = 4;
 const ERR_BAD_PATH: u8 = 5;
 const ERR_WRITE: u8 = 6;
+const ERR_I2C: u8 = 7;
+const ERR_VERIFY: u8 = 8;
+const ERR_RANGE: u8 = 9;
+const ERR_READBACK: u8 = 10;
 
 /// Stay clear of the relocated loader's own copy — see `boot.s`. Every
 /// `CMD_MEM_WRITE`/`CMD_EXEC` address must fall below this, so a client
@@ -88,6 +98,39 @@ const MAX_PATH: usize = 255;
 /// streaming, so an unusually large directory is rejected with
 /// [`ERR_TOO_LARGE`] rather than overrunning the buffer.
 const LISTING_CAP: usize = 8192;
+
+/// BSC clock divider for the EEPROM bus: the reset default, 100kHz at a
+/// 150MHz core clock and 166kHz at 250MHz. Either is within what every
+/// 24C-series part does, and the HAT specification only asks for 100kHz —
+/// there is nothing to gain from computing an exact rate here, which
+/// would mean asking the mailbox for the real core clock first.
+const EEPROM_CDIV: u16 = 0x05dc;
+
+/// One past the highest EEPROM byte this loader will address. The two-byte
+/// addressing it uses (what every part from the 24C32 up expects, and the
+/// HAT specification's floor is a 24C32) reaches 64 KiB and no further, so
+/// a request past this is refused with [`ERR_RANGE`] rather than
+/// silently wrapping to the start of the device.
+const EEPROM_LIMIT: usize = 0x1_0000;
+
+/// Largest page write accepted from the host. A page write must not cross
+/// the part's own page boundary — the address counter wraps within the
+/// page rather than carrying, so an overrunning write silently overwrites
+/// the *start* of the same page. The host names its part's page size; this
+/// only bounds the buffer.
+const EEPROM_MAX_PAGE: usize = 128;
+
+/// How long to leave a page alone after writing it, while the part
+/// performs its internal write cycle. Datasheets quote 5ms maximum for
+/// this family; this is that, rounded up.
+const EEPROM_WRITE_CYCLE_MS: u32 = 6;
+
+/// How many times the verifying read is attempted before the page is
+/// called a failure. More than one because [`EEPROM_WRITE_CYCLE_MS`] is a
+/// datasheet number rather than a measurement of the part actually
+/// fitted: a slow one answers nothing on the first attempt, and the cost
+/// of finding out is one more transfer.
+const EEPROM_READBACK_ATTEMPTS: u32 = 4;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -175,6 +218,18 @@ pub extern "C" fn kmain() -> ! {
             }
             CMD_SD_MKDIR => {
                 if let Err(code) = cmd_sd_mkdir(&mut uart, &timer) {
+                    uart.write_byte(FAIL);
+                    uart.write_byte(code);
+                }
+            }
+            CMD_EEPROM_READ => {
+                if let Err(code) = cmd_eeprom_read(&mut uart, &timer, &mut chunk_buf) {
+                    uart.write_byte(FAIL);
+                    uart.write_byte(code);
+                }
+            }
+            CMD_EEPROM_WRITE => {
+                if let Err(code) = cmd_eeprom_write(&mut uart, &timer, &mut chunk_buf) {
                     uart.write_byte(FAIL);
                     uart.write_byte(code);
                 }
@@ -461,6 +516,241 @@ fn cmd_sd_mkdir(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
 
     uart.write_byte(OK);
     Ok(())
+}
+
+/// `CMD_EEPROM_READ`: stream bytes out of a serial EEPROM on the HAT ID
+/// bus to the host.
+///
+/// Reads a `u8` device address, a `u32` LE `offset` and a `u32` LE
+/// `length`, probes the device, then streams the range as CRC-checked
+/// chunks. `Err(code)` means the read never started — an out-of-range
+/// request ([`ERR_RANGE`]) or nothing answering at that address
+/// ([`ERR_I2C`]); the caller sends `FAIL` + `code`.
+///
+/// The probe is what makes "nothing is fitted" a clean failure: once the
+/// leading `OK` is out, the stream is committed, and a later bus error
+/// can only stop it short and leave the host's per-chunk timeout to
+/// report it.
+fn cmd_eeprom_read(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
+    let address = uart.read_byte();
+    let offset = read_u32_le(uart) as usize;
+    let length = read_u32_le(uart) as usize;
+    if length == 0 || !in_eeprom_range(offset, length) {
+        return Err(ERR_RANGE);
+    }
+
+    let mut i2c = init_i2c(timer);
+    let mut probe = [0u8; 1];
+    eeprom_read_at(&mut i2c, address, offset as u16, &mut probe).map_err(|_| ERR_I2C)?;
+
+    uart.write_byte(OK);
+    write_u32(uart, length as u32);
+    write_u32(uart, STREAM_CHUNK_SIZE as u32);
+
+    let mut done = 0;
+    while done < length {
+        let want = core::cmp::min(STREAM_CHUNK_SIZE, length - done);
+        let at = (offset + done) as u16;
+        if eeprom_read_at(&mut i2c, address, at, &mut chunk_buf[..want]).is_err() {
+            break;
+        }
+        send_chunk(uart, &chunk_buf[..want]);
+        done += want;
+    }
+    Ok(())
+}
+
+/// `CMD_EEPROM_WRITE`: receive an image from the host and program it into
+/// a serial EEPROM on the HAT ID bus.
+///
+/// Reads a `u8` device address, then `u32` LE `offset`, `total_size`,
+/// `chunk_size` and `page_size`, and receives the payload as CRC-checked
+/// chunks, programming each chunk a page at a time. `Err(code)` means the
+/// write never started; the caller sends `FAIL` + `code`. After the
+/// leading `OK`, chunks are always drained to keep the link in sync even
+/// once programming has failed, and a final status byte (`OK`, or `FAIL` +
+/// [`ERR_I2C`]/[`ERR_READBACK`]/[`ERR_VERIFY`], which say respectively
+/// that the page write was not acknowledged, that the part never answered
+/// the read that follows it, and that it answered with something other
+/// than what was written) reports the committed result. A header that
+/// asks for something outside the device's reach — past [`EEPROM_LIMIT`],
+/// or a page larger than [`EEPROM_MAX_PAGE`] — is [`ERR_RANGE`], refused
+/// before any of it is written.
+///
+/// `page_size` comes from the host because the device cannot know what
+/// part is fitted, and a page write that crosses the part's page boundary
+/// wraps to the start of that page instead of carrying — corrupting data
+/// already written rather than failing. It must divide the page size of
+/// the real part; the HAT specification's floor (a 24C32) has 32-byte
+/// pages, which is what the host defaults to.
+fn cmd_eeprom_write(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
+    let address = uart.read_byte();
+    let offset = read_u32_le(uart) as usize;
+    let total_size = read_u32_le(uart) as usize;
+    let chunk_size = read_u32_le(uart) as usize;
+    let page_size = read_u32_le(uart) as usize;
+
+    if total_size == 0 || !in_eeprom_range(offset, total_size) {
+        return Err(ERR_RANGE);
+    }
+    // A non-power-of-two page size would make the "distance to the next
+    // page boundary" arithmetic below wrong, and no part in this family
+    // has one.
+    if chunk_size == 0
+        || chunk_size > chunk_buf.len()
+        || page_size == 0
+        || page_size > EEPROM_MAX_PAGE
+        || !page_size.is_power_of_two()
+    {
+        return Err(ERR_RANGE);
+    }
+
+    let mut i2c = init_i2c(timer);
+    uart.write_byte(OK);
+
+    let mut failure = None;
+    let mut done = 0;
+    while done < total_size {
+        let this_len = core::cmp::min(chunk_size, total_size - done);
+        recv_chunk(uart, chunk_buf, this_len);
+        if failure.is_none() {
+            failure = eeprom_write_pages(
+                &mut i2c,
+                timer,
+                address,
+                offset + done,
+                &chunk_buf[..this_len],
+                page_size,
+            )
+            .err();
+        }
+        // ACK after programming, not before — the same flow control the SD
+        // write path relies on (see `recv_chunk`), and this side is far
+        // slower: a page's internal write cycle is milliseconds, during
+        // which nothing is draining the RX FIFO.
+        uart.write_byte(OK);
+        done += this_len;
+    }
+
+    match failure {
+        None => uart.write_byte(OK),
+        Some(code) => {
+            uart.write_byte(FAIL);
+            uart.write_byte(code);
+        }
+    }
+    Ok(())
+}
+
+/// Programs `data` into the EEPROM starting at `at`, one page write at a
+/// time, waiting out each internal write cycle and reading the page back
+/// to confirm it took.
+///
+/// The read-back is not belt and braces: a write-protected part (the `WP`
+/// pin tied high, which on a board with the HAT ID EEPROM's write protect
+/// on a jumper is the normal state) acknowledges every byte and stores
+/// none. Without the verify this command would report a clean success and
+/// leave the EEPROM exactly as it was.
+///
+/// The wait between the two is a fixed delay rather than the acknowledge
+/// polling the datasheet also describes. Polling is the faster technique
+/// — a part is typically ready in well under its specified time — but it
+/// has to begin after the part has registered the STOP that starts the
+/// write cycle, and two back-to-back BSC transactions are only tens of
+/// microseconds apart. Polled that early it reported ready when it was
+/// not: the first page of an image landed and the sequence then failed on
+/// the transfer after it, leaving the rest of the EEPROM erased. Waiting
+/// out [`EEPROM_WRITE_CYCLE_MS`] has no such race, and the read-back that
+/// follows is the real evidence the page took — so the delay only has to
+/// be long enough, not exact.
+fn eeprom_write_pages(
+    i2c: &mut I2c<'_, BSC0>,
+    timer: &Timer,
+    address: u8,
+    at: usize,
+    data: &[u8],
+    page_size: usize,
+) -> Result<(), u8> {
+    // Two bytes of address ahead of the payload, since a page write is one
+    // I2C transaction: address high, address low, then the page's bytes.
+    let mut packet = [0u8; 2 + EEPROM_MAX_PAGE];
+    let mut readback = [0u8; EEPROM_MAX_PAGE];
+
+    let mut written = 0;
+    while written < data.len() {
+        let at = at + written;
+        // Stop at the next page boundary: `at` is not necessarily aligned
+        // (an `--offset` can start anywhere), so the first write of a run
+        // is usually short and the rest are full pages.
+        let to_boundary = page_size - (at % page_size);
+        let len = core::cmp::min(to_boundary, data.len() - written);
+
+        packet[..2].copy_from_slice(&(at as u16).to_be_bytes());
+        packet[2..2 + len].copy_from_slice(&data[written..written + len]);
+        i2c.write(address, &packet[..2 + len])
+            .map_err(|_| ERR_I2C)?;
+
+        let mut read = Err(());
+        for _ in 0..EEPROM_READBACK_ATTEMPTS {
+            timer.delay_ms(EEPROM_WRITE_CYCLE_MS);
+            read = eeprom_read_at(i2c, address, at as u16, &mut readback[..len]).map_err(|_| ());
+            if read.is_ok() {
+                break;
+            }
+        }
+        // A read that never answered says something different from one
+        // that answered wrongly: the first is a part still busy (or gone),
+        // the second is a write that did not take.
+        read.map_err(|_| ERR_READBACK)?;
+        if readback[..len] != data[written..written + len] {
+            return Err(ERR_VERIFY);
+        }
+        written += len;
+    }
+    Ok(())
+}
+
+/// Reads `buf.len()` bytes from `at`: a two-byte address write, then a
+/// read the part answers from its address counter, incrementing through.
+///
+/// The two are separate transactions with a STOP between them rather than
+/// a repeated start, which this hardware's driver does not offer. That is
+/// safe here specifically because the address write carries no data byte:
+/// the part latches the counter without starting a write cycle, and the
+/// counter survives the STOP.
+fn eeprom_read_at(
+    i2c: &mut I2c<'_, BSC0>,
+    address: u8,
+    at: u16,
+    buf: &mut [u8],
+) -> Result<(), rpi_hal::i2c::Error> {
+    i2c.write(address, &at.to_be_bytes())?;
+    i2c.read(address, buf)
+}
+
+/// Whether `offset..offset + length` fits inside what two-byte addressing
+/// can reach (see [`EEPROM_LIMIT`]).
+fn in_eeprom_range(offset: usize, length: usize) -> bool {
+    offset
+        .checked_add(length)
+        .is_some_and(|end| end <= EEPROM_LIMIT)
+}
+
+/// Brings BSC0 up on the HAT ID bus — GPIO0/1 (`ID_SD`/`ID_SC`), header
+/// pins 27/28 — for the `eeprom-*` commands.
+///
+/// That is the bus a board's identity EEPROM sits on, and it is otherwise
+/// idle once the firmware has read it during boot. Note which routing this
+/// takes: BSC0's other one is GPIO44/45, the camera/display connector bus,
+/// and the two cannot both be muxed at once.
+///
+/// Re-`steal()`s its peripherals per command, exactly as
+/// [`init_volume_mgr`] does, so nothing has to be threaded through the
+/// command loop; sound for the same reason — single core, and the
+/// previous command's driver is long dropped.
+fn init_i2c(timer: &Timer) -> I2c<'_, BSC0> {
+    let peripherals = unsafe { pac::Peripherals::steal() };
+    I2c::<BSC0>::init_id(&peripherals.GPIO, peripherals.BSC0, EEPROM_CDIV, timer)
 }
 
 /// Brings the SD card up from scratch and wraps it in a

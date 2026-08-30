@@ -27,6 +27,30 @@ use link::{Link, BASE_BAUD, DEFAULT_BAUD};
 /// the signal number.
 const EXIT_INTERRUPTED: u8 = 130;
 
+/// The 7-bit I2C address the HAT specification assigns the ID EEPROM, as
+/// the text `--help` shows and [`parse_i2c_address`] parses.
+const HAT_EEPROM_ADDRESS: &str = "0x50";
+
+/// Page size assumed when programming an EEPROM. 32 bytes is the page of
+/// a 24C32 — the smallest part the HAT specification allows — and every
+/// larger part's page is a multiple of it, so a 32-byte write never
+/// crosses a page boundary whatever is fitted.
+const DEFAULT_PAGE_SIZE: u32 = 32;
+
+/// Header the HAT specification puts at the start of an ID EEPROM image:
+/// `"R-Pi"`, a format version and a reserved byte, the atom count, then
+/// the image length. Only the signature and that length are read here —
+/// enough for `eeprom-read` to work out how much to read.
+const HAT_HEADER_LEN: u32 = 12;
+/// Magic the header starts with.
+const HAT_SIGNATURE: &[u8; 4] = b"R-Pi";
+/// Where the image length sits within the header.
+const HAT_EEPLEN_AT: usize = 8;
+/// Ceiling on an image length taken from the header, matching what the
+/// device's two-byte addressing can reach — a corrupt header should be an
+/// error, not a request to read 4 GiB one chunk at a time.
+const HAT_MAX_IMAGE: u32 = 0x1_0000;
+
 /// Upload firmware to a Raspberry Pi over serial, and read or write its
 /// SD card, without touching the card itself.
 #[derive(Parser)]
@@ -131,6 +155,58 @@ enum Command {
         remote: String,
     },
 
+    /// Copy an EEPROM's contents off the HAT ID bus (GPIO0/1) into a file.
+    EepromRead {
+        /// Local file to write.
+        local: PathBuf,
+        /// How many bytes to read. Default: the image length from the HAT
+        /// EEPROM header, which requires the EEPROM to hold one.
+        #[arg(long, value_parser = parse_u32)]
+        length: Option<u32>,
+        /// 7-bit I2C address. 0x50 is what the HAT specification assigns
+        /// the ID EEPROM.
+        // The default is spelled as the string `--help` should show: with
+        // `default_value_t` clap prints the `u8`, and "80" is a poor way
+        // to write an I2C address every datasheet gives as 0x50.
+        #[arg(long, value_parser = parse_i2c_address, default_value = HAT_EEPROM_ADDRESS)]
+        address: u8,
+        /// Byte offset to start at.
+        #[arg(long, value_parser = parse_u32, default_value_t = 0)]
+        offset: u32,
+        /// Baud to negotiate for the transfer; the link always returns to
+        /// 115200 afterward.
+        #[arg(long, value_parser = parse_u32, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+
+    /// Program a local image into an EEPROM on the HAT ID bus (GPIO0/1).
+    EepromWrite {
+        /// Local image to program — for a HAT ID EEPROM, the `.eep` file
+        /// Raspberry Pi's `eepmake` produces.
+        local: PathBuf,
+        /// 7-bit I2C address. 0x50 is what the HAT specification assigns
+        /// the ID EEPROM.
+        // The default is spelled as the string `--help` should show: with
+        // `default_value_t` clap prints the `u8`, and "80" is a poor way
+        // to write an I2C address every datasheet gives as 0x50.
+        #[arg(long, value_parser = parse_i2c_address, default_value = HAT_EEPROM_ADDRESS)]
+        address: u8,
+        /// Byte offset to start at.
+        #[arg(long, value_parser = parse_u32, default_value_t = 0)]
+        offset: u32,
+        /// The part's page size in bytes. The default suits every part
+        /// from the 24C32 (the HAT specification's floor) up; a 24C256's
+        /// own page is 64 bytes, which programs in half the time. Too
+        /// large corrupts data rather than failing, since a page write
+        /// that overruns wraps to the start of the same page.
+        #[arg(long, value_parser = parse_u32, default_value_t = DEFAULT_PAGE_SIZE)]
+        page_size: u32,
+        /// Baud to negotiate for the transfer; the link always returns to
+        /// 115200 afterward.
+        #[arg(long, value_parser = parse_u32, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+
     /// Passthrough serial terminal only, with no handshake.
     Terminal,
 
@@ -169,6 +245,18 @@ fn parse_u32(s: &str) -> Result<u32, String> {
         _ => (&text[..], 10),
     };
     u32::from_str_radix(digits, radix).map_err(|e| format!("{s:?} is not a number: {e}"))
+}
+
+/// Parses a 7-bit I2C address in any of the bases [`parse_u32`] takes,
+/// rejecting anything the bus cannot carry. 0x00-0x07 and 0x78-0x7f are
+/// reserved by the I2C specification, but a part answering there is the
+/// user's business, not this tool's — only the 7-bit range is enforced.
+fn parse_i2c_address(s: &str) -> Result<u8, String> {
+    let value = parse_u32(s)?;
+    u8::try_from(value)
+        .ok()
+        .filter(|&address| address <= 0x7f)
+        .ok_or_else(|| format!("{s:?} is not a 7-bit I2C address (0x00-0x7f)"))
 }
 
 /// Reads a local file, naming it if that fails.
@@ -245,6 +333,36 @@ fn list_ports(all: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Works out how much of an EEPROM to read when `--length` was not given,
+/// by reading the HAT header at `offset` and taking the image length out
+/// of it.
+///
+/// The alternative would be reading the whole address space, which for a
+/// 32 KiB part means seconds of I2C traffic to recover a few hundred bytes
+/// of atoms and 31 KiB of `0xff`. An EEPROM without a valid header is
+/// asked for by length instead — the error says so.
+fn hat_image_length(link: &mut Link, address: u8, offset: u32) -> Result<u32> {
+    let header = link.eeprom_read(address, offset, HAT_HEADER_LEN)?;
+    if !header.starts_with(HAT_SIGNATURE) {
+        return Err(anyhow!(
+            "0x{address:02x} does not hold a HAT image (no \"R-Pi\" signature at offset \
+             {offset}); pass --length to read it anyway"
+        ));
+    }
+    let eeplen = u32::from_le_bytes(
+        header[HAT_EEPLEN_AT..HAT_EEPLEN_AT + 4]
+            .try_into()
+            .expect("the header is 12 bytes, so this slice is 4"),
+    );
+    if !(HAT_HEADER_LEN..=HAT_MAX_IMAGE).contains(&eeplen) {
+        return Err(anyhow!(
+            "the HAT header claims an image length of {eeplen} bytes, which is not \
+             plausible; pass --length to read it anyway"
+        ));
+    }
+    Ok(eeplen)
 }
 
 fn main() -> ExitCode {
@@ -367,6 +485,57 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
         Command::SdMkdir { remote } => {
             link.sd_mkdir(&remote)?;
             eprintln!("Created directory {remote}");
+        }
+
+        Command::EepromRead {
+            local,
+            length,
+            address,
+            offset,
+            baud,
+        } => {
+            link.negotiate_baud(baud)?;
+            let length = match length {
+                Some(length) => length,
+                None => hat_image_length(&mut link, address, offset)?,
+            };
+            let data = link.eeprom_read(address, offset, length)?;
+            link.negotiate_baud(BASE_BAUD)?;
+            fs::write(&local, &data).with_context(|| format!("writing {}", local.display()))?;
+            eprintln!(
+                "Read {} bytes from 0x{address:02x} -> {}",
+                data.len(),
+                local.display()
+            );
+        }
+
+        Command::EepromWrite {
+            local,
+            address,
+            offset,
+            page_size,
+            baud,
+        } => {
+            let data = read_file(&local)?;
+            if data.is_empty() {
+                return Err(anyhow!("{} is empty", local.display()));
+            }
+            // A warning rather than a refusal: this command programs an
+            // EEPROM, and only the usual one on this bus holds a HAT image.
+            if offset == 0 && !data.starts_with(HAT_SIGNATURE) {
+                eprintln!(
+                    "Warning: {} does not start with the HAT signature \"R-Pi\"; \
+                     writing it anyway.",
+                    local.display()
+                );
+            }
+            link.negotiate_baud(baud)?;
+            link.eeprom_write(address, offset, page_size, &data)?;
+            link.negotiate_baud(BASE_BAUD)?;
+            eprintln!(
+                "Programmed and verified {} bytes at offset {offset} of 0x{address:02x}.",
+                data.len()
+            );
         }
 
         Command::Terminal => link.terminal()?,

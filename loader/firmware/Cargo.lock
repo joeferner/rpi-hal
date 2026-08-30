@@ -83,9 +83,9 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a03b01c0be63612bfe575b75ce663382521011ecf59ab0910b787b94d482981e"
+checksum = "50638234367c4097fc38a0f4af6c1be86fa3c6edbe1bae2c1c1e942b1152bd91"
 dependencies = [
  "bcm2711-lpa",
  "bcm2837-lpa",
@@ -99,6 +99,7 @@ dependencies = [
 name = "rpi-loader-firmware"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal",
  "embedded-sdmmc",
  "rpi-hal",
 ]

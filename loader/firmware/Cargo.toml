@@ -39,11 +39,20 @@ publish = false
 # "turn bcm2837 off"; harmless (rpi-hal's `pac` re-export prefers
 # `bcm2711` when both are enabled), just not a build that drops
 # `bcm2837-lpa` entirely.
-rpi-hal = { version = "0.1.0", default-features = false, features = ["embedded-sdmmc", "bcm2837"] }
+#
+# 0.3.0 is a floor rather than whatever was current: the `eeprom-*`
+# commands need `I2c::<BSC0>::init_id`, BSC0 muxed to its GPIO0/1 (HAT ID
+# bus) routing, which no earlier version can reach at all.
+rpi-hal = { version = "0.3.0", default-features = false, features = ["embedded-sdmmc", "bcm2837"] }
 # The FAT layer itself. This is a separate crate from rpi-hal (which only
 # provides the BlockDevice adapter), so the loader depends on it directly
 # for the `VolumeManager`/`Mode`/`TimeSource`/`VolumeIdx` types it drives.
 embedded-sdmmc = { version = "0.9.0", default-features = false }
+# rpi-hal's `I2c` implements `embedded_hal::i2c::I2c` rather than carrying
+# inherent read/write methods, so the trait has to be in scope here for
+# the `eeprom-*` commands to call them. Same major version rpi-hal itself
+# depends on, so both halves see one set of traits.
+embedded-hal = { version = "1.0.0", default-features = false }
 
 [features]
 # Forwards to rpi-hal's `bcm2711` feature, so this crate's own peripheral

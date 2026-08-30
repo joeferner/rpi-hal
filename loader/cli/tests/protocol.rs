@@ -55,11 +55,21 @@ const CMD_SD_READ: u8 = 5;
 const CMD_SD_WRITE: u8 = 6;
 const CMD_SD_DELETE: u8 = 7;
 const CMD_SD_MKDIR: u8 = 8;
+const CMD_EEPROM_READ: u8 = 9;
+const CMD_EEPROM_WRITE: u8 = 10;
 
 /// Error code the device sends for a missing file.
 const ERR_NOT_FOUND: u8 = 2;
 /// Error code the device sends when a write cannot be committed.
 const ERR_WRITE: u8 = 6;
+/// Error code the device sends when an EEPROM page read back differently
+/// than it was written.
+const ERR_VERIFY: u8 = 8;
+
+/// Address the HAT ID EEPROM answers at, and the CLI's default.
+const HAT_EEPROM_ADDRESS: u8 = 0x50;
+/// Page size the CLI asks for unless told otherwise.
+const DEFAULT_PAGE_SIZE: u32 = 32;
 
 /// How long the child gets before the watchdog kills it. Only ever
 /// reached when something has already gone wrong; a passing test finishes
@@ -534,6 +544,119 @@ fn sd_delete_and_mkdir_round_trip_their_paths() {
         fx.device.write_all(&[OK]);
         assert_success(&fx.finish());
     }
+}
+
+/// A HAT ID EEPROM image: the 12-byte header the specification defines
+/// (signature, format version, reserved, atom count, image length)
+/// followed by filler, so the CLI's header parsing has something real to
+/// read.
+fn hat_image(len: usize) -> Vec<u8> {
+    let mut image = Vec::with_capacity(len);
+    image.extend_from_slice(b"R-Pi");
+    image.extend_from_slice(&[1, 0]);
+    image.extend_from_slice(&1u16.to_le_bytes());
+    image.extend_from_slice(&(len as u32).to_le_bytes());
+    while image.len() < len {
+        image.push((image.len() % 251) as u8);
+    }
+    image
+}
+
+#[test]
+fn eeprom_write_sends_the_image() {
+    let data = hat_image(6_000);
+    let file = temp_file("eeprom-write.eep", &data);
+    let mut fx = Fixture::spawn(&["eeprom-write", file.to_str().unwrap()]);
+
+    fx.device.handshake();
+    assert_eq!(fx.device.expect_set_baud(), FAST_BAUD);
+
+    fx.device.expect_command(CMD_EEPROM_WRITE);
+    let address = fx.device.read_u8();
+    let offset = fx.device.read_u32();
+    let total = fx.device.read_u32() as usize;
+    let chunk = fx.device.read_u32() as usize;
+    let page = fx.device.read_u32();
+    assert_eq!(
+        (address, offset, total, chunk, page),
+        (HAT_EEPROM_ADDRESS, 0, data.len(), CHUNK, DEFAULT_PAGE_SIZE)
+    );
+    fx.device.write_all(&[OK]);
+
+    let received = fx.device.recv_chunks(total, chunk, false);
+    assert_eq!(received, data, "device received a different image");
+    // The commit status, sent once every page has been programmed and
+    // read back.
+    fx.device.write_all(&[OK]);
+
+    assert_eq!(fx.device.expect_set_baud(), BASE_BAUD);
+    assert_success(&fx.finish());
+}
+
+#[test]
+fn eeprom_write_names_a_verify_failure() {
+    let data = hat_image(1_000);
+    let file = temp_file("eeprom-write-wp.eep", &data);
+    let mut fx = Fixture::spawn(&["eeprom-write", file.to_str().unwrap()]);
+
+    fx.device.handshake();
+    fx.device.expect_set_baud();
+    fx.device.expect_command(CMD_EEPROM_WRITE);
+    fx.device.read_u8();
+    fx.device.read_u32();
+    let total = fx.device.read_u32() as usize;
+    let chunk = fx.device.read_u32() as usize;
+    fx.device.read_u32();
+    fx.device.write_all(&[OK]);
+    fx.device.recv_chunks(total, chunk, false);
+    // Everything transferred, nothing stored: what a write-protected part
+    // looks like, since it acknowledges every byte.
+    fx.device.write_all(&[FAIL, ERR_VERIFY]);
+
+    let output = fx.finish();
+    assert!(
+        !output.status.success(),
+        "a failed commit must fail the CLI"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("write-protected"),
+        "the verify failure should name the likely cause: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn eeprom_read_takes_its_length_from_the_hat_header() {
+    let data = hat_image(300);
+    let out_path = std::env::temp_dir().join("rpi-loader-test-eeprom-read.eep");
+    let _ = std::fs::remove_file(&out_path);
+    let mut fx = Fixture::spawn(&["eeprom-read", out_path.to_str().unwrap()]);
+
+    fx.device.handshake();
+    fx.device.expect_set_baud();
+
+    // With no --length, the header is read first and its `eeplen` field is
+    // what the second read asks for.
+    fx.device.expect_command(CMD_EEPROM_READ);
+    assert_eq!(fx.device.read_u8(), HAT_EEPROM_ADDRESS);
+    assert_eq!(fx.device.read_u32(), 0);
+    assert_eq!(fx.device.read_u32(), 12);
+    fx.device.write_all(&[OK]);
+    fx.device.send_bulk(&data[..12]);
+
+    fx.device.expect_command(CMD_EEPROM_READ);
+    fx.device.read_u8();
+    fx.device.read_u32();
+    assert_eq!(fx.device.read_u32() as usize, data.len());
+    fx.device.write_all(&[OK]);
+    fx.device.send_bulk(&data);
+
+    fx.device.expect_set_baud();
+    assert_success(&fx.finish());
+    assert_eq!(
+        std::fs::read(&out_path).expect("the local file should exist"),
+        data
+    );
 }
 
 #[test]

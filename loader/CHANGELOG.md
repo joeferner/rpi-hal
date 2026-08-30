@@ -10,6 +10,32 @@ only one of them says nothing useful about compatibility.
 
 ## [Unreleased]
 
+### Added
+
+- **`eeprom-write` and `eeprom-read`**: program and dump a serial EEPROM
+  on the HAT ID bus (BSC0 on GPIO0/1, `ID_SD`/`ID_SC`), which is where a
+  board's identity lives — the HAT specification's image, and whatever a
+  design puts beside it. `eeprom-write` takes the `.eep` file `eepmake`
+  produces; `eeprom-read` with no `--length` reads the image length out
+  of the HAT header first, rather than dumping the whole address space.
+  Both take `--address` (default `0x50`) and `--offset`; the write also
+  takes `--page-size` (default 32, safe for every part from the 24C32 up).
+
+  The device reads every page back after programming it and fails the
+  command on a mismatch, because a write-protected part acknowledges
+  every byte and stores none — without the read-back, writing to one
+  would report success and change nothing.
+
+  New wire commands `EEPROM_READ` (9) and `EEPROM_WRITE` (10), and error
+  codes 7 (I2C transfer failed), 8 (read-back mismatch), 9 (a request
+  outside what the device will address) and 10 (the part never answered
+  the read-back). A loader
+  predating them answers an unknown command byte with `FAIL` and then
+  reads the arguments that followed as further commands, answering each
+  the same way: the CLI reports the command as failed, and the next
+  invocation's handshake clears what is left. Both halves ship as one
+  release, so that combination should only ever be a stale flash.
+
 ### Fixed
 
 - Terminal mode no longer puts the invoking terminal into raw mode when
