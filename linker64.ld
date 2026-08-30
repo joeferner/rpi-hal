@@ -27,6 +27,37 @@ SECTIONS
         *(.data .data.*)
     }
 
+    /* Sizes of the regions reserved below, overridable from outside
+       without editing this script -- a consumer passes e.g.
+       `-Wl,--defsym=__stack_size=0x400000` in its own `rustflags` and
+       that definition wins, since `DEFINED` sees it before this
+       assignment runs. */
+    __stack_size  = DEFINED(__stack_size)  ? __stack_size  : 0x100000;
+    __stack_slack = DEFINED(__stack_slack) ? __stack_slack : 0x200000;
+
+    /* The stack, reserved here rather than left to grow down from the
+       load address -- see linker.ld's copy of this comment for why (the
+       size was a consequence of the load address, and differed 16-fold
+       between the two architectures for no reason anybody chose).
+
+       There is one stack rather than AArch32's several: exceptions taken
+       to EL1h run on `SP_EL1`, the same one `kmain` is using, so there
+       are no banked per-mode stacks to reserve.
+
+       `__stack_slack` below it is deliberate margin -- an overflow walks
+       into reserved nothing for that far before it can reach
+       .data/.rodata/.text -- and is 2 MiB-aligned so the `mmu` feature
+       can later leave that block unmapped and make an overflow fault
+       where it happens. 2 MiB is the AArch64 block size. */
+    .stack (NOLOAD) : ALIGN(0x200000)
+    {
+        __stack_slack_bottom = .;
+        . += __stack_slack;
+        __stack_bottom = .;
+        . += __stack_size;
+        __stack_top = .;
+    }
+
     .bss (NOLOAD) :
     {
         /* stmia-based zeroing in boot.s requires a word-aligned start;

@@ -816,6 +816,67 @@ and invalidating it discards this core's own. `vchiq` is the caller; it is
 the same trade Linux makes by allocating the same region with
 `dma_alloc_coherent`.
 
+## The stack
+
+The linker script reserves the stack as a named region and the boot code
+points `sp` at it, so its size is a number you can read and change:
+
+| Symbol | Default | What it is |
+| --- | --- | --- |
+| `__stack_size` | 1 MiB | The main stack (SVC mode on AArch32, `SP_EL1` on AArch64). |
+| `__stack_slack` | 2 MiB | Reserved margin *below* the stack. An overflow walks into this before it can reach `.data`/`.rodata`/`.text`. |
+| `__irq_stack_size` | 64 KiB | AArch32 IRQ mode's banked stack. |
+| `__abt_stack_size` / `__und_stack_size` / `__fiq_stack_size` | 32 KiB each | AArch32 abort/undefined/FIQ modes, so a fault handler can be ordinary Rust. |
+
+Change any of them without editing the script, from the consumer's own
+`.cargo/config.toml`:
+
+```toml
+rustflags = ["-C", "link-arg=-Trpi-link.x",
+             "-C", "link-arg=--defsym=__stack_size=0x400000"]
+```
+
+None of this costs image bytes (the region is `NOLOAD`), and on a board
+with at least 1 GiB — every Pi this crate supports — a few MiB of
+address space is noise.
+
+It used to work the other way round: `sp` started at the load address
+and the stack was whatever sat below it, which meant 32 KiB on a 32-bit
+kernel at `0x8000` and 512 KiB on a 64-bit one at `0x80000` — a number
+nobody chose, differing 16-fold between the two architectures, and
+documented nowhere. A program that outgrew it took a data abort and
+parked silently.
+
+Which is the other half of this: **an overflow should be loud**.
+`__unhandled_exception` is weak (like `__irq_handler`), so an
+application can define its own and report the fault rather than go
+quiet:
+
+```rust
+#[no_mangle]
+pub extern "C" fn __unhandled_exception() {
+    // AArch64: ESR_EL1 (class) / FAR_EL1 (address) / ELR_EL1 (instruction).
+    // AArch32: CPSR mode says which exception; DFAR/DFSR or IFAR/IFSR say
+    // where and why.
+}
+```
+
+On AArch32 that handler runs in the exception's own mode on its own
+banked `sp`, which is why the boot code initializes all of them. On
+AArch64 it runs on the same `SP_EL1` the faulting code was using — so a
+handler that has to survive a stack overflow specifically should switch
+`sp` before doing real work.
+
+And to answer "how close am I?" from inside a running program,
+`stack::headroom()` reports the bytes left below `sp` (with
+`stack::bottom`/`top`/`size`/`pointer` alongside it). One line at
+startup is usually enough:
+
+```rust
+writeln!(uart, "sp {:#x}, {} KiB free", stack::pointer(),
+         stack::headroom().unwrap_or(0) / 1024)?;
+```
+
 ## Dynamic memory allocation (`alloc`)
 
 This crate is `#![no_std]` and defines **no** global allocator, by
@@ -838,10 +899,9 @@ using the `alloc` crate (`Box`, `Vec`, `String`, `BTreeMap`, ...).
    sizes its heap correctly regardless of the board's RAM size or
    `gpu_mem` setting. The whole ARM region below the peripheral base is
    identity-mapped as cacheable Normal memory by the `mmu` feature (see
-   "Virtual memory" above), so it's all safe to hand out. The main stack
-   grows down from the load address (`_start`) — `0x8000` for a 32-bit
-   kernel7.img, `0x80000` for a 64-bit kernel8.img — below all of this, so
-   the two never collide.
+   "Virtual memory" above), so it's all safe to hand out. The stack is
+   reserved below `.bss` (see "The stack" above), so it sits outside this
+   region and the two never collide.
 3. Add `extern crate alloc;` to your binary. Nothing else is needed —
    `rustup`'s precompiled target libraries include `alloc`, so a stable
    build links it as soon as a `#[global_allocator]` exists. (This crate's
