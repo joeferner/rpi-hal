@@ -37,9 +37,17 @@ Only needed once per repository (or when a token expires).
 
 ### 1. Decide the version
 
-Semantic versioning, with the usual pre-1.0 caveat that `0.x` bumps the
-*minor* for breaking changes. What counts as breaking here is wider than
-this crate's own API:
+**This crate's version tracks `rpi-hal`'s.** Since 0.3.0 the two move
+together, so a release here takes the number of the HAL release it is
+built against — 0.2.0 was skipped to get them into step. The two crates
+are always used together and share types, so matching numbers answer
+"which HAL is this for?" without anyone reading a manifest. It also means
+a release can be a number bigger than semver alone would ask for, which
+is fine: skipping versions is allowed, reusing them is not.
+
+Otherwise semantic versioning, with the usual pre-1.0 caveat that `0.x`
+bumps the *minor* for breaking changes. What counts as breaking here is
+wider than this crate's own API:
 
 - **The `rpi-hal` version requirement.** Raising it forces every consumer
   to move too, since the two crates share types (`Lic`, the PAC).

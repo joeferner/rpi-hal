@@ -4,7 +4,7 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-30
 
 ### Added
 
@@ -40,6 +40,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **This crate's version now tracks `rpi-hal`'s.** 0.2.0 is skipped
+  deliberately and will never exist: the two crates are used together and
+  share types, so matching numbers say at a glance which HAL a given
+  release is for. It also removes the question this release exists to
+  answer — 0.1.0 of this crate wanting 0.1.0 of a HAL that had moved twice
+  since.
 - **Requires `rpi-hal` 0.3.0**, up from 0.1.0, which matters to an
   application more than a dependency bump usually does: this crate's
   published 0.1.0 asks for `rpi-hal` 0.1.0, so taking a newer HAL
@@ -77,4 +83,5 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.3.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.3.0
 [0.1.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.1.0
