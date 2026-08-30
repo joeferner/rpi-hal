@@ -102,6 +102,15 @@ pub mod sdio;
 mod soc;
 /// Blocking driver for SPI0.
 pub mod spi;
+/// Extent of the main stack and how much of it is left — see
+/// [`stack::headroom`].
+///
+/// Needs the `rt` feature, since the region it reports on is the one
+/// this crate's linker script reserves and its boot code points `sp`
+/// at. A program supplying its own boot code and linker script owns
+/// that layout instead.
+#[cfg(feature = "rt")]
+pub mod stack;
 /// BCM System Timer driver: free-running microsecond counter and delays.
 pub mod timer;
 /// Driver for the DSI touchscreen's touch input (the firmware-mediated

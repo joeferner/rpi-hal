@@ -60,8 +60,36 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
   those stay exactly as they were.
 
+### Added
+
+- **`stack`** (`rt` feature): `stack::headroom`, `used`, `pointer`,
+  `bottom`, `top` and `size` — how much of the main stack is left, from
+  inside the running program. `headroom`/`used` are `Option` because a
+  secondary core runs on its own `multicore::Stack` and the AArch32
+  exception modes on their own banked regions, where the question has no
+  meaningful answer.
+
 ### Changed
 
+- **The stack is a reserved region with a stated size**, rather than
+  whatever happened to sit below the load address. The linker scripts
+  reserve `__stack_size` (1 MiB), `__stack_slack` (2 MiB of margin below
+  it), and on AArch32 `__irq_stack_size` (64 KiB) plus
+  `__abt_stack_size`/`__und_stack_size`/`__fiq_stack_size` (32 KiB each);
+  the boot code points each `sp` at its own region. Any of them can be
+  changed without editing the script, via
+  `-Wl,--defsym=__stack_size=0x400000` in the consumer's own flags. The
+  region is `NOLOAD`, so none of it costs image bytes.
+
+  Programs that supply their own linker script *and* use the `rt` feature
+  must define `__stack_top` (and, on AArch32, `__irq_stack_top`,
+  `__abt_stack_top`, `__und_stack_top`, `__fiq_stack_top`); the link
+  fails loudly naming the missing symbol otherwise. A program using the
+  crate's `rpi-link.x` needs no changes.
+- **`__unhandled_exception` is now weak** on both architectures, so an
+  application can define its own and report a fault instead of parking
+  silently. The crate's default (a `wfe` loop) is unchanged when nothing
+  overrides it.
 - **`i2c::I2c` gained a lifetime and `init` a parameter**: both
   `I2c::<BSC1>::init` and `I2c::<BSC0>::init` now take a `&Timer`, which
   the driver stores as `I2c<'_, I>`. The timer bounds every transfer (see
@@ -75,6 +103,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The IRQ stack no longer sits inside the main stack.** It was set to
+  `_start - IRQ_STACK_SIZE`, 4 KiB into the region main mode was growing
+  down through, so any main-mode frame deeper than 4 KiB occupied memory
+  the first interrupt would push onto — the opposite of what the comment
+  there claimed. The two are now adjacent reserved regions.
+- **The stack no longer grows down through low memory**, where the
+  firmware leaves the ATAGs and, on AArch64, the armstub8 spin table that
+  `multicore` starts cores 1-3 through.
 - **An I2C transfer can no longer hang the program.** Both transfer loops
   polled `S` with no exit but `ERR` or `DONE`, and a slave that
   acknowledges and then stops driving — one stretching the clock
