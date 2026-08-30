@@ -60,6 +60,42 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
   those stay exactly as they were.
 
+### Changed
+
+- **`i2c::I2c` gained a lifetime and `init` a parameter**: both
+  `I2c::<BSC1>::init` and `I2c::<BSC0>::init` now take a `&Timer`, which
+  the driver stores as `I2c<'_, I>`. The timer bounds every transfer (see
+  Fixed, below); it has to be stored rather than passed per call because
+  transfers are reached through `embedded_hal::i2c::I2c::transaction`,
+  whose signature this crate doesn't control.
+- `i2c::Error` gained `Timeout` and `Incomplete { received, requested }`,
+  so it is no longer exhaustively matchable on the two previous variants.
+  Both map to `ErrorKind::Other` — `embedded-hal` 1.0 has no closer
+  variant, since its `Overrun` means the receive buffer was overrun.
+
+### Fixed
+
+- **An I2C transfer can no longer hang the program.** Both transfer loops
+  polled `S` with no exit but `ERR` or `DONE`, and a slave that
+  acknowledges and then stops driving — one stretching the clock
+  indefinitely, a half-soldered part, a line held low — sets neither. The
+  loop was then infinite, and since this is a blocking driver it took
+  whatever else the program had to do with it: an executor, a network
+  stack, everything. Transfers are now bounded against the System Timer
+  (a fixed allowance plus a per-byte one) and report `Error::Timeout`.
+- **A short read no longer spins forever.** `read_one` waited for `DONE`
+  *and* a full buffer, so a transfer that completed having delivered
+  fewer bytes than `DLEN` asked for was waiting on a condition that had
+  already become unreachable. That case is now `Error::Incomplete`, which
+  carries both counts — how many bytes arrived is what says whether a
+  device is mute, truncating, or was simply over-read.
+- After either failure the controller is returned to a usable baseline
+  (FIFOs and status cleared) so a subsequent transfer starts from a known
+  state. Best-effort by necessity: the BSC has no documented abort and
+  owns the pins while enabled, so nothing here can walk a slave off a bus
+  it is still holding — that transfer times out too, which is survivable
+  where a hang wasn't.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

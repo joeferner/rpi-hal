@@ -116,13 +116,17 @@ const VGA_640X480: &[(u16, u8)] = &[
 const STREAM_START: &[(u16, u8)] = &[(0x4800, 0x34), (0x4202, 0x00), (0x300d, 0x00)];
 
 /// Writes one 8-bit `value` to the 16-bit `register`.
-pub fn write_reg(i2c: &mut I2c<BSC0>, register: u16, value: u8) -> Result<(), crate::i2c::Error> {
+pub fn write_reg(
+    i2c: &mut I2c<'_, BSC0>,
+    register: u16,
+    value: u8,
+) -> Result<(), crate::i2c::Error> {
     let [hi, lo] = register.to_be_bytes();
     i2c.write(ADDR, &[hi, lo, value])
 }
 
 /// Reads the 8-bit value of the 16-bit `register`.
-pub fn read_reg(i2c: &mut I2c<BSC0>, register: u16) -> Result<u8, crate::i2c::Error> {
+pub fn read_reg(i2c: &mut I2c<'_, BSC0>, register: u16) -> Result<u8, crate::i2c::Error> {
     let mut value = [0u8];
     i2c.write_read(ADDR, &register.to_be_bytes(), &mut value)?;
     Ok(value[0])
@@ -130,7 +134,7 @@ pub fn read_reg(i2c: &mut I2c<BSC0>, register: u16) -> Result<u8, crate::i2c::Er
 
 /// Applies a `(register, value)` table in order, returning `false` on the
 /// first write that doesn't ACK.
-fn apply(i2c: &mut I2c<BSC0>, table: &[(u16, u8)]) -> bool {
+fn apply(i2c: &mut I2c<'_, BSC0>, table: &[(u16, u8)]) -> bool {
     for &(register, value) in table {
         if write_reg(i2c, register, value).is_err() {
             return false;
@@ -141,7 +145,7 @@ fn apply(i2c: &mut I2c<BSC0>, table: &[(u16, u8)]) -> bool {
 
 /// Returns `true` if an OV5647 answers on the bus (chip ID `0x5647`, from
 /// registers `0x300a`/`0x300b`).
-pub fn detect(i2c: &mut I2c<BSC0>) -> bool {
+pub fn detect(i2c: &mut I2c<'_, BSC0>) -> bool {
     matches!(
         (read_reg(i2c, 0x300a), read_reg(i2c, 0x300b)),
         (Ok(0x56), Ok(0x47))
@@ -154,7 +158,7 @@ pub fn detect(i2c: &mut I2c<BSC0>) -> bool {
 /// (deterministic output, independent of the scene).
 ///
 /// `timer` provides the required settle delay after the software reset.
-pub fn start_streaming(i2c: &mut I2c<BSC0>, timer: &Timer, test_pattern: bool) -> bool {
+pub fn start_streaming(i2c: &mut I2c<'_, BSC0>, timer: &Timer, test_pattern: bool) -> bool {
     let reset_ok = apply(i2c, SENSOR_OE_ENABLE)
         && apply(i2c, STREAM_STOP)
         && write_reg(i2c, 0x0100, 0x00).is_ok()

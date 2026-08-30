@@ -146,11 +146,38 @@ implementations where applicable, and all verified on real hardware:
 - **I2C** (`src/i2c.rs`): `embedded_hal::i2c::I2c`, master-only
   (matches this hardware), generic over the BSC instance. `I2c<BSC1>`
   drives I2C1 on the 40-pin header (GPIO2/3), verified against three real
-  devices/checks: a DS1307 RTC, an SH1106 OLED, and a full bus scan (see
-  `examples/ds1307_rtc.rs`/`sh1106_oled.rs`/`i2c_scan.rs`). `I2c<BSC0>`
-  drives BSC0 on GPIO44/45 (ALT1) — the Pi 3 camera/display connector bus,
-  *not* BSC0's GPIO0/1 HAT-EEPROM routing — used to read an OV5647 camera
-  sensor's chip ID (see `examples/camera_probe.rs`).
+  devices/checks: a DS1307 RTC, an SH1106 OLED, and a full bus scan.
+  Examples on that bus: `examples/i2c_scan.rs`, `i2c_sh1106_oled.rs`,
+  `i2c_sht41.rs` (an SHT41 temperature/humidity sensor) and
+  `i2c_ads1115.rs` (an ADS1115 16-bit ADC).
+  `I2c<BSC0>` drives BSC0 on GPIO44/45 (ALT1) — the Pi 3
+  camera/display connector bus, *not* BSC0's GPIO0/1 HAT-EEPROM routing —
+  used to read an OV5647 camera sensor's chip ID (see
+  `examples/camera_probe.rs`).
+
+  `init` takes a `&Timer` because every transfer is bounded against the
+  System Timer. I2C is the one bus here where a *foreign* device decides
+  whether a transfer finishes: a slave that acknowledges its address and
+  then stops driving sets neither `S.ERR` nor `S.DONE`, so an unbounded
+  poll never returns and, this being a blocking driver, takes the rest of
+  the program (an executor, a network stack) with it. On expiry the
+  caller gets `Error::Timeout`, or `Error::Incomplete { received,
+  requested }` when the transfer did finish but the slave delivered fewer
+  bytes than were asked for — how many arrived is what distinguishes a
+  mute device from a truncating one. The controller is then returned to a
+  usable baseline on a best-effort basis (FIFOs and status cleared);
+  nothing can make a slave that is holding SDA let go, so a genuinely
+  stuck bus simply times out again, which is survivable where a hang
+  isn't.
+
+  One thing a bus scan can't tell you: `examples/i2c_scan.rs` probes with
+  a 1-byte read (`DLEN=0` isn't a real transaction on this hardware — see
+  `i2c::Error::ZeroLengthUnsupported`), so it enumerates what answers
+  *reads*, which is not the same as what is on the bus. A device that
+  only answers a read while it has a result pending — every Sensirion
+  SHT4x, among others — is reported absent while happily acknowledging
+  commands. `i2cdetect` finds those because it probes with a zero-length
+  write, which the BSC cannot issue at all.
 - **System Timer** (`src/timer.rs`): free-running microsecond counter,
   `delay_us`/`delay_ms`, `embedded_hal::delay::DelayNs`.
 - **ARM generic timer** (`src/generic_timer.rs`): the per-core architected

@@ -1,10 +1,22 @@
+//! Scans I2C1 (GPIO2 SDA1/GPIO3 SCL1) for devices that answer a
+//! 1-byte read, printing what it finds once a second.
+//!
+//! What this can and can't see is worth knowing before trusting a
+//! result: it enumerates what answers *reads*, which is not the same
+//! as what is on the bus. A device that only answers a read while it
+//! has a result pending -- every Sensirion SHT4x, among others --
+//! NAKs the probe and is reported absent while happily acknowledging
+//! commands (see `i2c_sht41.rs`, which addresses one directly rather
+//! than scanning for it). `i2cdetect` finds those because it probes
+//! with a zero-length write, which BCM2835's BSC cannot issue at all
+//! -- see `rpi_hal::i2c::Error::ZeroLengthUnsupported`.
 #![no_std]
 #![no_main]
 
 use core::fmt::Write;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
-use rpi_hal::{i2c::I2c, pac, uart::Uart};
+use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -18,7 +30,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc);
+    let timer = Timer::new(peripherals.SYSTMR);
+    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
 
     loop {
         let _ = writeln!(uart, "scanning I2C1 (GPIO2/3)...");
@@ -45,12 +58,6 @@ pub extern "C" fn kmain() -> ! {
         }
 
         let _ = writeln!(uart, "done: {found} device(s) found\n");
-        delay(150_000_000);
-    }
-}
-
-fn delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
+        timer.delay_ms(1000);
     }
 }

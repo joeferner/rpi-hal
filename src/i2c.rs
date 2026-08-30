@@ -7,10 +7,32 @@
 //! register layout is identical across instances (both deref to the same PAC
 //! register block); only the pin mux and the peripheral token differ, so
 //! the transfer logic is shared and each instance gets its own `init`.
+//!
+//! Every transfer is bounded against the System Timer, which is why
+//! [`I2c::init`](crate::i2c::I2c::init) takes a [`Timer`](crate::timer::Timer). I2C is the one
+//! bus in this crate where a *foreign* device — not silicon on the same
+//! die — decides whether a transfer ever finishes, and a device that
+//! acknowledges its address and then stops driving sets neither `S.ERR`
+//! nor `S.DONE`. An unbounded poll of `S` is then infinite, and since this
+//! is a blocking driver it takes the rest of the program with it (an
+//! executor, a network stack, a watchdog kick). Bounding the wait turns
+//! that into an [`Error::Timeout`](crate::i2c::Error::Timeout) the caller
+//! can log, retry, or ignore.
 
 use core::ops::Deref;
 
 use crate::pac::{bsc0, BSC0, BSC1, GPIO};
+use crate::timer::Timer;
+
+/// Fixed allowance for START, the address byte, and the controller's own
+/// setup, on top of [`TIMEOUT_PER_BYTE_US`].
+const TIMEOUT_BASE_US: u64 = 5_000;
+
+/// Allowance per byte of the transfer. At the reset-default divider
+/// (100kHz) a byte and its acknowledge take ~90us, so this is more than
+/// tenfold margin and still tolerates a slave that stretches the clock.
+/// The exact number matters much less than it being finite.
+const TIMEOUT_PER_BYTE_US: u64 = 1_000;
 
 /// Errors surfaced by [`I2c`]'s `embedded_hal::i2c::I2c` methods.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +53,35 @@ pub enum Error {
     /// this. Refusing zero-length operations here rather than
     /// silently reporting a false `Ok(())` -- see `i2c_scan.rs` for
     /// the real (1-byte) probe technique instead.
+    ///
+    /// The consequence for bus scans is worth stating outright, since
+    /// it costs real debugging time: a scan built on 1-byte reads
+    /// enumerates what answers *reads*, which is not the same as what
+    /// is on the bus. A device that only answers a read while it has a
+    /// result pending -- every Sensirion SHT4x, among others -- NAKs
+    /// the probe and is reported absent while happily acknowledging
+    /// commands. `i2cdetect` finds those because it probes with a
+    /// zero-length write, which this hardware cannot issue at all.
     ZeroLengthUnsupported,
+    /// The transfer neither completed (`S.DONE`) nor failed (`S.ERR`)
+    /// within its deadline: the bus is being held, or a slave stopped
+    /// driving mid-transfer. The controller has been left in a state a
+    /// subsequent transfer can start from (FIFOs cleared, status
+    /// cleared), but that is best-effort: a bus a slave is still holding
+    /// will simply time out again.
+    Timeout,
+    /// The transfer completed, but the slave delivered fewer bytes than
+    /// were asked for -- it NAK'd mid-read, reset, or was asked for
+    /// more than it had. Carries both counts, since how many arrived is
+    /// what says whether the device is mute, truncating, or was simply
+    /// over-read; `buffer[received..]` is untouched.
+    Incomplete {
+        /// Bytes actually drained from the RX FIFO into the buffer.
+        received: usize,
+        /// Bytes the transfer asked for (`buffer.len()`, the `DLEN` the
+        /// controller was programmed with).
+        requested: usize,
+    },
 }
 
 impl embedded_hal::i2c::Error for Error {
@@ -43,7 +93,12 @@ impl embedded_hal::i2c::Error for Error {
             Self::NoAcknowledge => embedded_hal::i2c::ErrorKind::NoAcknowledge(
                 embedded_hal::i2c::NoAcknowledgeSource::Unknown,
             ),
-            Self::ZeroLengthUnsupported => embedded_hal::i2c::ErrorKind::Other,
+            // `embedded-hal` 1.0 has no closer variant for either of
+            // the last two: `Overrun` means the *receive buffer* was
+            // overrun, which is a different failure.
+            Self::ZeroLengthUnsupported | Self::Timeout | Self::Incomplete { .. } => {
+                embedded_hal::i2c::ErrorKind::Other
+            }
         }
     }
 }
@@ -75,11 +130,18 @@ impl embedded_hal::i2c::Error for Error {
 /// writing against this needs a genuine repeated start (some devices
 /// reset their internal register pointer on a STOP between the
 /// address-write and the read), this isn't there yet.
-pub struct I2c<I = BSC1> {
+///
+/// Every transfer is bounded against the borrowed [`Timer`] (see this
+/// module's doc comment on why). The timer is stored rather than passed
+/// per call because transfers are reached through
+/// `embedded_hal::i2c::I2c::transaction`, whose signature this crate
+/// doesn't control.
+pub struct I2c<'a, I = BSC1> {
     bsc: I,
+    timer: &'a Timer,
 }
 
-impl I2c<BSC1> {
+impl<'a> I2c<'a, BSC1> {
     /// Routes GPIO2/3 to BSC1 (ALT0: SDA1, SCL1), sets the clock
     /// divider, and enables the peripheral (idle, no transfer yet).
     ///
@@ -94,38 +156,71 @@ impl I2c<BSC1> {
     /// clock; halve it for 400kHz fast mode at that same clock, or
     /// compute against the real core clock (queried via the
     /// VideoCore mailbox) if precision matters.
-    pub fn init(gpio: &GPIO, bsc1: BSC1, clock_divider: u16) -> Self {
+    ///
+    /// `timer` bounds every transfer this driver performs — see this
+    /// type's doc comment.
+    pub fn init(gpio: &GPIO, bsc1: BSC1, clock_divider: u16, timer: &'a Timer) -> Self {
         gpio.gpfsel0()
             .modify(|_, w| w.fsel2().sda1().fsel3().scl1());
-        Self::configure(bsc1, clock_divider)
+        Self::configure(bsc1, clock_divider, timer)
     }
 }
 
-impl I2c<BSC0> {
+impl<'a> I2c<'a, BSC0> {
     /// Routes GPIO44/45 to BSC0 (ALT1: SDA0, SCL0) — the camera/display
     /// connector bus on a Pi 3, *not* BSC0's GPIO0/1 HAT-EEPROM routing —
     /// sets the clock divider, and enables the peripheral.
     ///
     /// See [`I2c::<BSC1>::init`] on why `clock_divider` is a raw `CDIV`
     /// value rather than a target frequency; the same reasoning applies.
-    /// See this type's doc comment on BSC0 being firmware-arbitrated.
-    pub fn init(gpio: &GPIO, bsc0: BSC0, clock_divider: u16) -> Self {
+    /// See this type's doc comment on BSC0 being firmware-arbitrated,
+    /// and on `timer` bounding every transfer.
+    pub fn init(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
         gpio.gpfsel4()
             .modify(|_, w| w.fsel44().sda0().fsel45().scl0());
-        Self::configure(bsc0, clock_divider)
+        Self::configure(bsc0, clock_divider, timer)
     }
 }
 
-impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
+impl<'a, I: Deref<Target = bsc0::RegisterBlock>> I2c<'a, I> {
     /// Shared tail of the per-instance `init`s: program the divider and
     /// enable the controller, once the caller has done the instance's own
     /// pin mux.
-    fn configure(bsc: I, clock_divider: u16) -> Self {
+    fn configure(bsc: I, clock_divider: u16, timer: &'a Timer) -> Self {
         unsafe {
             bsc.div().write(|w| w.cdiv().bits(clock_divider));
         }
         bsc.c().write(|w| w.i2cen().bit(true));
-        Self { bsc }
+        Self { bsc, timer }
+    }
+
+    /// How long a transfer of `len` bytes is allowed to take: a fixed
+    /// setup allowance plus a per-byte one, rather than one flat number,
+    /// since a 1-byte probe and a 32-byte register dump differ by more
+    /// than an order of magnitude.
+    fn timeout_us(len: usize) -> u64 {
+        TIMEOUT_BASE_US + TIMEOUT_PER_BYTE_US * len as u64
+    }
+
+    /// Best-effort return to a known baseline after a transfer that
+    /// didn't finish: clear both FIFOs (`C.CLEAR`) with `I2CEN` kept and
+    /// `ST` left clear, then clear `DONE`/`ERR`, so the *next* transfer
+    /// starts from a defined state rather than inheriting stale FIFO
+    /// contents.
+    ///
+    /// Best-effort is the honest description: the BSC has no documented
+    /// abort, and nothing here can make a slave that is holding SDA let
+    /// go — that transfer will time out too, which is the correct
+    /// outcome and is now survivable. Walking a stuck slave off the bus
+    /// needs nine manual clock pulses, which means muxing GPIO2/3 back
+    /// to outputs and bit-banging them; the BSC owns the pins while it
+    /// is enabled, so that isn't something this method can do.
+    fn abandon(&mut self) {
+        self.bsc.c().write(|w| {
+            unsafe { w.clear().bits(0b11) };
+            w.i2cen().bit(true)
+        });
+        self.clear_status();
     }
 
     /// Clears `DONE`/`ERR` (both write-1-to-clear) ahead of a new
@@ -161,13 +256,15 @@ impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
     /// Writes `bytes` as one complete transaction (START, address,
     /// `bytes`, STOP), feeding the TX FIFO as `TXD` (space available)
     /// allows and bailing out early with [`Error::NoAcknowledge`] the
-    /// instant `S.ERR` is seen.
+    /// instant `S.ERR` is seen, or [`Error::Timeout`] if the transfer
+    /// neither finishes nor fails within [`Self::timeout_us`].
     fn write_one(&mut self, address: u8, bytes: &[u8]) -> Result<(), Error> {
         if bytes.is_empty() {
             return Err(Error::ZeroLengthUnsupported);
         }
         self.one_shot(address, false, bytes.len());
 
+        let deadline = self.timer.now_micros() + Self::timeout_us(bytes.len());
         let mut sent = 0;
         loop {
             let status = self.bsc.s().read();
@@ -184,6 +281,13 @@ impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
             if status.done().bit_is_set() {
                 break;
             }
+            // A write has no `Incomplete` counterpart to report: `DONE`
+            // is checked above, so reaching here means the transfer is
+            // still in flight and the deadline has passed.
+            if self.timer.now_micros() > deadline {
+                self.abandon();
+                return Err(Error::Timeout);
+            }
         }
 
         self.clear_status();
@@ -196,12 +300,22 @@ impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
     /// before every byte has actually been drained from the FIFO, so
     /// this keeps draining until `buffer` is actually full rather than
     /// stopping at the first sight of `DONE`.
+    ///
+    /// That "until the buffer is full" condition is also why the
+    /// deadline matters here more than anywhere else in this driver: a
+    /// transfer that finishes having delivered *fewer* bytes than `DLEN`
+    /// asked for makes the exit condition permanently unreachable, so
+    /// without a deadline it would spin forever with `DONE` already set.
+    /// `DONE` is exactly what separates the two failures on expiry —
+    /// set means the transfer finished short ([`Error::Incomplete`]),
+    /// clear means it never finished at all ([`Error::Timeout`]).
     fn read_one(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Error> {
         if buffer.is_empty() {
             return Err(Error::ZeroLengthUnsupported);
         }
         self.one_shot(address, true, buffer.len());
 
+        let deadline = self.timer.now_micros() + Self::timeout_us(buffer.len());
         let mut received = 0;
         loop {
             let status = self.bsc.s().read();
@@ -216,6 +330,18 @@ impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
             if status.done().bit_is_set() && received >= buffer.len() {
                 break;
             }
+            if self.timer.now_micros() > deadline {
+                let complete = self.bsc.s().read().done().bit_is_set();
+                self.abandon();
+                return Err(if complete {
+                    Error::Incomplete {
+                        received,
+                        requested: buffer.len(),
+                    }
+                } else {
+                    Error::Timeout
+                });
+            }
         }
 
         self.clear_status();
@@ -223,12 +349,12 @@ impl<I: Deref<Target = bsc0::RegisterBlock>> I2c<I> {
     }
 }
 
-impl<I: Deref<Target = bsc0::RegisterBlock>> embedded_hal::i2c::ErrorType for I2c<I> {
+impl<I: Deref<Target = bsc0::RegisterBlock>> embedded_hal::i2c::ErrorType for I2c<'_, I> {
     /// See [`Error`].
     type Error = Error;
 }
 
-impl<I: Deref<Target = bsc0::RegisterBlock>> embedded_hal::i2c::I2c for I2c<I> {
+impl<I: Deref<Target = bsc0::RegisterBlock>> embedded_hal::i2c::I2c for I2c<'_, I> {
     /// `read`/`write`/`write_read` all forward here via
     /// `embedded_hal::i2c::I2c`'s default implementations. See this
     /// struct's doc comment: each [`embedded_hal::i2c::Operation`]
