@@ -186,8 +186,19 @@ implementations where applicable, and all verified on real hardware:
   into `init`: it can fail, it costs a round trip to the GPU, and an
   application that brings up several buses wants to ask once.
 
-  `init` takes a `&Timer` because every transfer is bounded against the
-  System Timer. I2C is the one bus here where a *foreign* device decides
+  With the `async` feature the same type also implements
+  `embedded_hal_async::i2c::I2c`, parking on the controller's
+  `DONE`/`TXW`/`RXR` interrupts instead of spinning — the millisecond a
+  six-byte read at 100kHz costs goes to the executor rather than to a
+  polling loop. It needs the usual wiring: `Lic::enable_i2c_irq`, the CPU
+  mask, and `i2c::on_irq` called from `__irq_handler`. Timeouts work
+  differently there and deliberately: wrap the future in your executor's
+  own (`embassy_time::with_timeout`), which puts the number where the
+  application's judgement is. Dropping a transfer part-way is safe —
+  the controller is left masked, cleared and ready for the next one.
+
+  `init` takes a `&Timer` because every blocking transfer is bounded
+  against the System Timer. I2C is the one bus here where a *foreign* device decides
   whether a transfer finishes: a slave that acknowledges its address and
   then stops driving sets neither `S.ERR` nor `S.DONE`, so an unbounded
   poll never returns and, this being a blocking driver, takes the rest of

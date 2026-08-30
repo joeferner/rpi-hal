@@ -11,7 +11,13 @@
 //! register block); only the pin mux and the peripheral token differ, so
 //! the transfer logic is shared and each routing gets its own constructor.
 //!
-//! Every transfer is bounded against the System Timer, which is why
+//! With the `async` feature the same type also implements
+//! `embedded_hal_async::i2c::I2c`, driven by the controller's own
+//! interrupts rather than by polling — see [`on_irq`](crate::i2c::on_irq)
+//! for what the application has to wire up, and note that a timeout there
+//! is the caller's `with_timeout` rather than the deadline below.
+//!
+//! Every blocking transfer is bounded against the System Timer, which is why
 //! [`I2c::init`](crate::i2c::I2c::init) takes a [`Timer`](crate::timer::Timer). I2C is the one
 //! bus in this crate where a *foreign* device — not silicon on the same
 //! die — decides whether a transfer ever finishes, and a device that
@@ -26,6 +32,11 @@ use core::ops::Deref;
 
 use crate::pac::{bsc0, BSC0, BSC1, GPIO};
 use crate::timer::Timer;
+
+#[cfg(feature = "async")]
+mod asynch;
+#[cfg(feature = "async")]
+pub use asynch::on_irq;
 
 /// Fixed allowance for START, the address byte, and the controller's own
 /// setup, on top of [`TIMEOUT_PER_BYTE_US`].
@@ -72,6 +83,11 @@ pub enum Error {
     /// subsequent transfer can start from (FIFOs cleared, status
     /// cleared), but that is best-effort: a bus a slave is still holding
     /// will simply time out again.
+    ///
+    /// Also reported for the controller's *own* clock-stretch timeout
+    /// (`S.CLKT`), where a slave held SCL down past the `CLKT` register's
+    /// allowance and the hardware cut the transfer short. Same meaning —
+    /// the bus was held — reached one level lower down, and quicker.
     Timeout,
     /// The transfer completed, but the slave delivered fewer bytes than
     /// were asked for -- it NAK'd mid-read, reset, or was asked for
@@ -319,14 +335,21 @@ impl<'a, I: Deref<Target = bsc0::RegisterBlock>> I2c<'a, I> {
         self.clear_status();
     }
 
-    /// Clears `DONE`/`ERR` (both write-1-to-clear) ahead of a new
-    /// transfer — same "clean baseline before starting" approach as
+    /// Clears `DONE`/`ERR`/`CLKT` (all three write-1-to-clear) ahead of a
+    /// new transfer — same "clean baseline before starting" approach as
     /// `spi::Spi::reset_hw`, just scoped to what the BSC actually needs
     /// between transfers (its FIFOs are cleared via `C.CLEAR` in
     /// [`Self::one_shot`] instead, since that's a `C`-register field,
     /// not `S`).
+    ///
+    /// `CLKT` matters as much as the other two even though no transfer
+    /// sets out to produce one: it latches, so a single clock-stretch
+    /// timeout left uncleared would be read as a fault by every transfer
+    /// afterwards, on a bus that had recovered.
     fn clear_status(&self) {
-        self.bsc.s().write(|w| w.done().bit(true).err().bit(true));
+        self.bsc
+            .s()
+            .write(|w| w.done().bit(true).err().bit(true).clkt().bit(true));
     }
 
     /// One complete BSC transfer: START, `address`, then either
@@ -367,6 +390,15 @@ impl<'a, I: Deref<Target = bsc0::RegisterBlock>> I2c<'a, I> {
             if status.err().bit_is_set() {
                 self.clear_status();
                 return Err(Error::NoAcknowledge);
+            }
+            // The controller's own clock-stretch timeout fired: a slave
+            // held SCL down past `CLKT` and the transfer was cut short.
+            // Reported as `Timeout` because that is what happened — the
+            // bus was held — and whatever the FIFO holds after one is not
+            // the transfer that was asked for.
+            if status.clkt().bit_is_set() {
+                self.abandon();
+                return Err(Error::Timeout);
             }
             if sent < bytes.len() && status.txd().bit_is_set() {
                 unsafe {
@@ -418,6 +450,13 @@ impl<'a, I: Deref<Target = bsc0::RegisterBlock>> I2c<'a, I> {
             if status.err().bit_is_set() {
                 self.clear_status();
                 return Err(Error::NoAcknowledge);
+            }
+            // See `write_one`: a clock-stretch timeout is the bus having
+            // been held, and the bytes that did arrive are not the read
+            // that was asked for.
+            if status.clkt().bit_is_set() {
+                self.abandon();
+                return Err(Error::Timeout);
             }
             if received < buffer.len() && status.rxd().bit_is_set() {
                 buffer[received] = self.bsc.fifo().read().data().bits();
