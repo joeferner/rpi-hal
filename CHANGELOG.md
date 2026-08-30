@@ -4,7 +4,7 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-30
 
 ### Added
 
@@ -42,26 +42,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `usb::lan9514::MTU` is now unconditional rather than gated on an
   adapter feature — it is a property of Ethernet and of this chip, and an
   out-of-crate adapter needs the same number.
-
-### Removed
-
-- **The `embassy-net-driver` feature**, with `usb::lan9514::Lan9514Driver`
-  and `usb::lan9514::wake_rx`. The `embassy-net` adapter now lives in the
-  `rpi-hal-embassy` crate, built on `Lan9514::split` and the async methods
-  above, and is a `Driver` plus a runner task rather than a `Driver` that
-  does its own USB work. `embassy_net_driver::Driver` is synchronous, so
-  an adapter shaped that way could never have awaited anything.
-
-  `wake_rx` goes with it, and that is the point of the exercise: an
-  application no longer has to poll the driver on a ticker and guess an
-  interval, because there is now a real event to wake on.
-
-  Nothing here affects the `smoltcp` adapter or the blocking frame
-  methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
-  those stay exactly as they were.
-
-### Added
-
 - **Async I2C** (`async` feature): `embedded_hal_async::i2c::I2c` on the
   same `I2c` type, parking on the controller's `DONE`/`TXW`/`RXR`
   interrupts rather than polling `S`, so the millisecond a six-byte read
@@ -111,6 +91,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   secondary core runs on its own `multicore::Stack` and the AArch32
   exception modes on their own banked regions, where the question has no
   meaningful answer.
+
+### Removed
+
+- **The `embassy-net-driver` feature**, with `usb::lan9514::Lan9514Driver`
+  and `usb::lan9514::wake_rx`. The `embassy-net` adapter now lives in the
+  `rpi-hal-embassy` crate, built on `Lan9514::split` and the async methods
+  above, and is a `Driver` plus a runner task rather than a `Driver` that
+  does its own USB work. `embassy_net_driver::Driver` is synchronous, so
+  an adapter shaped that way could never have awaited anything.
+
+  `wake_rx` goes with it, and that is the point of the exercise: an
+  application no longer has to poll the driver on a ticker and guess an
+  interval, because there is now a real event to wake on.
+
+  Nothing here affects the `smoltcp` adapter or the blocking frame
+  methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
+  those stay exactly as they were.
 
 ### Changed
 
@@ -351,5 +348,6 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.1.0
