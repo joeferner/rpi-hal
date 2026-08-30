@@ -62,6 +62,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`examples/soc_temperature.rs`**, printing die temperature, ARM clock
+  and throttling status together once a second. No new API —
+  `Mailbox::temperature_millicelsius` and `Mailbox::throttled` have been
+  there all along, and a consumer asking for a way to read the CPU
+  temperature is what showed they could not be found. The README's
+  mailbox entry now names them too.
 - **`i2c::divider_for` and `spi::divider_for`**: `(core_hz, target_hz)`
   to the raw `CDIV` those drivers' `init` takes. Every consumer was
   writing the same arithmetic and getting the same chance to be wrong,
