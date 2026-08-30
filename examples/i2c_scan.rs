@@ -57,7 +57,24 @@ pub extern "C" fn kmain() -> ! {
             }
         }
 
-        let _ = writeln!(uart, "done: {found} device(s) found\n");
+        let _ = writeln!(uart, "done: {found} device(s) found");
+        // The caveat in this file's doc comment, said to the person
+        // actually looking at a scan: a device missing from the list
+        // above is not necessarily absent, and this is the moment that
+        // is worth knowing -- the alternative is measuring a bus that
+        // was working all along.
+        let _ = writeln!(
+            uart,
+            "note: this lists what answers a 1-byte read. A device that answers"
+        );
+        let _ = writeln!(
+            uart,
+            "      reads only while it has a result pending (any SHT4x, among"
+        );
+        let _ = writeln!(
+            uart,
+            "      others) is on the bus and acknowledging, but not listed.\n"
+        );
         timer.delay_ms(1000);
     }
 }
