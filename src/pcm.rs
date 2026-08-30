@@ -92,6 +92,7 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
+use crate::clock_manager;
 use crate::pac::{CM_PCM, GPIO};
 
 /// Bit clocks per stereo frame in the fixed format [`Pcm::i2s_out`]
@@ -191,6 +192,27 @@ pub struct Pcm {
 }
 
 impl Pcm {
+    /// The largest divisor [`Self::init`] can actually program, since
+    /// `CM_PCM`'s `DIVI` field is 12 bits. See
+    /// [`crate::pwm::Pwm::MAX_CLOCK_DIVISOR`], which is the same field on the
+    /// sibling generator, for what happens to a larger value.
+    pub const MAX_CLOCK_DIVISOR: u16 = clock_manager::MAX_DIVISOR;
+
+    /// The slowest bit clock available, at [`Self::MAX_CLOCK_DIVISOR`].
+    ///
+    /// Divided by [`BITS_PER_FRAME`] this is the slowest sample rate the
+    /// peripheral can be clocked for.
+    pub const MIN_CLOCK_HZ: u32 = clock_manager::MIN_CLOCK_HZ;
+
+    /// The bit-clock rate [`Self::init`] produces for `clock_divisor`.
+    ///
+    /// Applies the same clamp `init` does, so it reports what the hardware
+    /// will run at rather than what was asked for. Nominal, like everything
+    /// derived from `PLLD_per`.
+    pub const fn clock_hz(clock_divisor: u16) -> u32 {
+        clock_manager::clock_hz(clock_divisor)
+    }
+
     /// Configures `CM_PCM` to run from `PLLD_per` at (nominally)
     /// `500_000_000 / clock_divisor` Hz — the PCM bit clock — and enables
     /// it. Mirrors [`crate::pwm::Pwm::init`]'s `CM_PWM` bring-up exactly
@@ -204,13 +226,17 @@ impl Pcm {
     /// divisor, and GPU firmware may have left it enabled), and waits for
     /// `BUSY` to assert before returning so the clock is genuinely ticking
     /// by the time [`Self::i2s_out`] enables the peripheral.
+    ///
+    /// **`clock_divisor` is clamped to [`Self::MAX_CLOCK_DIVISOR`]**, which
+    /// is 4095 rather than the 65535 the `u16` suggests — see that constant.
+    /// [`Self::clock_hz`] reports what will actually be programmed.
     pub fn init(cm_pcm: CM_PCM, clock_divisor: u16) -> Self {
         cm_pcm.cs().write(|w| w.kill().set_bit().passwd().passwd());
         while cm_pcm.cs().read().busy().bit_is_set() {}
 
         unsafe {
             cm_pcm.div().write(|w| {
-                w.divi().bits(clock_divisor);
+                w.divi().bits(clock_manager::clamp_divisor(clock_divisor));
                 w.divf().bits(0);
                 w.passwd().passwd()
             });
@@ -240,20 +266,27 @@ impl Pcm {
     ///
     /// Integer division makes the result — and therefore the real sample
     /// rate — approximate, not exact (same caveat as
-    /// [`crate::pwm::Pwm::audio_clock_divisor`]). Clamped to at least 1 so
-    /// a too-high `sample_rate` can't yield a zero divisor.
+    /// [`crate::pwm::Pwm::audio_clock_divisor`]).
+    ///
+    /// Clamped to the range [`Self::init`] can program, `1` to
+    /// [`Self::MAX_CLOCK_DIVISOR`] — the upper end for the reason that
+    /// constant describes, the lower so a too-high `sample_rate` cannot yield
+    /// a zero divisor.
+    ///
+    /// The upper clamp bites below roughly 1.9 kHz
+    /// (`MIN_CLOCK_HZ / BITS_PER_FRAME`), which is under any sample rate this
+    /// is likely to be asked for but is a real floor rather than a rounding
+    /// concern. [`Self::clock_hz`] reports the bit clock that will result.
     pub const fn clock_divisor(sample_rate: u32) -> u16 {
         let product = sample_rate as u64 * BITS_PER_FRAME as u64;
         if product == 0 {
-            return 1;
+            return clock_manager::MIN_DIVISOR;
         }
-        let divisor = 500_000_000u64 / product;
-        if divisor < 1 {
-            1
-        } else if divisor > u16::MAX as u64 {
-            u16::MAX
+        let divisor = clock_manager::SOURCE_HZ as u64 / product;
+        if divisor > u16::MAX as u64 {
+            clock_manager::MAX_DIVISOR
         } else {
-            divisor as u16
+            clock_manager::clamp_divisor(divisor as u16)
         }
     }
 

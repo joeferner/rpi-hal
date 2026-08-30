@@ -4,6 +4,37 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **PWM and PCM clock divisors were silently masked, not clamped.** The
+  Clock Manager's `DIVI` field is 12 bits, but `Pwm::init` and `Pcm::init`
+  take a `u16` and said nothing about the limit — so a larger value was
+  neither rejected nor saturated. The PAC's field writer masked it, making a
+  divisor of 12500 program as `12500 & 0xFFF` = 212 and run the clock 59
+  times too fast, with every register reading back exactly as written. Both
+  now clamp. `Pwm::audio_clock_divisor` and `Pcm::clock_divisor` had the same
+  fault from the other end, clamping their results to `u16::MAX` — sixteen
+  times what the field holds — and now clamp to the real maximum.
+
+### Added
+
+- `Pwm::MAX_CLOCK_DIVISOR` and `Pcm::MAX_CLOCK_DIVISOR`, so a caller can
+  check its own constant at compile time rather than discovering the limit as
+  a peripheral running at an inexplicable rate.
+- `Pwm::clock_hz` and `Pcm::clock_hz`, reporting the rate a divisor will
+  actually produce. They apply the same clamp `init` does, so they describe
+  the hardware rather than echoing the request back; logging one beside the
+  intended rate is how an out-of-range divisor becomes visible.
+- `Pwm::MIN_CLOCK_HZ` and `Pcm::MIN_CLOCK_HZ`, the floor the 12-bit divisor
+  imposes — roughly 122 kHz, which is a real design constraint and not a
+  rounding concern.
+- `Pwm::divisor_for`, picking a divisor from a target clock rate. The
+  counterpart to `audio_clock_divisor` for callers not on the audio path,
+  where computing `500_000_000 / target` by hand is exactly where an
+  out-of-range divisor comes from.
+
 ## [0.3.0] - 2026-08-30
 
 ### Added

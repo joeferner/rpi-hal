@@ -115,6 +115,7 @@
 //! [`Channel2Pin::Gpio45`](crate::pwm::Channel2Pin::Gpio45)) to recover a
 //! clean signal.
 
+use crate::clock_manager;
 use crate::pac::{CM_PWM, GPIO, PWM0};
 
 /// The DMA DREQ (pacing) number for the PWM controller, passed to
@@ -189,6 +190,43 @@ pub struct Pwm {
 }
 
 impl Pwm {
+    /// The largest divisor [`Self::init`] can actually program, since
+    /// `CM_PWM`'s `DIVI` field is 12 bits.
+    ///
+    /// Public so a caller can check its own constant against it — a
+    /// `const` assertion catches at compile time what otherwise shows up as
+    /// a peripheral running at an inexplicable rate.
+    pub const MAX_CLOCK_DIVISOR: u16 = clock_manager::MAX_DIVISOR;
+
+    /// The slowest PWM clock available, at [`Self::MAX_CLOCK_DIVISOR`].
+    pub const MIN_CLOCK_HZ: u32 = clock_manager::MIN_CLOCK_HZ;
+
+    /// The PWM clock rate [`Self::init`] produces for `clock_divisor`.
+    ///
+    /// Applies the same clamp `init` does, so this reports what the hardware
+    /// will run at rather than echoing back what was asked for. A caller that
+    /// logs this next to its intended rate sees an out-of-range divisor
+    /// immediately; one that trusts its own arithmetic does not.
+    ///
+    /// Nominal, like everything derived from `PLLD_per` — see this module's
+    /// "Clock" section.
+    pub const fn clock_hz(clock_divisor: u16) -> u32 {
+        clock_manager::clock_hz(clock_divisor)
+    }
+
+    /// The [`Self::init`] divisor giving (nominally) a `target_hz` PWM clock,
+    /// clamped to what the hardware can hold.
+    ///
+    /// The counterpart to [`Self::audio_clock_divisor`] for callers not using
+    /// the audio path: driving a buzzer or an LED wants a PWM clock chosen
+    /// against the output frequency, and computing
+    /// `500_000_000 / target_hz` by hand is where an out-of-range divisor
+    /// comes from. Integer division makes the result approximate; pair it
+    /// with [`Self::clock_hz`] to see what it really works out to.
+    pub const fn divisor_for(target_hz: u32) -> u16 {
+        clock_manager::divisor_for(target_hz)
+    }
+
     /// Configures `CM_PWM` to run from `PLLD_per` at (nominally)
     /// `500_000_000 / clock_divisor` Hz (the fractional divider stays
     /// 0 — integer division only) and enables it — see this module's
@@ -198,6 +236,19 @@ impl Pwm {
     /// a caller may only want one channel at all, so pin muxing and
     /// channel setup are deferred to [`Self::channel1`]/
     /// [`Self::channel2`].
+    ///
+    /// **`clock_divisor` is clamped to [`Self::MAX_CLOCK_DIVISOR`]**, which
+    /// is 4095 and not 65535: the `DIVI` field is 12 bits wide, and this
+    /// parameter is a `u16` only because that is the smallest type that
+    /// holds it. Passing more than the field can take used to program the
+    /// masked low 12 bits instead — a divisor of 12500 became 212, running
+    /// the clock 59 times too fast with every register reading back exactly
+    /// as written. Clamping keeps the error bounded and in one direction;
+    /// [`Self::clock_hz`] reports what will actually be programmed, and
+    /// comparing it against the intended rate is how a caller checks.
+    ///
+    /// The reachable range is therefore roughly 122 kHz to 500 MHz. Nothing
+    /// slower is available from the integer divider.
     ///
     /// Kills any clock already running on `CM_PWM` first — the
     /// datasheet requires disabling the generator before changing its
@@ -217,7 +268,7 @@ impl Pwm {
 
         unsafe {
             cm_pwm.div().write(|w| {
-                w.divi().bits(clock_divisor);
+                w.divi().bits(clock_manager::clamp_divisor(clock_divisor));
                 w.divf().bits(0);
                 w.passwd().passwd()
             });
@@ -431,21 +482,29 @@ impl Pwm {
     /// range)`, using `PLLD_per`'s nominal 500MHz.
     ///
     /// Integer division makes the result — and therefore the real sample
-    /// rate — approximate, not exact (see the "Clock" section). Clamped to
-    /// at least 1 so a too-high `sample_rate * range` product can't yield a
-    /// zero divisor.
+    /// rate — approximate, not exact (see the "Clock" section).
+    ///
+    /// Clamped to the range [`Self::init`] can program, `1` to
+    /// [`Self::MAX_CLOCK_DIVISOR`]. The upper end matters: this used to clamp
+    /// to `u16::MAX`, sixteen times what the 12-bit `DIVI` field can hold, so
+    /// a low enough `sample_rate * range` product returned a divisor that was
+    /// then silently masked down to something unrelated. The floor keeps a
+    /// too-high product from yielding a zero divisor.
+    ///
+    /// The clamp bites when `sample_rate * range` falls below
+    /// [`Self::MIN_CLOCK_HZ`] — around 122 kHz, which for any plausible
+    /// `range` is far below audio rates. Pair this with [`Self::clock_hz`] to
+    /// see the rate that will actually result.
     pub const fn audio_clock_divisor(sample_rate: u32, range: u16) -> u16 {
         let product = sample_rate as u64 * range as u64;
         if product == 0 {
-            return 1;
+            return clock_manager::MIN_DIVISOR;
         }
-        let divisor = 500_000_000u64 / product;
-        if divisor < 1 {
-            1
-        } else if divisor > u16::MAX as u64 {
-            u16::MAX
+        let divisor = clock_manager::SOURCE_HZ as u64 / product;
+        if divisor > u16::MAX as u64 {
+            clock_manager::MAX_DIVISOR
         } else {
-            divisor as u16
+            clock_manager::clamp_divisor(divisor as u16)
         }
     }
 }

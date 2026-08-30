@@ -24,6 +24,7 @@ pub mod bluetooth;
 #[cfg(feature = "rt")]
 mod boot;
 mod cache;
+mod clock_manager;
 /// Identity of the core executing this code — see the module's own doc
 /// comment for why this is not part of `multicore`.
 pub mod cpu;
