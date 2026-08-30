@@ -3,23 +3,22 @@
 
 // A TCP/IP stack on the on-board Ethernet, driven by `embassy-net` — the
 // async counterpart to rpi-hal's `usb_ethernet_smoltcp.rs`, and the thing
-// the `Lan9514Driver` adapter exists for.
+// this crate's `lan9514` adapter exists for.
 //
 // Bring-up is identical to that example: power the USB controller, start
 // DWC2, enumerate the bus, find the LAN9514, program the firmware MAC and
 // enable RX/TX. From there this hands the chip to `embassy-net` instead of
 // running a `smoltcp` poll loop by hand.
 //
-// Three tasks, and the middle one is the interesting part:
+// Three tasks:
 //
-// - `net_task` runs `embassy-net`'s own runner, which owns the driver and
-//   moves frames.
-// - `poll_task` calls `lan9514::wake_rx` on a ticker. Without it nothing
-//   is ever received: the chip is reached by polling over USB bulk
-//   endpoints, and this SoC has no USB interrupt wired up in rpi-hal, so
-//   there is nothing to wake the runner when a frame lands. The interval
-//   is the latency-versus-wake-ups trade, and it belongs to the
-//   application because only the application knows which way to take it.
+// - `net_task` runs `embassy-net`'s own runner, which owns the stack and
+//   serves it from the adapter's queues.
+// - `lan9514_task` runs the adapter's runner, which moves frames between
+//   those queues and the chip's two bulk endpoints. It awaits the USB
+//   controller's interrupt rather than polling, so there is no ticker
+//   here and no poll interval for the application to pick — which is why
+//   `__irq_handler` below has to dispatch that interrupt.
 // - `echo_task` waits for DHCP, prints the lease, then serves TCP echo on
 //   port 7 (RFC 862).
 //
@@ -32,20 +31,21 @@ use core::fmt::Write as _;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, StackResources};
-use embassy_time::{Duration, Ticker};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::rng::Rng;
 use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
-use rpi_hal::usb::lan9514::{self, Lan9514, Lan9514Driver};
+use rpi_hal::usb::lan9514::Lan9514;
 use rpi_hal::{halt, irq, lic::Lic, pac, timer::Timer, uart::Uart, usb};
+use rpi_hal_embassy::lan9514::{Lan9514Driver, Lan9514Runner, Lan9514State};
 use rpi_hal_embassy::{Executor, time_driver};
 
-/// How often the application nudges the driver to look for a frame.
-///
-/// 1ms keeps latency in the same ballpark as the blocking example's poll
-/// loop. Raising it costs latency and lowers wake-ups; there is no
-/// interrupt to make the choice for us.
-const RX_POLL_INTERVAL: Duration = Duration::from_millis(1);
+/// Frames the adapter may hold queued inbound. Four absorbs a small burst
+/// without the receive loop having to wait on the stack; each costs one
+/// MTU of RAM.
+const RX_QUEUE: usize = 4;
+
+/// The outbound counterpart to [`RX_QUEUE`].
+const TX_QUEUE: usize = 4;
 
 /// TCP port the echo server listens on — the Echo Protocol's conventional
 /// port (RFC 862).
@@ -71,17 +71,13 @@ unsafe fn make_static<T>(t: &mut T) -> &'static mut T {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static, 'static>>) -> ! {
+async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static>>) -> ! {
     runner.run().await
 }
 
 #[embassy_executor::task]
-async fn poll_task() {
-    let mut ticker = Ticker::every(RX_POLL_INTERVAL);
-    loop {
-        ticker.next().await;
-        lan9514::wake_rx();
-    }
+async fn lan9514_task(runner: Lan9514Runner<'static, 'static>) -> ! {
+    runner.run().await
 }
 
 #[embassy_executor::task]
@@ -206,16 +202,30 @@ pub extern "C" fn kmain() -> ! {
     let result = usb::enumerate(dwc2, &timer, |channel, timer, device| {
         match Lan9514::from_device(channel, timer, device) {
             Ok(Some(lan9514)) => {
-                // The stack needs a channel of its own. `channel` belongs
-                // to enumeration and is gone once this callback returns,
-                // while the driver below keeps moving frames forever.
-                let Some(net_channel) = dwc2.alloc_channel() else {
-                    let _ = writeln!(uart.as_mut().unwrap(), "no free host channel for the stack");
+                // The stack needs two channels of its own, one per
+                // direction — see the adapter's documentation for why it
+                // is two. `channel` belongs to enumeration and is gone
+                // once this callback returns, while the runner below
+                // keeps moving frames forever.
+                let (Some(rx_channel), Some(tx_channel)) =
+                    (dwc2.alloc_channel(), dwc2.alloc_channel())
+                else {
+                    let _ = writeln!(
+                        uart.as_mut().unwrap(),
+                        "no free host channels for the stack"
+                    );
                     return core::ops::ControlFlow::Break(());
                 };
                 // Diverges, so enumeration never resumes — and so the
                 // borrows widened inside really do last forever.
-                run(uart.take().unwrap(), net_channel, timer, lan9514, mac)
+                run(
+                    uart.take().unwrap(),
+                    rx_channel,
+                    tx_channel,
+                    timer,
+                    lan9514,
+                    mac,
+                )
             }
             _ => core::ops::ControlFlow::Continue(()),
         }
@@ -229,7 +239,8 @@ pub extern "C" fn kmain() -> ! {
     halt();
 }
 
-/// Services the interrupts the executor depends on.
+/// Services the interrupts the executor and the Ethernet adapter depend
+/// on.
 ///
 /// Mandatory, and silently fatal to omit: `rpi-hal` provides only a *weak*
 /// no-op `__irq_handler`, so without this the first `embassy-time`
@@ -237,6 +248,12 @@ pub extern "C" fn kmain() -> ! {
 /// controller keeps asserting, and the core re-enters the handler
 /// forever. Every task stops making progress at that instant, which on the
 /// console looks like a hang immediately after bring-up.
+///
+/// The USB line is what completes the adapter's transfers. Omitting *that*
+/// half fails differently and more quietly: bring-up prints normally, then
+/// no frame is ever received and DHCP never completes, because the
+/// runner's receive is parked on a channel nothing will ever report the
+/// halt of.
 #[unsafe(no_mangle)]
 pub extern "C" fn __irq_handler() {
     let peripherals = unsafe { pac::Peripherals::steal() };
@@ -245,17 +262,24 @@ pub extern "C" fn __irq_handler() {
     if lic.is_timer1_pending() {
         time_driver::on_timer_irq();
     }
+    if lic.is_usb_pending() {
+        usb::dwc2::on_irq();
+    }
 }
 
 /// Brings the chip up and hands it to `embassy-net`. Never returns.
 fn run(
     mut uart: Uart,
-    mut channel: Channel<'static>,
+    mut rx_channel: Channel<'static>,
+    tx_channel: Channel<'static>,
     timer: &Timer,
     mut lan9514: Lan9514,
     mac: [u8; 6],
 ) -> ! {
-    if let Err(e) = lan9514.start(&mut channel, timer, mac) {
+    // Started over the receive channel, on endpoint 0 — bring-up is
+    // control transfers, and happens before either channel takes up its
+    // frame duties.
+    if let Err(e) = lan9514.start(&mut rx_channel, timer, mac) {
         let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
         halt();
     }
@@ -268,12 +292,21 @@ fn run(
     let peripherals = unsafe { pac::Peripherals::steal() };
     let lic = Lic::new(peripherals.LIC);
     time_driver::init(Timer::new(peripherals.SYSTMR), &lic);
+
+    // The adapter's transfers complete on this interrupt and on nothing
+    // else. Enabled after `start`, deliberately: bring-up above ran on
+    // the blocking methods, which poll their own `HCINT` and would race
+    // the handler for it.
+    lic.enable_usb_irq();
     irq::enable_irq();
 
     // Everything below outlives `run`, which never returns.
     let timer: &'static Timer = unsafe { &*(timer as *const Timer) };
 
-    let driver = Lan9514Driver::new(lan9514, channel, timer, mac);
+    let mut state = Lan9514State::<RX_QUEUE, TX_QUEUE>::new();
+    let state = unsafe { make_static(&mut state) };
+    let (driver, lan9514_runner) =
+        rpi_hal_embassy::lan9514::new(state, lan9514, rx_channel, tx_channel, timer, mac);
 
     // A random seed keeps TCP initial sequence numbers and the DHCP
     // transaction ID from repeating across boots. The hardware RNG is
@@ -292,7 +325,7 @@ fn run(
 
     executor.run(|spawner| {
         spawner.spawn(net_task(runner).unwrap());
-        spawner.spawn(poll_task().unwrap());
+        spawner.spawn(lan9514_task(lan9514_runner).unwrap());
         spawner.spawn(echo_task(stack, uart).unwrap());
     });
 }

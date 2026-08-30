@@ -184,6 +184,60 @@ optimization rather than a requirement: it would let each core arm its own
 alarm and skip the detour through core 0's interrupt, at the cost of a
 second timebase to reconcile with `now()`.
 
+## Ethernet
+
+Enable the `embassy-net-driver` feature for the `lan9514` module: an
+`embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver, so a
+TCP/IP stack runs on the on-board jack. See `examples/embassy_net_echo.rs`
+(TCP echo) and `examples/embassy_picoserve.rs` (an HTTP server).
+
+`lan9514::new` returns two things rather than one:
+
+```rust
+let (driver, runner) = rpi_hal_embassy::lan9514::new(
+    state, lan9514, rx_channel, tx_channel, timer, mac,
+);
+spawner.spawn(lan9514_task(runner).unwrap());
+let (stack, net_runner) = embassy_net::new(driver, config, resources, seed);
+```
+
+`driver` is a pair of packet queues — it is what implements
+`embassy_net_driver::Driver`, and it is synchronous. `runner` is the half
+that talks to the hardware, and is a task. The split is not decoration:
+`Driver`'s `receive`/`transmit` return tokens and take a `Context`, so
+there is nowhere inside them to `.await`. A `Driver` implemented directly
+over the chip would have to do its USB work with the blocking methods,
+holding the executor for the length of every transfer. Moving that work to
+the far side of a queue is what lets it await instead — the same shape
+`cyw43` and friends use, and the reason this depends on
+`embassy-net-driver-channel`.
+
+Two things an application owes it. The USB interrupt must be enabled and
+dispatched, on top of the System Timer wiring above:
+
+```rust
+lic.enable_usb_irq();
+// ...in __irq_handler:
+if lic.is_usb_pending() {
+    rpi_hal::usb::dwc2::on_irq();
+}
+```
+
+Omitting it fails quietly — bring-up prints normally and then no frame
+ever arrives, because the runner's receive is parked on a channel whose
+halt nothing reports. And the runner takes **two** USB host channels, one
+per direction. With one, every transmit would have to cancel the parked
+receive, losing whatever frame the chip was part-way through handing over;
+the two bulk endpoints are separate pipes, and the controller has eight
+channels to schedule them on.
+
+There is nothing to poll. Earlier versions of this adapter (in `rpi-hal`,
+as its `embassy-net-driver` feature) needed the application to call
+`lan9514::wake_rx` on a ticker and to pick the interval itself, because
+nothing could say when a frame had landed. The receive now parks on the
+bulk endpoint and wakes on the controller's interrupt, so that choice is
+gone along with the ticker.
+
 ## Building
 
 ```sh

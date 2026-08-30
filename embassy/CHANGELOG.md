@@ -13,10 +13,47 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The feature adds no code: it selects `rpi-hal`'s cross-core
   `critical-section` implementation, which the driver's shared timer
   queue needs once a second core can reach it.
+- An `embassy-net-driver` feature and a `lan9514` module: the
+  `embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver,
+  moved here from `rpi-hal` (where it was that crate's
+  `embassy-net-driver` feature) and rebuilt on
+  `embassy-net-driver-channel`.
+
+  `lan9514::new` returns a `Lan9514Driver` for `embassy_net::new` and a
+  `Lan9514Runner` the application spawns as a task. The split is what
+  makes an async driver possible at all: `embassy_net_driver::Driver`'s
+  `receive`/`transmit` are synchronous, so a `Driver` implemented
+  directly over the chip has nowhere to await and must do its USB work
+  with the blocking methods, holding the executor for the length of every
+  transfer. As a queue pair plus a task, the USB work is free to await.
+
+  Two consequences for an application. It must dispatch the USB interrupt
+  (`Lic::enable_usb_irq`, and `usb::dwc2::on_irq` from its
+  `__irq_handler`) — the runner's transfers complete on that and nothing
+  else. And it no longer calls `lan9514::wake_rx` on a ticker, because
+  there is nothing left to poll: the receive parks on the bulk endpoint
+  and wakes on the interrupt, so the latency-versus-wake-ups interval an
+  application used to have to choose is gone.
+
+  The runner takes two USB host channels rather than one, one per
+  direction, so a transmit never has to cancel a parked receive.
 
 ### Changed
 
-- Requires `rpi-hal` 0.2.0. Nothing in this crate's own API changes, but the
+- **Requires `rpi-hal` 0.3.0**, up from 0.1.0, which matters to an
+  application more than a dependency bump usually does: this crate's
+  published 0.1.0 asks for `rpi-hal` 0.1.0, so taking a newer HAL
+  alongside it put *two* versions of the HAL in one graph. That fails as
+  `time_driver::init` refusing a `Timer` — "expected
+  `rpi_hal::timer::Timer`, found a different `rpi_hal::timer::Timer`" —
+  which says nothing about the real cause. Pinning both halves of this
+  release to 0.3.0 is what removes it.
+
+  0.3.0 is also a floor rather than a preference: the `lan9514` module
+  below is built on `Lan9514::split` and the LAN9514's `_async` methods,
+  which no earlier release has.
+
+  Nothing in this crate's own API changes, but the
   two `embassy-net` examples move to 0.2.0's owned USB `Channel`: they
   allocate a channel for the stack with `Dwc2Host::alloc_channel` rather
   than lending the whole controller, and `Lan9514Driver` grew a second

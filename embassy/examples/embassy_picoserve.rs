@@ -35,13 +35,16 @@ use picoserve::routing::{get, get_service};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::rng::Rng;
 use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
-use rpi_hal::usb::lan9514::{self, Lan9514, Lan9514Driver};
+use rpi_hal::usb::lan9514::Lan9514;
 use rpi_hal::{halt, irq, lic::Lic, pac, timer::Timer, uart::Uart, usb};
+use rpi_hal_embassy::lan9514::{Lan9514Driver, Lan9514Runner, Lan9514State};
 use rpi_hal_embassy::{Executor, time_driver};
 
-/// How often the application nudges the driver to look for a frame.
-/// There is no USB interrupt, so nothing else will.
-const RX_POLL_INTERVAL: Duration = Duration::from_millis(1);
+/// Frames the adapter may hold queued in each direction, inbound and
+/// outbound. Each costs one MTU of RAM.
+const RX_QUEUE: usize = 4;
+/// The outbound counterpart to [`RX_QUEUE`].
+const TX_QUEUE: usize = 4;
 
 /// Concurrent connections the server can hold, one per task.
 const WEB_TASKS: usize = 2;
@@ -78,17 +81,13 @@ unsafe fn make_static<T>(t: &mut T) -> &'static mut T {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static, 'static>>) -> ! {
+async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static>>) -> ! {
     runner.run().await
 }
 
 #[embassy_executor::task]
-async fn poll_task() {
-    let mut ticker = Ticker::every(RX_POLL_INTERVAL);
-    loop {
-        ticker.next().await;
-        lan9514::wake_rx();
-    }
+async fn lan9514_task(runner: Lan9514Runner<'static, 'static>) -> ! {
+    runner.run().await
 }
 
 #[embassy_executor::task(pool_size = WEB_TASKS)]
@@ -214,14 +213,27 @@ pub extern "C" fn kmain() -> ! {
     let result = usb::enumerate(dwc2, &timer, |channel, timer, device| {
         match Lan9514::from_device(channel, timer, device) {
             Ok(Some(lan9514)) => {
-                // The stack needs a channel of its own: `channel` belongs to
-                // enumeration and is gone once this callback returns, while
-                // the driver keeps moving frames forever.
-                let Some(net_channel) = dwc2.alloc_channel() else {
-                    let _ = writeln!(uart.as_mut().unwrap(), "no free host channel for the stack");
+                // The stack needs two channels of its own, one per
+                // direction: `channel` belongs to enumeration and is gone
+                // once this callback returns, while the runner keeps
+                // moving frames forever.
+                let (Some(rx_channel), Some(tx_channel)) =
+                    (dwc2.alloc_channel(), dwc2.alloc_channel())
+                else {
+                    let _ = writeln!(
+                        uart.as_mut().unwrap(),
+                        "no free host channels for the stack"
+                    );
                     return core::ops::ControlFlow::Break(());
                 };
-                run(uart.take().unwrap(), net_channel, timer, lan9514, mac)
+                run(
+                    uart.take().unwrap(),
+                    rx_channel,
+                    tx_channel,
+                    timer,
+                    lan9514,
+                    mac,
+                )
             }
             _ => core::ops::ControlFlow::Continue(()),
         }
@@ -233,12 +245,15 @@ pub extern "C" fn kmain() -> ! {
     halt();
 }
 
-/// Services the interrupts the executor depends on.
+/// Services the interrupts the executor and the Ethernet adapter depend
+/// on.
 ///
 /// Mandatory, and silently fatal to omit: `rpi-hal`'s `__irq_handler` is
 /// weak and a no-op, so without this the first `embassy-time` deadline
 /// fires, nothing acknowledges the Compare 1 match, and the core livelocks
-/// re-entering the handler.
+/// re-entering the handler. The USB line is what completes the adapter's
+/// transfers; leaving that half out is quieter still — bring-up prints
+/// normally and then no frame ever arrives.
 #[unsafe(no_mangle)]
 pub extern "C" fn __irq_handler() {
     let peripherals = unsafe { pac::Peripherals::steal() };
@@ -247,17 +262,24 @@ pub extern "C" fn __irq_handler() {
     if lic.is_timer1_pending() {
         time_driver::on_timer_irq();
     }
+    if lic.is_usb_pending() {
+        usb::dwc2::on_irq();
+    }
 }
 
 /// Brings the chip up and starts the stack. Never returns.
 fn run(
     mut uart: Uart,
-    mut channel: Channel<'static>,
+    mut rx_channel: Channel<'static>,
+    tx_channel: Channel<'static>,
     timer: &Timer,
     mut lan9514: Lan9514,
     mac: [u8; 6],
 ) -> ! {
-    if let Err(e) = lan9514.start(&mut channel, timer, mac) {
+    // Started over the receive channel, on endpoint 0 — bring-up is
+    // control transfers, and happens before either channel takes up its
+    // frame duties.
+    if let Err(e) = lan9514.start(&mut rx_channel, timer, mac) {
         let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
         halt();
     }
@@ -265,12 +287,21 @@ fn run(
     let peripherals = unsafe { pac::Peripherals::steal() };
     let lic = Lic::new(peripherals.LIC);
     time_driver::init(Timer::new(peripherals.SYSTMR), &lic);
+
+    // The adapter's transfers complete on this interrupt and on nothing
+    // else. Enabled after `start`, deliberately: bring-up above ran on
+    // the blocking methods, which poll their own `HCINT` and would race
+    // the handler for it.
+    lic.enable_usb_irq();
     irq::enable_irq();
 
     // Everything below outlives `run`, which never returns.
     let timer: &'static Timer = unsafe { &*(timer as *const Timer) };
 
-    let driver = Lan9514Driver::new(lan9514, channel, timer, mac);
+    let mut state = Lan9514State::<RX_QUEUE, TX_QUEUE>::new();
+    let state = unsafe { make_static(&mut state) };
+    let (driver, lan9514_runner) =
+        rpi_hal_embassy::lan9514::new(state, lan9514, rx_channel, tx_channel, timer, mac);
 
     let mut rng = Rng::new();
     let seed = (u64::from(rng.next_u32()) << 32) | u64::from(rng.next_u32());
@@ -286,7 +317,7 @@ fn run(
 
     executor.run(|spawner| {
         spawner.spawn(net_task(runner).unwrap());
-        spawner.spawn(poll_task().unwrap());
+        spawner.spawn(lan9514_task(lan9514_runner).unwrap());
         spawner.spawn(report_task(stack, uart).unwrap());
         for id in 0..WEB_TASKS {
             spawner.spawn(web_task(id, stack).unwrap());

@@ -31,6 +31,11 @@
 /// Thread-mode executor for AArch32 and AArch64 — see the module's own
 /// documentation for why this isn't one of `embassy-executor`'s backends.
 pub mod executor;
+/// `embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver —
+/// see the module's own documentation for the interrupt wiring an
+/// application must provide.
+#[cfg(feature = "embassy-net-driver")]
+pub mod lan9514;
 /// `embassy-time` driver over the BCM System Timer — see the module's own
 /// documentation for the interrupt wiring an application must provide.
 pub mod time_driver;

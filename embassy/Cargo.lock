@@ -146,6 +146,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc328bf943af66b80b98755db9106bf7e7471b0cf47dc8559cd9a6be504cc9c"
 
 [[package]]
+name = "embassy-futures"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc2d050bdc5c21e0862a89256ed8029ae6c290a93aecefc73084b3002cdebb01"
+
+[[package]]
 name = "embassy-net"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -167,6 +173,17 @@ name = "embassy-net-driver"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524eb3c489760508f71360112bca70f6e53173e6fe48fc5f0efd0f5ab217751d"
+
+[[package]]
+name = "embassy-net-driver-channel"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a07d2eb9f05a6fc876500949856ea1be40773d866d8cb99384f72d0ae4568c16"
+dependencies = [
+ "embassy-futures",
+ "embassy-net-driver",
+ "embassy-sync",
+]
 
 [[package]]
 name = "embassy-sync"
@@ -530,13 +547,12 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rpi-hal"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e66d8e1ea2626e9f34176aa992a089f14a2afb3e4272cdb5d8fbd45565ddaf3"
+checksum = "50638234367c4097fc38a0f4af6c1be86fa3c6edbe1bae2c1c1e942b1152bd91"
 dependencies = [
  "bcm2837-lpa",
  "critical-section",
- "embassy-net-driver",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-io",
@@ -549,7 +565,10 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embassy-executor",
+ "embassy-futures",
  "embassy-net",
+ "embassy-net-driver",
+ "embassy-net-driver-channel",
  "embassy-sync",
  "embassy-time",
  "embassy-time-driver",

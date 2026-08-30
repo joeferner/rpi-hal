@@ -43,6 +43,13 @@ this crate's own API:
 
 - **The `rpi-hal` version requirement.** Raising it forces every consumer
   to move too, since the two crates share types (`Lic`, the PAC).
+
+  Check `Cargo.toml` for a `[patch.crates-io]` override on it before
+  releasing. One is there while a feature here depends on `rpi-hal` API
+  that is written but not yet published; the requirement has to be raised
+  to the release carrying it and the `[patch]` deleted, in the same
+  change. `cargo package --features <the feature>` is what catches a
+  release where that was forgotten, since `[patch]` is ignored there.
 - **The `embassy-*` version requirements.** `embassy-time-driver` and
   `embassy-executor` are the contract this crate implements; moving to a
   new major of either changes which `embassy-time` an application can use
