@@ -62,6 +62,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Async I2C** (`async` feature): `embedded_hal_async::i2c::I2c` on the
+  same `I2c` type, parking on the controller's `DONE`/`TXW`/`RXR`
+  interrupts rather than polling `S`, so the millisecond a six-byte read
+  at 100kHz costs goes to the executor instead of a spin loop. With it,
+  `i2c::on_irq` and `Lic::enable_i2c_irq`/`disable_i2c_irq`/
+  `is_i2c_pending`. BSC0 and BSC1 share one interrupt line, so the
+  handler checks both controllers, and leaves alone any that a blocking
+  transfer is driving (it arms none of these conditions).
+
+  Timeouts are the caller's here rather than the driver's: wrap the
+  future in `embassy_time::with_timeout` or equivalent. Cancelling one
+  that way is safe — the drop masks the interrupts, clears the FIFOs and
+  cleans the status, so the next transfer starts from a known state. The
+  stored `Timer` deadline still applies as a backstop, but only where the
+  future is polled at all, which the module docs spell out.
 - **`examples/soc_temperature.rs`**, printing die temperature, ARM clock
   and throttling status together once a second. No new API —
   `Mailbox::temperature_millicelsius` and `Mailbox::throttled` have been
@@ -128,6 +143,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so it is no longer exhaustively matchable on the two previous variants.
   Both map to `ErrorKind::Other` — `embedded-hal` 1.0 has no closer
   variant, since its `Overrun` means the receive buffer was overrun.
+- **A clock-stretch timeout (`S.CLKT`) is now reported**, as
+  `Error::Timeout`, by the blocking transfers as well as the new async
+  ones — a slave that held SCL past the `CLKT` allowance produced a
+  transfer the hardware cut short, and returning its bytes as if nothing
+  had happened was wrong. `CLKT` is also cleared alongside `DONE`/`ERR`
+  now: it latches, so one uncleared timeout would have been read as a
+  fault by every transfer after it, on a bus that had recovered.
 
 ### Fixed
 

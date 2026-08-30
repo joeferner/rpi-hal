@@ -59,6 +59,12 @@ clippy:
 	# compiles either.
 	cargo clippy --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode -- -D warnings
 	cargo clippy --release --features bcm2837,mmal --example hdmi_audio -- -D warnings
+	# The `async` modules (gpio/uart/i2c/usb `asynch.rs`) are compiled by
+	# none of the lines above -- the feature is off by default, and this
+	# crate has no async examples to turn it on, since an executor lives
+	# in `rpi-hal-embassy` rather than here. Without this line the only
+	# thing that ever compiles them is `make doc`.
+	cargo clippy --release --features bcm2837,async -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing -- broken intra-doc links are the main
