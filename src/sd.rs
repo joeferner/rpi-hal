@@ -1304,3 +1304,204 @@ impl embedded_sdmmc::BlockDevice for SdCard<'_> {
         Err(SdCardError::Unsupported)
     }
 }
+
+/// The transfer unit, where two crates' constants have to agree.
+///
+/// [`Block`] is `[u8; 512]` and `resident_fat::BLOCK_SIZE` is 512; the
+/// `as_chunks` splits in [`SdBlockDevice`] are only well-typed while the two
+/// agree, so this takes the value from `resident-fat` rather than repeating
+/// the literal. Should that crate ever move off 512, the assertion below
+/// says so by name instead of failing as a type mismatch further down.
+#[cfg(feature = "resident-fat")]
+const BLOCK_LEN: usize = resident_fat::BLOCK_SIZE;
+
+#[cfg(feature = "resident-fat")]
+const _: () = assert!(BLOCK_LEN == core::mem::size_of::<Block>());
+
+/// A [`Sd`] card wrapped as a `resident-fat`
+/// [`BlockDevice`](resident_fat::BlockDevice), so that crate's FAT32
+/// filesystem can be layered on top. Bundles the card with a borrow of the
+/// [`Timer`] every transfer needs for its timeouts, exactly as [`SdCard`]
+/// does.
+///
+/// # Why this exists alongside [`SdCard`]
+///
+/// The two adapters differ in their unit of transfer, not in the filesystem
+/// above them. `embedded-sdmmc` moves a slice of 512-byte newtypes, which
+/// aren't guaranteed to sit contiguously in memory; `resident-fat` moves a
+/// plain `&[u8]` spanning a whole run of consecutive blocks. That byte slice
+/// is already exactly what the driver's multi-block path wants, so this
+/// adapter splits it with `as_chunks` and hands the pieces straight over —
+/// no staging buffer and no copy.
+///
+/// Reaching `resident-fat` through its own `embedded-sdmmc` bridge and
+/// [`SdCard`] works and is the right route for a consumer already invested in
+/// that trait, but it pays for the newtype twice: a bounded staging buffer
+/// (64 KiB by default), and a copy of every byte in each direction. It also
+/// caps [`max_transfer_blocks`] at the staging buffer's size, where this
+/// adapter reports the controller's real ceiling.
+///
+/// # What it reports
+///
+/// [`max_transfer_blocks`] is 65535, the largest run `BLKSIZECNT.blkcnt` can
+/// express — so a multi-megabyte read or write is split by the transfer limit
+/// rather than by a buffer, and costs one `CMD18`/`CMD25` per 32 MiB. (DMA
+/// isn't used here — that path needs a caller-supplied DMA channel; reach for
+/// `Sd::read_blocks_dma`/`Sd::write_blocks_dma` directly when throughput
+/// matters.)
+///
+/// [`block_count`] is `Ok(None)`, meaning "I cannot say", because the driver
+/// has no capacity (CSD) readout. That is a case `resident-fat`'s trait
+/// admits deliberately: it skips a sanity check on the volume's own size
+/// claims and mounts anyway, rather than refusing a good card because the
+/// driver one layer down is reticent. Note the contrast with [`SdCard`],
+/// whose trait has no way to say it doesn't know and so must return
+/// [`SdCardError::Unsupported`].
+///
+/// # Allocation
+///
+/// `resident-fat` uses `alloc`, so a binary that enables this feature must
+/// register a `#[global_allocator]`. This crate cannot: only the final
+/// binary may. See `examples/heap_alloc.rs`.
+///
+/// Available only with the `resident-fat` feature enabled.
+///
+/// [`max_transfer_blocks`]: resident_fat::BlockDevice::max_transfer_blocks
+/// [`block_count`]: resident_fat::BlockDevice::block_count
+#[cfg(feature = "resident-fat")]
+pub struct SdBlockDevice<'t> {
+    sd: Sd,
+    timer: &'t Timer,
+}
+
+#[cfg(feature = "resident-fat")]
+impl<'t> SdBlockDevice<'t> {
+    /// Wraps an initialized [`Sd`] and the [`Timer`] its transfers need.
+    pub fn new(sd: Sd, timer: &'t Timer) -> Self {
+        Self { sd, timer }
+    }
+
+    /// The wrapped card, borrowed.
+    ///
+    /// `resident-fat` owns the device once a volume is mounted and lends it
+    /// back through its own accessors, so this is the way to reach the
+    /// driver's own methods — a DMA transfer, say — without unmounting.
+    pub fn inner(&self) -> &Sd {
+        &self.sd
+    }
+
+    /// Unwraps back to the card, dropping the timer borrow.
+    pub fn into_inner(self) -> Sd {
+        self.sd
+    }
+}
+
+/// Error type for [`SdBlockDevice`]'s
+/// [`BlockDevice`](resident_fat::BlockDevice) implementation.
+///
+/// Available only with the `resident-fat` feature enabled.
+#[cfg(feature = "resident-fat")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdBlockDeviceError {
+    /// A block read or write failed at the SD driver level; carries the
+    /// underlying [`Error`].
+    Sd(Error),
+    /// The transfer started past block 2^32, which the controller's 32-bit
+    /// block address cannot reach.
+    ///
+    /// Refused rather than truncated. The alternative — letting the high
+    /// bits fall off — turns an unreachable address into a *reachable* one
+    /// and writes to the wrong place on the card, which is the kind of
+    /// failure that is only ever diagnosed after the damage.
+    ///
+    /// A 32-bit block address covers 2 TiB, so nothing short of an SDUC card
+    /// can produce this.
+    BlockOutOfRange {
+        /// The first block of the refused transfer.
+        start_block: u64,
+    },
+}
+
+#[cfg(feature = "resident-fat")]
+impl From<Error> for SdBlockDeviceError {
+    /// Wraps an SD driver [`Error`] as [`SdBlockDeviceError::Sd`].
+    fn from(e: Error) -> Self {
+        SdBlockDeviceError::Sd(e)
+    }
+}
+
+/// Narrows a `resident-fat` block address to the controller's 32 bits.
+#[cfg(feature = "resident-fat")]
+fn checked_block_index(start_block: u64) -> Result<u32, SdBlockDeviceError> {
+    u32::try_from(start_block).map_err(|_| SdBlockDeviceError::BlockOutOfRange { start_block })
+}
+
+#[cfg(feature = "resident-fat")]
+impl resident_fat::BlockDevice for SdBlockDevice<'_> {
+    type Error = SdBlockDeviceError;
+
+    /// Reads a run of consecutive blocks in a single (multi-block, when
+    /// longer than one) polled SD read.
+    ///
+    /// # Panics
+    ///
+    /// If `blocks.len()` isn't a multiple of 512, which the trait forbids.
+    /// Asserted rather than rounded down: `as_chunks_mut` would hand back
+    /// the odd tail as a remainder, and ignoring it would fill part of the
+    /// caller's buffer, return `Ok`, and leave the rest holding whatever it
+    /// held before.
+    fn read(&mut self, start_block: u64, blocks: &mut [u8]) -> Result<(), Self::Error> {
+        let index = checked_block_index(start_block)?;
+        // Zero-copy, and safely so: `Block` is `[u8; 512]`, a type alias
+        // rather than a newtype, so the split is a plain reborrow of the
+        // caller's buffer with no layout assumption behind it. This is the
+        // whole reason the adapter is worth having.
+        let (blocks, rest) = blocks.as_chunks_mut::<BLOCK_LEN>();
+        assert!(rest.is_empty(), "transfer length must be a multiple of 512");
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let count = checked_block_count(blocks.len())?;
+        self.sd
+            .read_blocks_pio(index, count, blocks.iter_mut(), self.timer)?;
+        Ok(())
+    }
+
+    /// Writes a run of consecutive blocks in a single (multi-block, when
+    /// longer than one) polled SD write — the mirror of
+    /// [`read`](resident_fat::BlockDevice::read), with the same length rule
+    /// and the same reason for it.
+    ///
+    /// Waits for transfer-complete, so a successful return means the card
+    /// took the data. `resident-fat` still has its own `sync`, which is
+    /// about the filesystem's metadata rather than this.
+    ///
+    /// # Panics
+    ///
+    /// If `blocks.len()` isn't a multiple of 512.
+    fn write(&mut self, start_block: u64, blocks: &[u8]) -> Result<(), Self::Error> {
+        let index = checked_block_index(start_block)?;
+        let (blocks, rest) = blocks.as_chunks::<BLOCK_LEN>();
+        assert!(rest.is_empty(), "transfer length must be a multiple of 512");
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let count = checked_block_count(blocks.len())?;
+        self.sd
+            .write_blocks_pio(index, count, blocks.iter(), self.timer)?;
+        Ok(())
+    }
+
+    /// Always `Ok(None)` — the driver has no capacity (CSD) readout, so it
+    /// doesn't know. See the type's documentation for why that is a better
+    /// answer here than an error.
+    fn block_count(&mut self) -> Result<Option<u64>, Self::Error> {
+        Ok(None)
+    }
+
+    /// 65535 — the largest run the controller's 16-bit `BLKSIZECNT.blkcnt`
+    /// field can express, and so the longest transfer one command can carry.
+    fn max_transfer_blocks(&self) -> u64 {
+        u64::from(u16::MAX)
+    }
+}
