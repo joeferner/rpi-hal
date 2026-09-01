@@ -20,6 +20,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **GPIO internal pull resistors.** `gpio::Pull`, `Pin::set_pull`, and
+  `Pin::into_pull_up_input`/`into_pull_down_input`/`into_floating_input`
+  configure a pin's internal pull-up/pull-down — previously unreachable
+  from outside the crate, so a consumer wiring a button or an
+  open-collector sensor had to add an external resistor or poke
+  `GPPUD` themselves. `Pin::pull` reads the setting back, on `bcm2711`
+  only: the legacy `GPPUD`/`GPPUDCLK` pair clocks a value into a pin
+  without storing it anywhere readable. `examples/gpio_pull.rs` checks
+  both resistors against an unconnected pin, and
+  `examples/gpio_irq_button.rs` now uses the internal pull-down instead
+  of asking for a 10k resistor.
+
+  The two SoCs use unrelated registers here — the legacy
+  `GPPUD`/`GPPUDCLK` clock-in sequence versus BCM2711's
+  `GPIO_PUP_PDN_CNTRL_REG0..3`, with *different encodings* of the pull
+  value — and four drivers (`uart`, `mini_uart`, `sd`, `sdio`) each
+  carried their own copy of the sequence for their own pins. They now all
+  route through the one implementation in `src/gpio.rs`, which is the
+  only place that knows which scheme applies.
+
 - **`resident-fat` feature**: `sd::SdBlockDevice`, an adapter implementing
   `resident-fat`'s `BlockDevice` trait over the SD driver, with
   `sd::SdBlockDeviceError` for its errors.

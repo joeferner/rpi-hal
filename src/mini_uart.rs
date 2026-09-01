@@ -14,19 +14,6 @@
 use crate::pac::{AUX, GPIO, UART1};
 use core::fmt;
 
-/// GPIO peripheral base address, matching `bcm2837_lpa::GPIO::PTR`.
-/// Kept in sync manually since the pull-control registers below aren't
-/// in that PAC's SVD at all — same situation as [`crate::uart`], which
-/// pokes these same addresses for the same reason.
-#[cfg(not(feature = "bcm2711"))]
-const GPIO_BASE: usize = 0x3f20_0000;
-/// GPIO Pull-up/down Enable (BCM2835 ARM Peripherals datasheet §6.1).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD: *mut u32 = (GPIO_BASE + 0x94) as *mut u32;
-/// GPIO Pull-up/down Enable Clock 0, covers GPIO0-31.
-#[cfg(not(feature = "bcm2711"))]
-const GPPUDCLK0: *mut u32 = (GPIO_BASE + 0x98) as *mut u32;
-
 /// The mini UART's reference clock, in Hz.
 ///
 /// Unlike PL011's fixed 48MHz reference, the mini UART is clocked from
@@ -51,46 +38,12 @@ const GPPUDCLK0: *mut u32 = (GPIO_BASE + 0x98) as *mut u32;
 ///   this constant is simply correct.
 pub const CORE_CLOCK_HZ: u32 = 250_000_000;
 
-/// Disables the pull resistor on GPIO14/15 via the legacy
-/// GPPUD/GPPUDCLK0 sequence — see [`crate::uart`]'s equivalent for why
-/// this pokes physical addresses directly rather than going through the
-/// PAC (the BCM2836/2837 pull registers aren't modeled in
-/// `bcm2837-lpa`'s BCM2711-shaped SVD). `gpio` is unused on this side —
-/// taken anyway so both branches share one call site; see the
-/// `bcm2711` branch below for the side that actually needs it.
-#[cfg(not(feature = "bcm2711"))]
-fn disable_gpio14_15_pull(_gpio: &GPIO) {
-    const GPIO14_15_MASK: u32 = (1 << 14) | (1 << 15);
-    unsafe {
-        core::ptr::write_volatile(GPPUD, 0);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUDCLK0, GPIO14_15_MASK);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUD, 0);
-        core::ptr::write_volatile(GPPUDCLK0, 0);
-    }
-}
-
-/// BCM2711 counterpart — see [`crate::uart`]'s identical `disable_pull`
-/// for the full rationale (real `GPIO_PUP_PDN_CNTRL_REG0` scheme,
-/// modeled correctly in `bcm2711-lpa`, so this goes through the PAC
-/// instead of poking raw addresses). Both GPIO14 and GPIO15 fall in
-/// `_REG0` (pins 0-15).
-#[cfg(feature = "bcm2711")]
+/// Disables the pull resistor on GPIO14/15, this driver's only muxed
+/// pins. The register access lives in [`crate::gpio`], which handles the
+/// BCM2836/2837-vs-BCM2711 split.
 fn disable_gpio14_15_pull(gpio: &GPIO) {
-    gpio.gpio_pup_pdn_cntrl_reg0().modify(|_, w| {
-        w.gpio_pup_pdn_cntrl14()
-            .none()
-            .gpio_pup_pdn_cntrl15()
-            .none()
-    });
-}
-
-#[cfg(not(feature = "bcm2711"))]
-fn spin_delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
-    }
+    const GPIO14_15_MASK: u32 = (1 << 14) | (1 << 15);
+    crate::gpio::set_pull_bank(gpio, 0, GPIO14_15_MASK, crate::gpio::Pull::None);
 }
 
 /// Converts a target baud rate to the mini UART's `BAUD` register value,

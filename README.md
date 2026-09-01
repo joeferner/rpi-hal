@@ -135,7 +135,13 @@ implementations where applicable, and all verified on real hardware:
   over all 54 pins, with `embedded_hal::digital` traits. Inputs also
   support edge/level interrupts (`enable_interrupt(Trigger)` +
   `clear_interrupt`, routed via `Lic::enable_gpio_irq`) and blocking
-  `wait_for_high`/`wait_for_low` — see `examples/gpio_irq_button.rs`.
+  `wait_for_high`/`wait_for_low` — see `examples/gpio_irq_button.rs`. The
+  internal pull resistors are configurable per pin (`set_pull(Pull)`,
+  `into_pull_up_input`/`into_pull_down_input`/`into_floating_input`), so a
+  button needs no external resistor — see `examples/gpio_pull.rs`. Note
+  that no pin arrives floating: each powers up with the pull its datasheet
+  pin-table entry gives it, which the boot firmware may then change, and
+  nothing but these calls touches it.
 - **UART0** (`src/uart.rs`): blocking read/write plus interrupt-driven
   RX (`enable_rx_irq`/`try_read_byte`), `embedded_io::Read`/`Write`.
 - **SPI0** (`src/spi.rs`): `embedded_hal::spi::SpiBus`, both

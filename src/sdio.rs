@@ -69,23 +69,6 @@ const GPIO_ALT_FUNCTION: u8 = 0b111;
 /// [`route_gpio_to_emmc`].
 const SD_SLOT_ALT_FUNCTION: u8 = 0b100;
 
-/// GPIO peripheral base — see [`crate::sd`]'s identical constant: the
-/// legacy pull registers below aren't in `bcm2837-lpa`'s SVD, so this
-/// pokes the known physical addresses directly.
-const GPIO_BASE: usize = 0x3f20_0000;
-/// GPIO Pull-up/down Enable (BCM2835 ARM Peripherals datasheet §6.1).
-const GPPUD: *mut u32 = (GPIO_BASE + 0x94) as *mut u32;
-/// GPIO Pull-up/down Enable Clock 1, covers GPIO32-53 — the pins this
-/// driver uses (34-39) all fall here.
-const GPPUDCLK1: *mut u32 = (GPIO_BASE + 0x9c) as *mut u32;
-/// `GPPUD` value selecting pull-up (for `CMD`/`DAT0..DAT3`).
-const GPPUD_PULL_UP: u32 = 2;
-/// `GPPUD` value disabling the pull (for `CLK`). Unlike the SD-card
-/// route — which pulls every line up — the wireless SDIO route leaves
-/// `CLK` with no pull, matching the Linux device tree's pin config for
-/// this exact pin group.
-const GPPUD_PULL_NONE: u32 = 0;
-
 /// Delay after asserting `WL_ON` before touching the bus, letting the
 /// chip's power rails and internal reset settle. Not a datasheet-
 /// mandated figure — the Linux power-sequence node sets no delay — but
@@ -1622,35 +1605,17 @@ fn route_gpio_to_emmc(gpio: &GPIO) {
             .bits(GPIO_ALT_FUNCTION)
     });
 
+    // Two calls, unlike [`crate::sd`]'s single one: `CLK` wants no pull
+    // while the other lines want a pull-up, matching the Linux device
+    // tree's pin config for this exact wireless-SDIO pin group. All
+    // these pins sit in bank 1 (GPIO32-53).
     let pull_up_mask = (1 << (GPIO_CMD - 32))
         | GPIO_DAT
             .iter()
             .fold(0, |mask, pin| mask | (1 << (pin - 32)));
     let clk_mask = 1 << (GPIO_CLK - 32);
-    set_pull(GPPUD_PULL_UP, pull_up_mask);
-    set_pull(GPPUD_PULL_NONE, clk_mask);
-}
-
-/// Applies pull mode `pud` to the GPIO32-53 pins selected by `mask`,
-/// via the legacy `GPPUD`/`GPPUDCLK1` clock-in sequence (BCM2835 ARM
-/// Peripherals datasheet §6.1). Same dance as [`crate::sd`]'s pin
-/// setup, but split into two calls here because `CLK` and the other
-/// lines want different pulls.
-fn set_pull(pud: u32, mask: u32) {
-    unsafe {
-        core::ptr::write_volatile(GPPUD, pud);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUDCLK1, mask);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUD, 0);
-        core::ptr::write_volatile(GPPUDCLK1, 0);
-    }
-}
-
-fn spin_delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
-    }
+    crate::gpio::set_pull_bank(gpio, 1, pull_up_mask, crate::gpio::Pull::Up);
+    crate::gpio::set_pull_bank(gpio, 1, clk_mask, crate::gpio::Pull::None);
 }
 
 /// Sets the SDIO clock to at or below `target_hz` from a `base_hz`
