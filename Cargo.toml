@@ -106,6 +106,12 @@ embedded-io-async = { version = "0.7.0", default-features = false, optional = tr
 # want the corresponding adapter, and the underlying drivers work without
 # either.
 embedded-sdmmc = { version = "0.9.0", default-features = false, optional = true }
+# The other FAT layer, and the newer of the two. No features selected here:
+# `mbr` and `bridge` are the consumer's to choose, and the adapter this
+# crate provides needs neither. Note that this one uses `alloc`, so a binary
+# enabling the feature has to register a `#[global_allocator]` -- see the
+# feature's comment below.
+resident-fat = { version = "0.1.0", default-features = false, optional = true }
 # `medium-ethernet` is what the `phy::Device` adapter needs; `proto-ipv4`
 # and `socket-udp` are the minimum on top of that for smoltcp itself to
 # compile at all (its address and socket enums are empty with no protocol/
@@ -124,6 +130,15 @@ smoltcp = { version = "0.13.1", default-features = false, features = [
 # `#[global_allocator]` itself (only the final binary can). It locks with
 # `critical-section`, which this crate already provides under `rt`.
 embedded-alloc = "0.6.0"
+# `mbr`, for the `sd_resident_fat_read` example's `mount_partition` -- a
+# stock Pi card has a partition table, and finding the volume behind it is
+# what the feature is for. Not a library feature: this crate's adapter is a
+# block device and has no opinion on what is written across it. Cargo unions
+# this with the optional dependency above when building the example, the
+# same arrangement as `smoltcp` below.
+resident-fat = { version = "0.1.0", default-features = false, features = [
+    "mbr",
+] }
 # The DHCP/ICMP features the `usb_ethernet_smoltcp` example's stack needs,
 # on top of the baseline the library's adapter pulls in. Cargo unions these
 # with the optional dependency above when building the example.
@@ -210,6 +225,19 @@ bcm2711 = ["dep:bcm2711-lpa"]
 async = ["dep:embedded-hal-async", "dep:embedded-io-async"]
 # `embedded-sdmmc` `BlockDevice` adapter over the SD driver (src/sd.rs).
 embedded-sdmmc = ["dep:embedded-sdmmc"]
+# `resident-fat` `BlockDevice` adapter over the SD driver (src/sd.rs),
+# alongside the `embedded-sdmmc` one rather than instead of it -- the two
+# traits differ in their unit of transfer, and which is wanted depends on
+# the filesystem above. See `sd::SdBlockDevice` for the comparison.
+#
+# One thing this feature carries that no other here does: `resident-fat`
+# uses `alloc`, so a binary that turns it on must register a
+# `#[global_allocator]` (`examples/heap_alloc.rs` shows one). This crate
+# neither defines nor needs an allocator itself and still doesn't -- a HAL
+# must not, since a program may have only one and that choice belongs to
+# the final binary -- but the requirement travels with the dependency, and
+# it surfaces as a link error rather than a helpful one.
+resident-fat = ["dep:resident-fat"]
 # `smoltcp` `phy::Device` adapters over the LAN9514 Ethernet driver
 # (src/usb/lan9514.rs) and the Wi-Fi driver (src/wifi.rs).
 smoltcp = ["dep:smoltcp"]
@@ -255,6 +283,10 @@ required-features = ["embedded-sdmmc"]
 [[example]]
 name = "sd_fat_write"
 required-features = ["embedded-sdmmc"]
+
+[[example]]
+name = "sd_resident_fat_read"
+required-features = ["resident-fat"]
 
 [[example]]
 name = "i2s_wav_player"

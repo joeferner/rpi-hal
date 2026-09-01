@@ -27,6 +27,11 @@ examples:
 	# Likewise the integration-adapter examples are gated on their own
 	# features (embedded-sdmmc, smoltcp) and skipped by a plain build.
 	cargo build --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan
+	# `resident-fat` gets its own line rather than joining the one above,
+	# so the feature is compiled without `embedded-sdmmc` alongside it --
+	# the two SD adapters are independent, and building them only together
+	# would hide an item in one that had come to depend on the other.
+	cargo build --release --features bcm2837,resident-fat --example sd_resident_fat_read
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo build --release --features bcm2837,v3d --example v3d_probe --example gpu_cube
 	# And the video decoder, gated on `mmal` (which pulls in `vchiq`) plus
@@ -49,6 +54,8 @@ clippy:
 	# Same again for the integration-adapter examples and their src-side
 	# adapters, which a plain lint doesn't compile.
 	cargo clippy --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan -- -D warnings
+	# Separate line for the same reason as in `examples` above.
+	cargo clippy --release --features bcm2837,resident-fat --example sd_resident_fat_read -- -D warnings
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
@@ -89,8 +96,8 @@ clippy:
 # path lib.rs gates behind that cfg is exercised here rather than first
 # failing on the docs.rs builder after a release is already published.
 doc:
-	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,v3d,mmal
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,smoltcp
+	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,resident-fat,smoltcp,v3d,mmal
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,resident-fat,smoltcp
 
 # A chip feature is not optional here, and the reason is easy to trip over:
 # `cargo package` and `cargo publish` finish by building the packaged tarball,

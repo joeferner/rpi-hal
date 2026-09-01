@@ -306,13 +306,17 @@ implementations where applicable, and all verified on real hardware:
   sector and checking its `0x55AA` signature (`examples/sd_read.rs`), and
   by cross-checking the polled and DMA multi-block read paths against each
   other (`examples/sd_multi_block.rs`). Files on the boot FAT partition
-  can be read on top of this through the `embedded-sdmmc` crate: the
-  `embedded-sdmmc` feature adds `sd::SdCard`, a `BlockDevice` adapter over
-  the driver (`examples/sd_fat_read.rs` mounts the boot partition and
-  reads files); both `read` and `write` are wired to the driver's polled
-  multi-block paths (`examples/sd_fat_write.rs` writes a random value to a
-  scratch `TEST.TXT` and reads it back to verify the round-trip).
-  Card-detect (GPIO47) is not implemented yet
+  can be read on top of this through either of two FAT crates, each behind
+  a feature adding its own `BlockDevice` adapter over the driver: the
+  `embedded-sdmmc` feature adds `sd::SdCard` (`examples/sd_fat_read.rs`
+  mounts the boot partition and reads files; `examples/sd_fat_write.rs`
+  writes a random value to a scratch `TEST.TXT` and reads it back to verify
+  the round-trip), and the `resident-fat` feature adds `sd::SdBlockDevice`
+  (`examples/sd_resident_fat_read.rs`). Both wire `read` and `write` to the
+  driver's polled multi-block paths; the difference is that `resident-fat`
+  transfers byte slices spanning a whole run, which reach the driver with no
+  staging buffer and no copy in between. Card-detect (GPIO47) is not
+  implemented yet
   ([issue #14](https://github.com/joeferner/rpi-hal/issues/14)).
 
   On BCM2711 (Pi 4), the physical SD slot is wired to a different
@@ -688,8 +692,25 @@ has what's left.
   implementing `embedded-sdmmc`'s `BlockDevice` trait over the SD
   driver, so a FAT filesystem can be layered on the card (see
   `examples/sd_fat_read.rs`). Both `read` and `write` are wired to the
-  driver's single-block paths; the `TimeSource` a filesystem also needs
-  is left to the caller, since a real clock is application policy.
+  driver's polled multi-block paths, so a run of consecutive blocks costs
+  one command; the `TimeSource` a filesystem also needs is left to the
+  caller, since a real clock is application policy.
+- **`resident-fat`** (off by default): adds `sd::SdBlockDevice`, an
+  adapter implementing `resident-fat`'s `BlockDevice` trait over the same
+  driver (see `examples/sd_resident_fat_read.rs`). Alongside the
+  `embedded-sdmmc` adapter rather than instead of it — the two traits
+  differ in their unit of transfer, and which suits depends on the
+  filesystem above. `resident-fat` hands a device a plain `&[u8]`
+  spanning a whole run of consecutive blocks, which is already the shape
+  the driver's multi-block path wants, so the adapter splits it and hands
+  the pieces straight over: no staging buffer, no copy, and a transfer
+  limit of the controller's real 65535 blocks. Reaching `resident-fat`
+  through its own `embedded-sdmmc` bridge and `sd::SdCard` also works and
+  is the right route for a consumer already invested in that trait, but
+  it pays for the block newtype in both memory and copying. Note that
+  `resident-fat` uses `alloc`, so a binary enabling this feature must
+  register a `#[global_allocator]` — this crate neither has nor needs
+  one, and cannot supply it (see `examples/heap_alloc.rs`).
 - **`smoltcp`** (off by default): adds `usb::lan9514::Lan9514Phy`, an
   adapter implementing `smoltcp`'s `phy::Device` trait over the LAN9514
   Ethernet driver, so a TCP/IP stack can run over the on-board Ethernet

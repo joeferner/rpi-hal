@@ -20,6 +20,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`resident-fat` feature**: `sd::SdBlockDevice`, an adapter implementing
+  `resident-fat`'s `BlockDevice` trait over the SD driver, with
+  `sd::SdBlockDeviceError` for its errors.
+  `examples/sd_resident_fat_read.rs` mounts the boot partition and reads
+  files.
+
+  Alongside the `embedded-sdmmc` adapter rather than replacing it: the two
+  traits differ in their unit of transfer, and which one suits depends on
+  the filesystem above. `resident-fat` transfers a plain `&[u8]` spanning a
+  whole run of consecutive blocks, which is already what the driver's
+  multi-block path takes, so the adapter splits the caller's buffer with
+  `as_chunks` and hands the pieces over — no staging buffer, no copy, and
+  `max_transfer_blocks` is the controller's real 65535 rather than a
+  buffer's size. Reaching `resident-fat` through its own `embedded-sdmmc`
+  bridge and `sd::SdCard` still works, and remains the right route for a
+  consumer already invested in that trait.
+
+  Unlike every other feature here, this one carries an allocator
+  requirement: `resident-fat` uses `alloc`, so a binary that enables it
+  must register a `#[global_allocator]`. This crate still neither defines
+  nor needs one.
 - `Pwm::MAX_CLOCK_DIVISOR` and `Pcm::MAX_CLOCK_DIVISOR`, so a caller can
   check its own constant at compile time rather than discovering the limit as
   a peripheral running at an inexplicable rate.
