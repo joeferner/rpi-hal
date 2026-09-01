@@ -87,41 +87,14 @@ use crate::pac::GPIO;
 use crate::timer::Timer;
 
 /// GPIO pin carrying the SD clock (`CLK`). Only used computing the
-/// legacy pull-mask below; the `bcm2711` pull-control branch names its
-/// pins directly through the PAC instead.
-#[cfg(not(feature = "bcm2711"))]
+/// pull-mask below.
 const GPIO_CLK: u32 = 48;
 /// GPIO pin carrying the SD command line (`CMD`). See `GPIO_CLK`.
-#[cfg(not(feature = "bcm2711"))]
 const GPIO_CMD: u32 = 49;
 /// GPIO pins carrying the SD data lines (`DAT0`..`DAT3`). See `GPIO_CLK`.
-#[cfg(not(feature = "bcm2711"))]
 const GPIO_DAT: [u32; 4] = [50, 51, 52, 53];
 /// GPIO alternate function routing GPIO48-53 to this controller.
 const GPIO_ALT_FUNCTION: u8 = 0b111;
-
-/// GPIO peripheral base address, matching `bcm2837_lpa::GPIO::PTR` —
-/// see `uart.rs`'s identical constant/reasoning: the legacy pull
-/// registers below aren't in `bcm2837-lpa`'s SVD (modeled on BCM2711,
-/// which replaced them), so this pokes the known physical addresses
-/// directly instead.
-#[cfg(not(feature = "bcm2711"))]
-const GPIO_BASE: usize = 0x3f20_0000;
-/// GPIO Pull-up/down Enable (BCM2835 ARM Peripherals datasheet §6.1).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD: *mut u32 = (GPIO_BASE + 0x94) as *mut u32;
-/// GPIO Pull-up/down Enable Clock 1, covers GPIO32-53 — the pins this
-/// driver uses all fall in this register, unlike `uart.rs`'s
-/// GPIO14/15 (covered by `GPPUDCLK0`).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUDCLK1: *mut u32 = (GPIO_BASE + 0x9c) as *mut u32;
-/// `GPPUD` value selecting pull-up. The SD bus (particularly `CMD`)
-/// needs a pull-up, not the pulls disabled the way `uart.rs` leaves
-/// UART0's pins — matching the reference driver's own choice here,
-/// and standard SD electrical requirements (open-drain-ish behavior
-/// before the bus is fully driven).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD_PULL_UP: u32 = 2;
 
 /// Firmware property tag's `ClockId` for the EMMC base clock feeding
 /// [`set_clock`]'s divider — queried at runtime rather than hardcoded,
@@ -1054,7 +1027,7 @@ impl Sd {
 
 /// Routes GPIO48-53 (`CLK`/`CMD`/`DAT0..DAT3`) to this controller
 /// (alternate function 7) with their pull resistors set to pull-up
-/// (see [`GPPUD_PULL_UP`]'s doc comment on why, unlike `uart.rs`
+/// (see [`set_emmc_pull_up`] on why pull-up, unlike `uart.rs`
 /// disabling its own pins' pulls entirely).
 fn route_gpio_to_emmc(gpio: &GPIO) {
     gpio.gpfsel4().modify(|_, w| {
@@ -1077,56 +1050,22 @@ fn route_gpio_to_emmc(gpio: &GPIO) {
     set_emmc_pull_up(gpio);
 }
 
-/// Sets GPIO48-53's pull resistors to pull-up (see [`GPPUD_PULL_UP`]'s
-/// doc comment on why, unlike `uart.rs` disabling its own pins' pulls
-/// entirely). `gpio` is unused on this side — taken anyway so both
-/// branches share one call site; see the `bcm2711` branch below for
-/// the side that actually needs it.
-#[cfg(not(feature = "bcm2711"))]
-fn set_emmc_pull_up(_gpio: &GPIO) {
+/// Sets GPIO48-53's pull resistors to pull-up. The SD bus (particularly
+/// `CMD`) needs a pull-up, not the pulls disabled the way `uart.rs`
+/// leaves UART0's pins — matching the reference driver's own choice
+/// here, and standard SD electrical requirements (open-drain-ish
+/// behavior before the bus is fully driven).
+///
+/// The register access lives in [`crate::gpio`], which handles the
+/// BCM2836/2837-vs-BCM2711 split; these pins all sit in bank 1
+/// (GPIO32-53).
+fn set_emmc_pull_up(gpio: &GPIO) {
     let mask = (1 << (GPIO_CLK - 32))
         | (1 << (GPIO_CMD - 32))
         | GPIO_DAT
             .iter()
             .fold(0, |mask, pin| mask | (1 << (pin - 32)));
-    unsafe {
-        core::ptr::write_volatile(GPPUD, GPPUD_PULL_UP);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUDCLK1, mask);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUD, 0);
-        core::ptr::write_volatile(GPPUDCLK1, 0);
-    }
-}
-
-/// BCM2711 counterpart — see `uart.rs`'s identical `disable_pull` for
-/// the full rationale (real `GPIO_PUP_PDN_CNTRL_REG0..3` scheme,
-/// modeled correctly in `bcm2711-lpa`, so this goes through the PAC
-/// instead of poking raw addresses). GPIO48-53 all fall in `_REG3`
-/// (pins 48-57).
-#[cfg(feature = "bcm2711")]
-fn set_emmc_pull_up(gpio: &GPIO) {
-    gpio.gpio_pup_pdn_cntrl_reg3().modify(|_, w| {
-        w.gpio_pup_pdn_cntrl48()
-            .up()
-            .gpio_pup_pdn_cntrl49()
-            .up()
-            .gpio_pup_pdn_cntrl50()
-            .up()
-            .gpio_pup_pdn_cntrl51()
-            .up()
-            .gpio_pup_pdn_cntrl52()
-            .up()
-            .gpio_pup_pdn_cntrl53()
-            .up()
-    });
-}
-
-#[cfg(not(feature = "bcm2711"))]
-fn spin_delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
-    }
+    crate::gpio::set_pull_bank(gpio, 1, mask, crate::gpio::Pull::Up);
 }
 
 /// Sets the SD clock to as close to (at or below) `target_hz` as this
