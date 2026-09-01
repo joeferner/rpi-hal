@@ -325,6 +325,23 @@ implementations where applicable, and all verified on real hardware:
   implemented yet
   ([issue #14](https://github.com/joeferner/rpi-hal/issues/14)).
 
+  With the `async` feature every one of those transfer methods gains a
+  `_async` twin (`read_blocks_async`, `write_blocks_dma_async`, …) that
+  parks on the controller's interrupt where the blocking one spins. The
+  wait that pays for it is the `DATA_DONE` closing a write: it only
+  arrives once the card has programmed a whole internal erase block, so a
+  blocking write hands the CPU nothing back for milliseconds at a time. It
+  needs the usual wiring — `Lic::enable_emmc_irq`, the CPU mask, and
+  `sd::on_irq` called from `__irq_handler` — and takes `&mut Sd` where the
+  blocking methods take `&self`, since one waker slot cannot serve two
+  transfers at once. Timeouts belong to the caller
+  (`embassy_time::with_timeout`); dropping a transfer part-way stops the
+  card and resets the controller's data circuit before the drop returns,
+  so the next transfer starts clean rather than reading the abandoned
+  one's leftovers. `examples/sd_async.rs` runs both paths against each
+  other and reports how much of each transfer the core spent idle.
+  BCM2836/7 only: routing the line needs the legacy interrupt controller.
+
   On BCM2711 (Pi 4), the physical SD slot is wired to a different
   controller entirely — `EMMC2`, not the classic `EMMC` — so `bcm2711`
   switches this driver to `sd::Emmc2` (not in the PAC, wired up by
