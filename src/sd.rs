@@ -58,6 +58,29 @@
 //! (`CMD_APP_CMD` must expect a response so the following `ACMD41`
 //! isn't issued into it).
 //!
+//! # Async
+//!
+//! Under the `async` feature the same [`Sd`](crate::sd::Sd) also carries
+//! interrupt-driven twins of the transfer methods — `read_blocks_async`
+//! and friends — which park on the controller's interrupt rather than
+//! spinning on `INTERRUPT`, so an executor gets the card's own thinking
+//! time back. Most of a write is exactly that: the final `DATA_DONE`
+//! only arrives once the card has programmed an entire internal erase
+//! block, milliseconds at a time on a cheap card. The blocking methods
+//! are untouched and remain the right choice for a program with nothing
+//! else to do.
+//!
+//! They need the usual three gates plus a handler: the controller's own
+//! `IRPT_EN` (opened by each transfer as it parks, so nothing is needed
+//! from the application), `crate::lic::Lic::enable_emmc_irq`, the CPU
+//! mask ([`enable_irq`](crate::irq::enable_irq)), and a call to
+//! `sd::on_irq` from the application's `__irq_handler`.
+//! Cancelling a transfer — dropping the future, as
+//! `embassy_time::with_timeout` does — aborts it on the card and resets
+//! the controller's data circuit before the drop returns, so the next
+//! transfer starts clean; see `read_blocks_async` for the details.
+//! `examples/sd_async.rs` is the whole thing end to end.
+//!
 //! # BCM2711 (Pi 4)
 //!
 //! This controller (`EMMC`, at the same address as BCM2836/2837) is
@@ -85,6 +108,16 @@ use crate::mailbox::{ClockId, Mailbox, PowerDeviceId};
 use crate::pac::EMMC;
 use crate::pac::GPIO;
 use crate::timer::Timer;
+
+// Scoped to `bcm2837` as well as to the feature: routing this
+// controller's line to the ARM core needs `crate::lic`, which the
+// BCM2711 doesn't have (its GIC-400 isn't supported yet), so on that
+// chip an async transfer could only ever park forever. The blocking
+// path is unaffected and is what a Pi 4 uses.
+#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+mod asynch;
+#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+pub use asynch::on_irq;
 
 /// GPIO pin carrying the SD clock (`CLK`). Only used computing the
 /// pull-mask below.
@@ -548,9 +581,13 @@ impl Sd {
         set_clock(&emmc, base_clock_hz, SETUP_CLOCK_HZ, timer)?;
 
         // Unmask every interrupt status bit so it's visible in
-        // `INTERRUPT` -- this driver polls that register directly
-        // rather than routing to the CPU's own interrupt controller,
-        // so `IRPT_EN` (which gates that routing) stays untouched.
+        // `INTERRUPT` -- the blocking path polls that register directly.
+        // `IRPT_EN`, the separate register deciding which of those
+        // visible bits actually assert the controller's interrupt line,
+        // stays untouched at zero: an async transfer opens only the bits
+        // it is about to park on and closes them again on the way out
+        // (see the `asynch` module), so a bit nobody is servicing can
+        // never leave a level source asserted.
         emmc.irpt_mask().write(|w| unsafe { w.bits(0xffff_ffff) });
 
         let sd = Self {
@@ -980,13 +1017,39 @@ impl Sd {
     }
 
     /// Waits for `mask` (or any [`INT_ERROR_MASK`] bit) to appear in
-    /// `INTERRUPT`, then clears *only* the bits it was waiting on (the
-    /// `mask` bits plus the error bits) and returns the full value from
-    /// just before clearing. `command` is the `CMDTM` code of the command
-    /// whose completion or data phase is being awaited (e.g. the same
-    /// command for both `CMD_DONE` and its following `READ_RDY`/
-    /// `WRITE_RDY`/`DATA_DONE`), passed through only to
+    /// `INTERRUPT` and consumes it — see [`Self::poll_interrupt`], which
+    /// does the consuming and documents what it clears. This is the
+    /// spinning form; `command` is passed through only to
     /// [`Error::CardError`]/[`Error::WaitTimeout`]'s diagnostic fields.
+    fn wait_interrupt(&self, mask: u32, command: u32, timer: &Timer) -> Result<u32, Error> {
+        let start = timer.now_micros();
+        loop {
+            if let Some(result) = self.poll_interrupt(mask, command) {
+                return result;
+            }
+            if timer.now_micros() - start > 1_000_000 {
+                return Err(Error::WaitTimeout {
+                    waiting_for: mask,
+                    interrupt: self.emmc.interrupt().read().bits(),
+                    status: self.emmc.status().read().bits(),
+                    command,
+                });
+            }
+        }
+    }
+
+    /// Reads `INTERRUPT` once and, if `mask` or any [`INT_ERROR_MASK`]
+    /// bit is set there, consumes it: clears *only* those bits and
+    /// returns the full register value from just before clearing (or
+    /// [`Error::CardError`] if an error bit was among them). `None` means
+    /// nothing being waited for has appeared yet — the caller decides
+    /// whether to spin ([`Self::wait_interrupt`]) or park on the
+    /// controller's interrupt (the `async` path).
+    ///
+    /// `command` is the `CMDTM` code of the command whose completion or
+    /// data phase is being awaited (e.g. the same command for both
+    /// `CMD_DONE` and its following `READ_RDY`/`WRITE_RDY`/`DATA_DONE`),
+    /// carried only into [`Error::CardError`]'s diagnostic field.
     ///
     /// Clearing only `mask | INT_ERROR_MASK`, rather than every set bit,
     /// is load-bearing: a write command's `WRITE_RDY` (buffer-write-ready)
@@ -998,30 +1061,23 @@ impl Sd {
     /// hang forever. (Reads don't hit this: `READ_RDY` only asserts once
     /// the card has actually shipped data, well after `CMD_DONE`, so it's
     /// never set at clear-time.)
-    fn wait_interrupt(&self, mask: u32, command: u32, timer: &Timer) -> Result<u32, Error> {
+    ///
+    /// Every consumer goes through here for that reason: the rule is
+    /// subtle enough that a second copy of it — in an interrupt handler,
+    /// say — would be a second chance to get it wrong.
+    fn poll_interrupt(&self, mask: u32, command: u32) -> Option<Result<u32, Error>> {
         let full_mask = mask | INT_ERROR_MASK;
-        let start = timer.now_micros();
-        let interrupt = loop {
-            let interrupt = self.emmc.interrupt().read().bits();
-            if interrupt & full_mask != 0 {
-                break interrupt;
-            }
-            if timer.now_micros() - start > 1_000_000 {
-                return Err(Error::WaitTimeout {
-                    waiting_for: mask,
-                    interrupt,
-                    status: self.emmc.status().read().bits(),
-                    command,
-                });
-            }
-        };
+        let interrupt = self.emmc.interrupt().read().bits();
+        if interrupt & full_mask == 0 {
+            return None;
+        }
         self.emmc
             .interrupt()
             .write(|w| unsafe { w.bits(interrupt & full_mask) });
         if interrupt & INT_ERROR_MASK != 0 {
-            return Err(Error::CardError { interrupt, command });
+            return Some(Err(Error::CardError { interrupt, command }));
         }
-        Ok(interrupt)
+        Some(Ok(interrupt))
     }
 }
 

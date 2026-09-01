@@ -39,6 +39,9 @@ examples:
 	# renderer on the same `mmal` stack.
 	cargo build --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode
 	cargo build --release --features bcm2837,mmal --example hdmi_audio
+	# And the interrupt-driven examples, gated on `async` -- the feature is
+	# off by default, so a plain --examples build skips both.
+	cargo build --release --features bcm2837,async --example usb_irq --example sd_async
 
 fmt:
 	cargo fmt
@@ -66,12 +69,12 @@ clippy:
 	# compiles either.
 	cargo clippy --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode -- -D warnings
 	cargo clippy --release --features bcm2837,mmal --example hdmi_audio -- -D warnings
-	# The `async` modules (gpio/uart/i2c/usb `asynch.rs`) are compiled by
-	# none of the lines above -- the feature is off by default, and this
-	# crate has no async examples to turn it on, since an executor lives
-	# in `rpi-hal-embassy` rather than here. Without this line the only
-	# thing that ever compiles them is `make doc`.
-	cargo clippy --release --features bcm2837,async -- -D warnings
+	# The `async` modules (gpio/uart/i2c/sd/usb `asynch.rs`) and the two
+	# examples that drive them are compiled by none of the lines above --
+	# the feature is off by default. Both examples poll their one future by
+	# hand rather than pulling in an executor, which lives in
+	# `rpi-hal-embassy` rather than here.
+	cargo clippy --release --features bcm2837,async --examples -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing -- broken intra-doc links are the main

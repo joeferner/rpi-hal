@@ -373,6 +373,10 @@ name = "usb_irq"
 required-features = ["async"]
 
 [[example]]
+name = "sd_async"
+required-features = ["async"]
+
+[[example]]
 name = "h264_decode"
 required-features = ["mmal", "embedded-sdmmc"]
 

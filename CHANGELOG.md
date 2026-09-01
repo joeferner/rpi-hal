@@ -20,6 +20,41 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Interrupt-driven SD transfers**, behind the `async` feature:
+  `Sd::read_block_async`/`read_blocks_async`/`write_block_async`/
+  `write_blocks_async` and the DMA pair
+  `read_blocks_dma_async`/`write_blocks_dma_async`, plus `sd::on_irq` and
+  `Lic::enable_emmc_irq`/`disable_emmc_irq`/`is_emmc_pending` to route the
+  controller's line. The blocking methods are unchanged and untouched by
+  this; the async ones park on the controller's interrupt where those
+  spin, which matters most for a write, whose closing `DATA_DONE` is the
+  card programming an entire internal erase block — milliseconds per
+  command that an executor previously lost in full.
+  `examples/sd_async.rs` reports, for each transfer, the share of its
+  duration during which the core had nothing to do.
+
+  Dropping a transfer future — `embassy_time::with_timeout`, `select!`, a
+  cancelled task — stops the card and resets the controller's data
+  circuit before the drop returns, and so does an error return. Without
+  that, an abandoned data phase would leave part of an aborted block in
+  the host FIFO for the *next* transfer to return as though it were data.
+
+  Two things it deliberately does not do: enable anything in `IRPT_EN`
+  outside a wait (a level source nobody services is a hang on this
+  controller, so each wait opens only the bits it parks on and closes
+  them again), and impose its own timeout beyond the blocking path's
+  one-second backstop — wrap the future in the executor's own. BCM2836/7
+  only for now: routing the line needs `lic`, which BCM2711 has no
+  equivalent of yet.
+
+- **Non-blocking DMA transfers to and from a peripheral FIFO**:
+  `Channel::start_from_peripheral` and `Channel::start_to_peripheral`,
+  which start the transfers `copy_from_peripheral`/`copy_to_peripheral`
+  block on and hand back a `Transfer` guard instead, so a caller can wait
+  on something better than a polling loop. The read side defers its cache
+  invalidate to the guard's drop, which is the first point at which the
+  engine is known to have finished.
+
 - **GPIO internal pull resistors.** `gpio::Pull`, `Pin::set_pull`, and
   `Pin::into_pull_up_input`/`into_pull_down_input`/`into_floating_input`
   configure a pin's internal pull-up/pull-down — previously unreachable
