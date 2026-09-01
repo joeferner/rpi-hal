@@ -60,6 +60,17 @@
 //! (`CMD_APP_CMD` must expect a response so the following `ACMD41`
 //! isn't issued into it).
 //!
+//! # Card presence
+//!
+//! Discovered, never sensed. No Raspberry Pi wires a card-detect line
+//! anywhere a driver could read it — GPIO47, the pin usually named for
+//! the job, is something different on every board and a card detect on
+//! none of them — and this controller doesn't implement the SDHCI
+//! present-state bits either. So an empty slot is found the only way
+//! available: [`init`](crate::sd::Sd::init) asks, gets no answer, and
+//! returns [`Error::NoCard`](crate::sd::Error::NoCard).
+//! `examples/sd_presence.rs` shows it happening, card in and card out.
+//!
 //! # Async
 //!
 //! Under the `async` feature the same [`Sd`](crate::sd::Sd) also carries
@@ -301,7 +312,22 @@ const BUS_WIDTH_4BIT: u32 = 2;
 
 /// Mask over the `INTERRUPT` register's error bits — any of these set
 /// means the just-issued command or data transfer failed.
+///
+/// Note which bit this does *not* cover: `CTO_ERR`
+/// ([`INT_CMD_TIMEOUT`], bit 16). The value is bztsrc's `sd.c`'s, and a
+/// command timeout reaches the driver through the `ERR` summary bit
+/// (bit 15) that the mask does include, so nothing goes unnoticed — but
+/// it means "timed out" has to be read from `INTERRUPT` rather than
+/// inferred from this mask, which [`Sd::diagnose_empty_slot`] does.
 const INT_ERROR_MASK: u32 = 0x017e_8000;
+/// `INTERRUPT.ERR` — the summary bit, set alongside whichever specific
+/// error fired. Part of [`INT_ERROR_MASK`], and singled out here because
+/// telling one error apart from another means looking past it.
+const INT_ERR_SUMMARY: u32 = 0x0000_8000;
+/// `INTERRUPT.CTO_ERR` — the card didn't respond to a command within the
+/// controller's timeout. With no card in the slot this is the only thing
+/// that ever fires, since nothing is there to answer.
+const INT_CMD_TIMEOUT: u32 = 0x0001_0000;
 /// `INTERRUPT.CMD_DONE`.
 const INT_CMD_DONE: u32 = 0x0000_0001;
 /// `INTERRUPT.DATA_DONE` (transfer complete) — for a write, only
@@ -359,8 +385,28 @@ pub type Block = [u8; 512];
 /// Errors from [`Sd::init`] and the block read/write methods
 /// ([`Sd::read_block`]/[`Sd::read_blocks`]/[`Sd::write_block`]/
 /// [`Sd::write_blocks`] and their `_dma` variants).
+/// `#[non_exhaustive]` because this enum has already had to grow once:
+/// [`Self::NoCard`] arrived after the fact, and adding it was a breaking
+/// change for no better reason than that a downstream `match` might have
+/// been exhaustive. Consumers now need a `_` arm, and the next thing the
+/// driver learns to tell apart costs nobody a major version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
+    /// No card is in the slot: the identification sequence's first
+    /// command that expects an answer got none, and neither did a second
+    /// one sent to confirm it — see [`Sd::init`].
+    ///
+    /// A conclusion rather than a reading. No Raspberry Pi wires a
+    /// card-detect line anywhere this crate could look: GPIO47, the pin
+    /// usually named for the job, is the ACT LED on a Pi 1/2, the PMIC's
+    /// I2C data line on a Pi 3 and part of the Ethernet PHY's RGMII
+    /// interface on a Pi 4; no board's device tree gives its SD host a
+    /// `cd-gpios`; and this controller doesn't implement the SDHCI
+    /// present-state bits that would say so directly. Asking the card is
+    /// the only detection there is, which also means this can't be
+    /// checked before `init` — it *is* `init`, failing early.
+    NoCard,
     /// A wait for the controller or card to reach some state (clock
     /// stable, command/data-line idle, command/data done) exceeded its
     /// budget.
@@ -506,6 +552,14 @@ impl Sd {
     /// [`Self::four_bit_bus`]) to negotiate the 4-bit bus via
     /// `ACMD51`/`ACMD6`, before returning ready for
     /// [`Self::read_block`].
+    ///
+    /// This is also how a caller finds out whether there is a card at
+    /// all: an empty slot returns [`Error::NoCard`], typically in a few
+    /// tens of milliseconds — the controller's own bring-up (the power
+    /// domain, the clock, their settling delays) rather than the wait
+    /// for an answer, which times out fast. There is no cheaper check to
+    /// do first, and nowhere to look that doesn't involve asking; see
+    /// [`Error::NoCard`].
     pub fn init(
         gpio: &GPIO,
         emmc: SdEmmc,
@@ -619,7 +673,13 @@ impl Sd {
         };
 
         sd.command(CMD_GO_IDLE, 0, timer)?;
-        sd.command(CMD_SEND_IF_COND, 0x0000_01aa, timer)?;
+        // `CMD0` above expects no response, so `CMD8` is the first
+        // command that can tell an empty slot from a populated one --
+        // and the first whose failure is worth interpreting rather than
+        // just propagating.
+        if let Err(error) = sd.command(CMD_SEND_IF_COND, 0x0000_01aa, timer) {
+            return Err(sd.diagnose_empty_slot(error, timer));
+        }
 
         // ACMD41: poll until the card reports its power-up sequence
         // complete, budgeting a generous 1 second total -- the SD
@@ -999,6 +1059,70 @@ impl Sd {
         wait_for(timer, 100_000, || {
             self.emmc.status().read().dat_inhibit().bit_is_clear()
         })
+    }
+
+    /// Decides whether `error` — from [`Self::init`]'s `CMD8`, the first
+    /// command in the identification sequence that expects an answer —
+    /// means the slot is empty, returning [`Error::NoCard`] if so and
+    /// `error` unchanged if not.
+    ///
+    /// An empty slot answers nothing, so what comes back is a command
+    /// timeout and only a command timeout: `INTERRUPT` reads
+    /// `CTO_ERR | ERR` (`0x0001_8000`) with no other error bit set.
+    /// Anything else — a CRC error, a bad response index, a data-side
+    /// fault — is a card that is present and unhappy, and gets to keep
+    /// its own error, which says far more than "no card" would.
+    ///
+    /// A timeout alone isn't proof, though, which is why this sends a
+    /// second command before concluding. `CMD8` was introduced with SD
+    /// 2.0, so a v1.x card doesn't answer it either; reporting an absent
+    /// card for one that is physically in the slot would be a worse
+    /// answer than the generic error it replaces. `CMD55` (`APP_CMD`)
+    /// has existed since 1.0 and every card answers it, so a card that
+    /// stays silent through both really isn't there. One extra command,
+    /// only on a path that has already failed.
+    ///
+    /// (A v1.x card therefore still fails `init` exactly as it did
+    /// before, with `CMD8`'s own error. Supporting one means skipping
+    /// `CMD8` and dropping the HCS bit from `ACMD41`, which is a
+    /// different feature; this only avoids mislabelling it.)
+    ///
+    /// The command circuit has to be reset before that second command,
+    /// and finding out why cost a probe: the SD host controller
+    /// specification requires a `SRST_CMD` after any command error, and
+    /// until it happens a write to `CMDTM` starts nothing at all. Not an
+    /// error — *nothing*, so the following `CMD55` produced neither
+    /// `CMD_DONE` nor `CTO_ERR` and simply sat there until
+    /// [`Self::wait_interrupt`]'s one-second budget expired, turning a
+    /// 43ms answer into a 1043ms one and confirming nothing. (It is also
+    /// why [`Self::init`] can recover from this at all: it opens with a
+    /// `SRST_HC`, which takes the command circuit with it.)
+    fn diagnose_empty_slot(&self, error: Error, timer: &Timer) -> Error {
+        let Error::CardError { interrupt, .. } = error else {
+            return error;
+        };
+        if interrupt & INT_CMD_TIMEOUT == 0 || interrupt & INT_ERROR_MASK != INT_ERR_SUMMARY {
+            return error;
+        }
+
+        self.emmc.control1().modify(|_, w| w.srst_cmd().set_bit());
+        if wait_for(timer, 10_000, || {
+            !self.emmc.control1().read().srst_cmd().bit_is_set()
+        })
+        .is_err()
+        {
+            // A controller that won't reset one of its own circuits in
+            // 10ms has more wrong with it than an empty slot, and the
+            // probe below would only time out again.
+            return error;
+        }
+
+        match self.command(CMD_APP_CMD, 0, timer) {
+            Err(Error::CardError { interrupt, .. }) if interrupt & INT_CMD_TIMEOUT != 0 => {
+                Error::NoCard
+            }
+            _ => error,
+        }
     }
 
     /// Issues one command: waits for the command line to be free,

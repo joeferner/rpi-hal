@@ -321,9 +321,20 @@ implementations where applicable, and all verified on real hardware:
   (`examples/sd_resident_fat_read.rs`). Both wire `read` and `write` to the
   driver's polled multi-block paths; the difference is that `resident-fat`
   transfers byte slices spanning a whole run, which reach the driver with no
-  staging buffer and no copy in between. Card-detect (GPIO47) is not
-  implemented yet
-  ([issue #14](https://github.com/joeferner/rpi-hal/issues/14)).
+  staging buffer and no copy in between.
+
+  Card presence is discovered rather than sensed, because no Pi wires a
+  card-detect line anywhere a driver could read it — GPIO47, the pin
+  usually named for the job, is the ACT LED on a Pi 1/2, the PMIC's I²C
+  data line on a Pi 3 and part of the Ethernet PHY's RGMII interface on a
+  Pi 4, and the controller doesn't implement the SDHCI present-state bits
+  either. So an empty slot is what `Sd::init` reports (`Error::NoCard`)
+  after `CMD8` goes unanswered and a following `CMD55` does too, the
+  second command being what keeps an SD v1.x card — which predates `CMD8`
+  and doesn't answer it — from being called absent. About 40ms, nearly
+  all of it the controller's power-and-clock bring-up rather than the
+  wait itself. `examples/sd_presence.rs` shows it both ways, card in and
+  card out.
 
   With the `async` feature every one of those transfer methods gains a
   `_async` twin (`read_blocks_async`, `write_blocks_dma_async`, …) that
