@@ -26,6 +26,12 @@
 // UART (GPIO14/15, `core_freq=250` in `config.txt`), and the `.hcd` patchram
 // blob read off the SD card at `bt/BT.HCD` (Broadcom's BCM43430A1.hcd; see
 // that example's header for where to get it).
+//
+// Pi 3 only, and doubly so: the USB keyboard is reached through the
+// soldered-on LAN9514 hub behind the DWC2 controller, and the Bluetooth
+// controller is the on-board BCM43438. A Pi 4 has a VL805 xHCI behind
+// PCIe instead of the former, which this crate doesn't drive yet, so this
+// builds for `bcm2711` and then finds an empty root port.
 
 use core::fmt::Write;
 use core::ops::ControlFlow;
@@ -317,8 +323,16 @@ pub extern "C" fn kmain() -> ! {
         peripherals.USB_OTG_PWRCLK,
         &timer,
     );
+    // Bounded, because what the root port reports is the soldered-on hub
+    // rather than the keyboard: five seconds without it means there is
+    // nothing behind it at all, which is what a Pi 4 looks like (see the
+    // header). Falling through rather than halting here --
+    // `usb::enumerate` reports that as `EnumerationError::NotConnected`
+    // through the same error path everything else goes through, where an
+    // unbounded wait would sit here silently and look like a lock-up.
     let _ = writeln!(console, "waiting for a USB keyboard...");
-    while !dwc2.port_connected() {
+    let deadline_us = timer.now_micros() + 5_000_000;
+    while !dwc2.port_connected() && timer.now_micros() < deadline_us {
         timer.delay_ms(100);
     }
 
