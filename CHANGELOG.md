@@ -8,6 +8,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`Sd::init` muxed the Ethernet PHY's pins away on a Pi 4.** It routed
+  GPIO48-53 to alternate function 7 on every chip, but on BCM2711 the
+  card slot is on EMMC2, which drives dedicated pads outside the 54-pin
+  bank — `bcm2711.dtsi`'s `emmc2` node has no `pinctrl` property at all,
+  which is why the Pi 4 SD path worked regardless. What GPIO48-53 carry
+  on that board is the gigabit Ethernet PHY's RGMII interface
+  (`RGMII_RXD0`..`RXD3`, `RGMII_TXCLK`, `RGMII_TXCTL`), so the mux was
+  pure side effect: it severs the MAC from the PHY, and points four
+  lines the PHY drives at a host controller that drives them back during
+  a transfer. `route_gpio_to_emmc` is now compiled out under `bcm2711`;
+  `Sd::init` keeps its `GPIO` argument on both chips so a call site
+  doesn't have to change. Untested on hardware in the direction that
+  matters — nothing in this crate drives BCM2711 Ethernet yet, so
+  nothing here could have noticed.
+
+  The comment that justified sharing the routing said GPIO48-53's ALT3
+  assignment was "unchanged (confirmed by diffing `bcm2711-lpa` against
+  `bcm2837-lpa`)". That was true and beside the point: a PAC diff
+  describes the SoC's function numbering, not what a board wired to the
+  pads.
+
 - **PWM and PCM clock divisors were silently masked, not clamped.** The
   Clock Manager's `DIVI` field is 12 bits, but `Pwm::init` and `Pcm::init`
   take a `u16` and said nothing about the limit — so a larger value was

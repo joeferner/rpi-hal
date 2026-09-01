@@ -44,6 +44,11 @@
 //     `RUN_WRITE_TEST`), timed against the blocking write of the same
 //     data. This is the check the whole feature is for: the async write's
 //     idle share should be most of its duration.
+//
+// Pi 2/3 only. Routing the controller's line needs `lic`, which doesn't
+// exist under the `bcm2711` feature, so the async SD path is compiled out
+// there and building this example for that chip fails -- as it does for
+// every interrupt-driven example here. A Pi 4 uses the blocking driver.
 
 use core::fmt::Write;
 use core::future::Future;

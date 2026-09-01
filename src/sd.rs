@@ -14,7 +14,9 @@
 //! don't also need SDIO for WiFi.
 //!
 //! GPIO alternate function 7 routes CLK/CMD/DAT0-3 (GPIO48-53) to this
-//! controller. It reads and writes one 512-byte block at a time
+//! controller — on BCM2836/2837; see the "BCM2711 (Pi 4)" section below,
+//! where none of that applies. It reads and writes one 512-byte block at
+//! a time
 //! ([`read_block`](crate::sd::Sd::read_block)/
 //! [`write_block`](crate::sd::Sd::write_block)) or a run of consecutive blocks
 //! in a single command ([`read_blocks`](crate::sd::Sd::read_blocks)/
@@ -86,12 +88,15 @@
 //! This controller (`EMMC`, at the same address as BCM2836/2837) is
 //! *not* what the physical SD card slot is wired to on a Pi 4 — confirmed
 //! against the upstream device tree (`bcm2711-rpi-4-b.dts`: `/* EMMC2 is
-//! used to drive the SD card */`), not assumed. GPIO48-53's ALT3 routing
-//! is unchanged (confirmed by diffing `bcm2711-lpa` against
-//! `bcm2837-lpa`'s generated source), so `route_gpio_to_emmc` needs no
-//! BCM2711-specific change; only the controller register block itself
-//! does, hence `Emmc2` and the `ClockId::Emmc2` mailbox clock id (EMMC2
-//! has its own base clock, separate from the classic `EMMC`'s). The
+//! used to drive the SD card */`), not assumed. So the controller
+//! register block changes, hence `Emmc2` and the `ClockId::Emmc2` mailbox
+//! clock id (EMMC2 has its own base clock, separate from the classic
+//! `EMMC`'s) — and so does the pin routing, which goes away entirely.
+//! EMMC2 drives dedicated pads outside the 54-pin bank (`bcm2711.dtsi`'s
+//! `emmc2` node carries no `pinctrl` property at all), while GPIO48-53
+//! on that board are the gigabit Ethernet PHY's RGMII interface — so
+//! `route_gpio_to_emmc` is compiled out here rather than adapted, and
+//! `Sd::init` takes its `GPIO` argument without using it. The
 //! DMA-backed `Sd::read_blocks_dma`/`Sd::write_blocks_dma` aren't
 //! available under `bcm2711`: EMMC2 sits on its own bus with its own
 //! VideoCore bus-address mapping (`bcm2711.dtsi`'s `emmc2bus`, a
@@ -119,14 +124,21 @@ mod asynch;
 #[cfg(all(feature = "async", not(feature = "bcm2711")))]
 pub use asynch::on_irq;
 
+// The pins below, and everything that touches them, are BCM2836/2837
+// only: a Pi 4's card slot is on EMMC2, whose pins aren't in this bank
+// at all -- see `route_gpio_to_emmc`.
 /// GPIO pin carrying the SD clock (`CLK`). Only used computing the
 /// pull-mask below.
+#[cfg(not(feature = "bcm2711"))]
 const GPIO_CLK: u32 = 48;
 /// GPIO pin carrying the SD command line (`CMD`). See `GPIO_CLK`.
+#[cfg(not(feature = "bcm2711"))]
 const GPIO_CMD: u32 = 49;
 /// GPIO pins carrying the SD data lines (`DAT0`..`DAT3`). See `GPIO_CLK`.
+#[cfg(not(feature = "bcm2711"))]
 const GPIO_DAT: [u32; 4] = [50, 51, 52, 53];
 /// GPIO alternate function routing GPIO48-53 to this controller.
+#[cfg(not(feature = "bcm2711"))]
 const GPIO_ALT_FUNCTION: u8 = 0b111;
 
 /// Firmware property tag's `ClockId` for the EMMC base clock feeding
@@ -484,14 +496,16 @@ impl Sd {
         }
     }
 
-    /// Brings the SD card up: routes GPIO48-53 to this controller,
-    /// resets it, and runs the SD physical layer's card
-    /// identification sequence (`CMD0`, `CMD8`, `ACMD41`, `CMD2`,
-    /// `CMD3`, `CMD7`) — the same sequence real host controllers use,
-    /// ending with the card in the "transfer" state. From there it
-    /// also tries (best-effort — see [`Self::four_bit_bus`]) to
-    /// negotiate the 4-bit bus via `ACMD51`/`ACMD6`, before returning
-    /// ready for [`Self::read_block`].
+    /// Brings the SD card up: routes GPIO48-53 to this controller (on
+    /// BCM2836/2837 — a Pi 4's slot is on EMMC2, whose pins aren't in
+    /// the GPIO bank, so `gpio` goes unused there), resets it, and runs
+    /// the SD physical layer's card identification sequence (`CMD0`,
+    /// `CMD8`, `ACMD41`, `CMD2`, `CMD3`, `CMD7`) — the same sequence
+    /// real host controllers use, ending with the card in the "transfer"
+    /// state. From there it also tries (best-effort — see
+    /// [`Self::four_bit_bus`]) to negotiate the 4-bit bus via
+    /// `ACMD51`/`ACMD6`, before returning ready for
+    /// [`Self::read_block`].
     pub fn init(
         gpio: &GPIO,
         emmc: SdEmmc,
@@ -511,7 +525,14 @@ impl Sd {
             return Err(Error::PowerOnFailed);
         }
 
+        #[cfg(not(feature = "bcm2711"))]
         route_gpio_to_emmc(gpio);
+        // EMMC2's pins aren't in the GPIO bank at all -- see
+        // `route_gpio_to_emmc` on why muxing anything here would be
+        // actively wrong on a Pi 4. `gpio` stays in the signature so a
+        // consumer's call site is the same on either chip.
+        #[cfg(feature = "bcm2711")]
+        let _ = gpio;
         // Let the pull-ups actually settle before trusting a level
         // read from them.
         timer.delay_ms(1);
@@ -1085,6 +1106,22 @@ impl Sd {
 /// (alternate function 7) with their pull resistors set to pull-up
 /// (see [`set_emmc_pull_up`] on why pull-up, unlike `uart.rs`
 /// disabling its own pins' pulls entirely).
+///
+/// Not compiled under `bcm2711`, and that is about the board rather
+/// than the chip. EMMC2 — the controller a Pi 4's card slot is actually
+/// wired to — drives dedicated pads outside the 54-pin bank, which is
+/// why `bcm2711.dtsi`'s `emmc2` node carries no `pinctrl` property at
+/// all, and why the Pi 4 SD path works without any muxing here. What
+/// those six pins carry on that board is the gigabit Ethernet PHY's
+/// RGMII interface (`bcm2711-rpi-4-b.dts` names GPIO48-53
+/// `RGMII_RXD0`..`RXD3`, `RGMII_TXCLK`, `RGMII_TXCTL`), so muxing them
+/// to ALT3 there severs the MAC from the PHY — and points four lines
+/// the PHY drives at a host controller that drives them back during a
+/// transfer. ALT3 does still select SD1 on BCM2711, which is what a
+/// `bcm2711-lpa`/`bcm2837-lpa` diff shows and what this comment used to
+/// rest on; a PAC diff describes the SoC's function numbering and can't
+/// see what a board wired to the pads.
+#[cfg(not(feature = "bcm2711"))]
 fn route_gpio_to_emmc(gpio: &GPIO) {
     gpio.gpfsel4().modify(|_, w| {
         w.fsel48()
@@ -1115,6 +1152,7 @@ fn route_gpio_to_emmc(gpio: &GPIO) {
 /// The register access lives in [`crate::gpio`], which handles the
 /// BCM2836/2837-vs-BCM2711 split; these pins all sit in bank 1
 /// (GPIO32-53).
+#[cfg(not(feature = "bcm2711"))]
 fn set_emmc_pull_up(gpio: &GPIO) {
     let mask = (1 << (GPIO_CLK - 32))
         | (1 << (GPIO_CMD - 32))
