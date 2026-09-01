@@ -12,9 +12,14 @@ fi
 example="$1"
 # Neither of rpi-hal's chip features is a default (see its Cargo.toml) --
 # `bcm2837` here since every example targets Pi 2/3 unless told otherwise.
-# Not every example builds against `bcm2711` yet (see TODO.md's "Raspberry
-# Pi 4" section): most that use interrupts need `Lic`, which doesn't exist
-# under that feature.
+# Not every example works against `bcm2711`, and the two ways it fails look
+# nothing alike. Anything using interrupts fails to *build*: it needs `Lic`,
+# and the legacy interrupt controller doesn't exist on that chip (its
+# GIC-400 isn't supported yet). Anything using USB builds and then finds an
+# empty root port at run time: the hub and Ethernet a Pi 2/3 reaches over
+# DWC2 are one soldered-on LAN9514, where a Pi 4 has a VL805 xHCI behind
+# PCIe and a native GENET MAC instead. Each example's header says which
+# board it expects.
 chip="${2:-bcm2837}"
 
 cd "$(dirname "$0")/.."

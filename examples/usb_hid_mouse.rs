@@ -16,6 +16,11 @@
 // wheel isn't part of it (a mouse may send a 4th wheel byte, but many,
 // like a strict 3-byte boot mouse, don't). Wheel support in general needs
 // the HID report protocol, which this driver doesn't do yet.
+//
+// Pi 2/3 only. The on-board hub the mouse hangs off is the soldered-on
+// LAN9514, behind the DWC2 controller. A Pi 4 has neither: its USB host
+// is a VL805 xHCI behind PCIe, which this crate doesn't drive yet, so
+// this builds for `bcm2711` and then finds an empty root port.
 
 use core::fmt::Write;
 use core::ops::ControlFlow;
@@ -57,8 +62,16 @@ pub extern "C" fn kmain() -> ! {
         &timer,
     );
 
+    // Bounded, because the hub is soldered on: a root port that hasn't
+    // reported in five seconds has nothing behind it at all, which is
+    // what a Pi 4 looks like (see the header). Falling through rather
+    // than halting here -- `usb::enumerate` reports that as
+    // `EnumerationError::NotConnected` through the same error path
+    // everything else goes through, where an unbounded wait would sit
+    // here silently and look like a lock-up.
     let _ = writeln!(uart, "waiting for the on-board hub...");
-    while !dwc2.port_connected() {
+    let deadline_us = timer.now_micros() + 5_000_000;
+    while !dwc2.port_connected() && timer.now_micros() < deadline_us {
         timer.delay_ms(100);
     }
 
