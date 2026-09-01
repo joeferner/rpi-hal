@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`sd::Error` is now `#[non_exhaustive]`, and has a new variant** —
+  breaking, for any consumer matching it exhaustively. Add a `_` arm.
+
+  The variant is `NoCard` (below), and `#[non_exhaustive]` comes with it
+  deliberately rather than later: without it, teaching the driver to tell
+  one failure from another costs a major version every time, which is
+  exactly why `SdBlockDeviceError` was given its own enum instead of a
+  variant here. One breaking release now, and none for this reason again.
+
 ### Fixed
 
 - **`Sd::init` muxed the Ethernet PHY's pins away on a Pi 4.** It routed
@@ -40,6 +51,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   times what the field holds — and now clamp to the real maximum.
 
 ### Added
+
+- **`sd::Error::NoCard`**, so an empty slot says so. `Sd::init` used to
+  report it as `CardError` carrying a raw `INTERRUPT` word, indis-
+  tinguishable without decoding from a card that is present and
+  misbehaving. It now returns `NoCard` when `CMD8` — the first command in
+  the identification sequence that expects an answer — times out and a
+  `CMD55` sent afterwards times out too. Both, because `CMD8` arrived
+  with SD 2.0 and a v1.x card doesn't answer it either; a single silent
+  command would report an absent card for one sitting in the slot. (Such
+  a card still fails `init` exactly as before, with `CMD8`'s own error.
+  Supporting one is a separate feature.)
+
+  Presence can only be discovered by asking: no Pi wires a card-detect
+  line anywhere a driver could read it — GPIO47, the pin usually named
+  for the job, is the ACT LED on a Pi 1/2, the PMIC's I²C data line on a
+  Pi 3 and part of the Ethernet PHY's RGMII interface on a Pi 4 — and
+  this controller doesn't implement the SDHCI present-state bits.
+  `examples/sd_presence.rs` demonstrates it, card in and card out, and
+  decodes the controller state behind whatever error comes back.
 
 - **Interrupt-driven SD transfers**, behind the `async` feature:
   `Sd::read_block_async`/`read_blocks_async`/`write_block_async`/
