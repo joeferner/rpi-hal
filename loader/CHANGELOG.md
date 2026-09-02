@@ -8,6 +8,11 @@ The firmware and the host CLI share one version and ship as one release:
 they are two halves of a wire protocol, and a version that identifies
 only one of them says nothing useful about compatibility.
 
+The `rpi-loader-ota` library in `ota/` is not part of that pair and keeps
+its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
+are firmware projects in other repositories, and a renamed command-line
+flag here is no reason to bump their dependency.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added

@@ -35,7 +35,13 @@ and SD/FAT access. The FAT filesystem layer is
   can build.
 - `cli/` — the host-side driver that talks to a running loader over
   serial. This is the package published to crates.io as `rpi-loader`,
-  and the only half of the project `cargo install` can build.
+  and the only part of the project `cargo install` can build.
+- `ota/` — the over-the-air update bundle format, published separately as
+  `rpi-loader-ota`. A `no_std` library rather than a tool: the CLI uses it
+  to pack a bundle, and a board's own firmware links it to validate and
+  install one. It carries its own version, because its consumers are
+  firmware projects elsewhere and there is no reason a renamed CLI flag
+  should bump their dependency.
 - The repository root has no cargo configuration on purpose. Cargo
   discovers `.cargo/config.toml` by walking up from the working
   directory, so a root-level one naming a bare metal target would be

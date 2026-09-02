@@ -1,0 +1,64 @@
+[package]
+name = "rpi-loader-ota"
+version = "0.1.0"
+edition = "2024"
+description = "Over-the-air update bundle format for bare-metal Raspberry Pi firmware — one container, packed on a host and validated on the device"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joeferner/rpi-loader"
+documentation = "https://docs.rs/rpi-loader-ota"
+readme = "README.md"
+keywords = ["raspberry-pi", "bare-metal", "ota", "firmware", "no-std"]
+categories = ["embedded", "no-std", "filesystem"]
+# Set by the edition rather than by anything in the source: 1.85 is the
+# toolchain that stabilised edition 2024. The `apply` feature would pin the
+# same floor anyway through `resident-fat`, so there is no version below
+# this that any configuration of this package could build on.
+rust-version = "1.85"
+
+# Repository-only. `rust-toolchain.toml` exists so `make clippy-ota`'s bare
+# metal pass works from a fresh checkout; rustup reads that file from the
+# directory a command runs in, never from a dependency's source, so a copy
+# inside a downloaded crate does nothing but take up space.
+exclude = ["rust-toolchain.toml"]
+
+# Unlike the CLI beside it, this package is versioned on its own. It is a
+# library whose consumers are firmware projects in other repositories, and
+# tying it to the CLI's version would force a semver bump on every one of
+# them each time a command-line flag was renamed. The CLI and the loader
+# firmware still ship as one release, because those two are halves of a
+# wire protocol; this is not.
+
+[features]
+default = ["alloc"]
+# The encoder needs a growable buffer and the decoder returns a collection,
+# so everything here that produces something needs an allocator. It is a
+# feature rather than an assumption because validating a bundle in place —
+# checking the header and the checksum, then walking entries — does not,
+# and a device that only wants to know whether a bundle is well formed
+# should not have to have a heap to find out.
+alloc = []
+# Writing a validated bundle to a FAT volume: the write/verify/commit
+# sequence, and the two-slot kernel scheme. Opt-in because the host CLI
+# packs bundles and never installs one, and making it depend on a
+# filesystem implementation to write a file on a host would be absurd.
+apply = ["alloc", "dep:resident-fat"]
+
+[dependencies]
+# no_std by default; the same implementation has to produce the same
+# checksum on the host that packs a bundle and on the device that checks
+# it, which is the whole reason this package exists.
+crc = { version = "3", default-features = false }
+# The filesystem the apply half writes through. Its default features are
+# already empty -- the `embedded-sdmmc` bridge and the MBR parser are both
+# opt-in there -- so nothing needs turning off.
+resident-fat = { version = "0.1.0", optional = true }
+
+[package.metadata.docs.rs]
+# Document the apply half as well as the format; without this, docs.rs
+# builds the default features and the `apply` module is simply absent from
+# the published documentation.
+#
+# No `--cfg docsrs` and no `doc_cfg` annotations on the gated items: that
+# attribute is still nightly-only, and this repository's `make doc` runs on
+# stable. Worth revisiting if the annotations start being missed.
+all-features = true

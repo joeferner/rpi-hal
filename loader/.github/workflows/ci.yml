@@ -26,14 +26,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The firmware pins its own toolchain in firmware/rust-toolchain.toml
-      # -- stable, plus the two bare-metal targets and the components these
-      # recipes invoke -- and rustup reads that from the directory it runs
-      # in. The repository root deliberately has no toolchain file.
-      - name: Install the firmware's pinned toolchain
-        working-directory: firmware
+      # Two packages pin a toolchain, each for its own reasons: the firmware
+      # needs both bare-metal targets and the llvm-tools behind `cargo
+      # objcopy`, and the OTA package needs one bare-metal target for the
+      # `no_std` half of `make clippy-ota`. rustup reads a
+      # `rust-toolchain.toml` from the directory a command runs in, so
+      # materialising them means running `rustup show` in each. The
+      # repository root deliberately has no toolchain file.
+      - name: Install the pinned toolchains
         run: |
-          rustup show
+          (cd firmware && rustup show)
+          (cd ota && rustup show)
           cargo --version
 
       # Unlike rpi-hal, this repository's build does not stop at `cargo
@@ -48,17 +51,20 @@ jobs:
           workspaces: |
             firmware
             cli
+            ota
 
       - run: make fmt-check
       - run: make clippy
       - run: make clippy64
       - run: make clippy-cli
+      - run: make clippy-ota
       - run: make build-bcm2837
       - run: make build64-bcm2837
       - run: make build-bcm2711
       - run: make build64-bcm2711
       - run: make build-cli
       - run: make test-cli
+      - run: make test-ota
       - run: make doc
 
       # Proof the release job's artifacts are actually produced, caught
@@ -66,9 +72,10 @@ jobs:
       - name: Both images exist
         run: test -s firmware/target/kernel7.img && test -s firmware/target/kernel8.img
 
-  # Guards the `rust-version` claim in both manifests. Without this an MSRV
+  # Guards the `rust-version` claim in every manifest. Without this an MSRV
   # is a comment that rots the first time a dependency or a `core` API
-  # moves. Both packages have one now that the firmware builds on stable.
+  # moves. All three packages have one now that the firmware builds on
+  # stable.
   #
   # Each package is checked against its own declared floor, and the
   # `+toolchain` argument overrides firmware/rust-toolchain.toml, which is
@@ -83,11 +90,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `targets` is a plain space-separated list, read by both the
+        # install and the build step below. It used to carry the `--target`
+        # flags for the install while the build step named the same targets
+        # again in a hardcoded loop, which meant a package added here built
+        # for the firmware's targets whatever this column said.
+        #
+        # `features` exists because an MSRV claim covers every configuration
+        # a package offers, and the OTA package's floor comes from a feature
+        # that a default build does not enable.
         include:
           - package: cli
             targets: ""
+            features: ""
           - package: firmware
-            targets: "--target armv7a-none-eabi --target aarch64-unknown-none-softfloat"
+            targets: "armv7a-none-eabi aarch64-unknown-none-softfloat"
+            features: ""
+          - package: ota
+            targets: "armv7a-none-eabi"
+            features: "--all-features"
     steps:
       - uses: actions/checkout@v7
 
@@ -103,39 +124,46 @@ jobs:
 
       - name: Install that toolchain, with any targets the package needs
         run: |
+          flags=""
+          for target in ${{ matrix.targets }}; do
+            flags="$flags --target $target"
+          done
           rustup toolchain install ${{ steps.msrv.outputs.version }} \
-            --profile minimal ${{ matrix.targets }}
+            --profile minimal $flags
 
       # Build only, not test: the tests pull in dev-dependencies whose own
       # floors are their business, and it is the shipped artifact this
-      # claim is about. The firmware builds for both bare-metal targets;
-      # the CLI builds for the host.
+      # claim is about. A package with no targets listed builds for the
+      # host; otherwise it builds for each of the ones it named.
       - name: Build
         working-directory: ${{ matrix.package }}
         run: |
-          if [ -n "${{ matrix.targets }}" ]; then
-            for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
-              cargo +${{ steps.msrv.outputs.version }} build --release --target "$target"
-            done
+          if [ -z "${{ matrix.targets }}" ]; then
+            cargo +${{ steps.msrv.outputs.version }} build --release ${{ matrix.features }}
           else
-            cargo +${{ steps.msrv.outputs.version }} build --release
+            for target in ${{ matrix.targets }}; do
+              cargo +${{ steps.msrv.outputs.version }} build --release \
+                ${{ matrix.features }} --target "$target"
+            done
           fi
 
   # `cargo package` finishes by building the packaged tarball, which catches
   # a whole class of "works here, broken on crates.io" problems: a file the
   # manifest excludes but the build needs, or a path that only resolves in
-  # this working copy. Only the CLI is publishable -- the firmware sets
-  # `publish = false`.
+  # this working copy. Two of the three packages are publishable -- the
+  # firmware sets `publish = false` -- and each is verified separately,
+  # because they are released independently of one another.
   #
-  # Deliberately uncached. `make package` sends the verification build to
+  # Deliberately uncached. Both recipes send their verification build to
   # its own CARGO_TARGET_DIR, and there is nothing to gain by keeping a
-  # throwaway target directory for one small crate.
+  # throwaway target directory for two small crates.
   package:
     name: package verifies
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - run: make package
+      - run: make package-ota
 
   # Hardware-in-the-loop testing is deliberately absent: every check above
   # runs against a fake device on a pty, which pins the wire format but

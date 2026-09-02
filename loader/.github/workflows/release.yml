@@ -2,13 +2,27 @@ name: Release
 
 # Publishing to crates.io is permanent -- a version can be yanked but never
 # replaced or deleted -- so this never triggers on a branch push. Pushing a
-# `v*` tag is the deliberate act that starts a release, and
-# `workflow_dispatch` covers re-running it after a failure without moving
-# the tag.
+# tag is the deliberate act that starts a release, and `workflow_dispatch`
+# covers re-running one after a failure without moving the tag.
+#
+# Two independent releases share this file, told apart by their tag:
+#
+#   v<version>      the CLI and the loader firmware, which ship together
+#   ota-v<version>  the `rpi-loader-ota` library, which does not
+#
+# The prefixes do not overlap -- `refs/tags/ota-v0.1.0` does not start with
+# `refs/tags/v` -- so each job below runs for exactly one of them. A
+# dispatch has no tag to read, so it says which package it means.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "ota-v*"]
   workflow_dispatch:
+    inputs:
+      package:
+        description: Which package to release
+        type: choice
+        options: [cli, ota]
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +35,7 @@ permissions:
 jobs:
   release:
     name: publish the CLI and upload the images
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.package == 'cli'
     runs-on: ubuntu-latest
     environment: crates-io
     steps:
@@ -144,6 +159,107 @@ jobs:
       - name: Publish the CLI to crates.io
         if: steps.published.outputs.already == 'false'
         working-directory: cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+
+  # The library. Same guards in the same order as the job above, and
+  # deliberately not factored together with it: the two release different
+  # things on different schedules, and a shared job with conditionals in it
+  # would be harder to read than the repetition, on the one workflow where
+  # being able to read what will happen matters most.
+  #
+  # No images and no firmware toolchain -- this package builds for the host
+  # like any other library, and `cargo package` is the only artifact.
+  ota:
+    name: publish rpi-loader-ota
+    if: startsWith(github.ref, 'refs/tags/ota-v') || inputs.package == 'ota'
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The tag matches the manifest
+        id: version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' ota/Cargo.toml | head -1)"
+          test -n "$version" || {
+            echo "ota/Cargo.toml has no version" >&2
+            exit 1
+          }
+          # A dispatch run has no tag in its context, so the manifest is
+          # the authority there and there is nothing to cross-check.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "ota-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the manifest version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=ota-v$version" >> "$GITHUB_OUTPUT"
+
+      # Its own changelog, because its versions are its own. Dated, for the
+      # same reason as the CLI's: an undated entry claims the version was
+      # never released.
+      - name: The changelog has a dated section for this version
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if grep -q ReleaseDate ota/CHANGELOG.md; then
+            echo "ota/CHANGELOG.md still has the ReleaseDate placeholder" >&2
+            exit 1
+          fi
+          if ! grep -qE "^## \[$version\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" ota/CHANGELOG.md; then
+            echo "ota/CHANGELOG.md has no dated '## [$version] - YYYY-MM-DD' section" >&2
+            exit 1
+          fi
+
+      - name: The packaged tarball builds
+        run: make package-ota
+
+      - name: Extract this version's changelog section
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="## [$version]" '
+            index($0, v) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' ota/CHANGELOG.md > release-notes.md
+          cat >> release-notes.md <<'NOTE'
+
+          Add it with `cargo add rpi-loader-ota`. The `rpi-loader` CLI
+          builds bundles in this format; a device installs one.
+          NOTE
+
+      # Before the irreversible step, and idempotent, so a re-run after a
+      # failed publish does not stall here.
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" \
+              --title "rpi-loader-ota ${{ steps.version.outputs.version }}" \
+              --notes-file release-notes.md
+          fi
+
+      # As above: crates.io refuses a version that exists, and that refusal
+      # would mask whatever a re-run was actually for.
+      - name: Is this version already on crates.io?
+        id: published
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          index="$(curl -sS https://index.crates.io/rp/i-/rpi-loader-ota || true)"
+          if printf '%s' "$index" | grep -q "\"vers\":\"$version\""; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "rpi-loader-ota $version is already published; skipping"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to crates.io
+        if: steps.published.outputs.already == 'false'
+        working-directory: ota
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish

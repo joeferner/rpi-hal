@@ -1,12 +1,23 @@
 # Releasing
 
-How to cut a release of `rpi-loader`. Maintainer-facing; nothing here is
-needed to *use* the loader or the CLI.
+How to cut a release. Maintainer-facing; nothing here is needed to *use*
+the loader, the CLI or the library.
 
-A release is two things at once: the `rpi-loader` CLI published to
-crates.io, and the four loader images attached to a GitHub release. The
-publish is permanent — a version can be yanked but never replaced or
-deleted, and the version number can never be reused. Most of what follows
+**There are two kinds of release, and they are independent.**
+
+| Tag | Ships | Where |
+| --- | --- | --- |
+| `v<version>` | the `rpi-loader` CLI, and the four loader images | crates.io + a GitHub release |
+| `ota-v<version>` | the `rpi-loader-ota` library | crates.io |
+
+The CLI and the firmware move together because they are two halves of a
+wire protocol. The library does not, because its consumers are firmware
+projects in other repositories and a renamed command-line flag is no
+reason to bump their dependency. Each has its own changelog: `CHANGELOG.md`
+for the pair, `ota/CHANGELOG.md` for the library.
+
+Either publish is permanent — a version can be yanked but never replaced
+or deleted, and the number can never be reused. Most of what follows
 exists to make a mistake fail *before* that point.
 
 ## One-time setup
@@ -14,8 +25,9 @@ exists to make a mistake fail *before* that point.
 Only needed once per repository (or when a token expires).
 
 - **crates.io API token.** Create one under Account Settings → API Tokens
-  with the **publish-update** scope — plus **publish-new** for the very
-  first release — then store it as a repository secret:
+  with the **publish-update** scope — plus **publish-new** for any release
+  that claims a name not yet on crates.io — then store it as a repository
+  secret:
 
   ```sh
   gh secret set CARGO_REGISTRY_TOKEN
@@ -23,6 +35,12 @@ Only needed once per repository (or when a token expires).
 
   Secrets do not carry over from another repository, so having published
   `rpi-hal` does not cover this one.
+
+  **Check the token's scope before releasing a package for the first
+  time.** crates.io tokens can be limited to named crates as well as to
+  actions, and a token created to publish updates of one crate cannot
+  claim another. That failure lands at the last step of the workflow,
+  after the GitHub release object already exists.
 
 - **The `crates-io` environment.** `.github/workflows/release.yml`
   declares it. Create it under Settings → Environments and add yourself as
@@ -35,14 +53,52 @@ Only needed once per repository (or when a token expires).
   While the repository is private, every one of those is a 404 for anyone
   reading the crates.io page.
 
-## Per-release steps
+## Releasing the library
+
+`rpi-loader-ota` is the short version of everything below, because it has
+no firmware, no images and no wire protocol — just a Rust API and a bundle
+format.
+
+1. On a branch: set `version` in `ota/Cargo.toml`, run `make test-ota` so
+   `ota/Cargo.lock` is refreshed, and give `ota/CHANGELOG.md` a dated
+   `## [<version>] - <YYYY-MM-DD>` heading plus a link reference at the
+   bottom. The workflow greps for that date and refuses to publish without
+   it.
+2. `make package-ota` on a clean tree.
+3. Merge the PR, then tag and push:
+
+   ```sh
+   git checkout main && git pull
+   git tag ota-v<version> && git push origin ota-v<version>
+   ```
+4. Approve the parked workflow.
+
+**The CLI depends on this package, so it has to be published first.**
+`cargo package` on the CLI resolves `rpi-loader-ota` from crates.io — the
+path dependency is stripped when packaging, which is the point of writing
+both a `version` and a `path` — and a version that is not there yet fails
+the CLI's release before it starts. That is also why CI's package job is
+the first thing to go red if this package is ever bumped without being
+released.
+
+**What counts as breaking:** the Rust API as usual, and the bundle format
+itself. A change to the container's bytes is breaking in a way a semver
+bump cannot really express, because a bundle is parsed by the firmware
+already running and installs the firmware that replaces it — so a board
+can never be sent a container its current build does not understand.
+Changing it means reaching every deployed board some other way once. The
+version byte in the header exists to make that a clean rejection rather
+than a puzzle.
+
+## Releasing the CLI and the firmware
 
 ### 1. Decide the version
 
 Semantic versioning, with the usual pre-1.0 caveat that `0.x` bumps the
-*minor* for breaking changes. Both packages carry the same version and
-move together — see the note at the top of `CHANGELOG.md` — and the
-release workflow refuses to run if the two manifests disagree.
+*minor* for breaking changes. The CLI and the firmware carry the same
+version and move together — see the note at the top of `CHANGELOG.md` —
+and the release workflow refuses to run if those two manifests disagree.
+`ota/Cargo.toml` is not part of that check and is not expected to match.
 
 What counts as breaking here is wider than a Rust API, because most of
 what this project exposes is not one:
@@ -158,13 +214,18 @@ crates.io page is what people read.
 
 | Guard | Where | Symptom if it trips |
 | --- | --- | --- |
-| Both manifests carry the same version | `release.yml` | Release job fails before publishing |
-| Tag matches the manifests | `release.yml` | Same. Skipped on a `workflow_dispatch` run, which has no tag |
+| The CLI and firmware manifests carry the same version | `release.yml` | Release job fails before publishing |
+| Tag matches the manifest it names | `release.yml` | Same. Skipped on a `workflow_dispatch` run, which has no tag |
 | Changelog has a dated section for the version | `release.yml` | Same |
-| Packaged tarball actually builds | `make package`, in both CI and the release job | Same |
+| Packaged tarball actually builds | `make package` / `make package-ota`, in both CI and the release jobs | Same |
 | Images were actually produced | `ci.yml` | CI fails on the pull request, long before a tag exists |
-| The CLI still builds on its declared MSRV | `ci.yml` | Same |
+| Every package still builds on its declared MSRV | `ci.yml` | Same |
 | PRs required on `main` | Repository ruleset | Direct pushes rejected |
+
+A `v*` tag runs only the CLI job and an `ota-v*` tag only the library job;
+the prefixes cannot both match, since `refs/tags/ota-v0.1.0` does not start
+with `refs/tags/v`. A `workflow_dispatch` run has no tag to read and asks
+which package it means.
 
 One coupling to know about: the ruleset's required status checks are
 matched against the **job names** in `ci.yml`. Renaming a job there leaves
