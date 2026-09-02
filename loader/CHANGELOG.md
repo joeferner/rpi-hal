@@ -13,6 +13,23 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [Unreleased]
+
+### Added
+
+- **`bundle`**, a subcommand that packs an over-the-air update bundle
+  from a `bundle.toml` and, with `--upload <url>`, posts it to a running
+  board. The first subcommand that opens no serial port: the container is
+  `rpi-loader-ota`, shared with the firmware that installs one, and this
+  is the half that builds them. A manifest rather than arguments because
+  what goes into a bundle is a property of the project — a kernel, whole
+  directories, firmware blobs and `config.txt`, each with a destination —
+  and arguments carrying that would put a card's layout in a `Makefile`
+  where nothing can check it.
+
+  Uploading is plain HTTP with no TLS anywhere in the dependency tree;
+  the endpoint is a board on a local network.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added

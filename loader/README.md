@@ -81,8 +81,13 @@ with `--device`, then takes its own arguments:
   other key, Ctrl-C included, goes to the device, which is what lets you
   interrupt something running *there*.
 - `list` — list the host's USB serial ports (`--all` for every port), to
-  find what to pass to `--device`. The only subcommand that neither
-  opens a port nor needs one.
+  find what to pass to `--device`.
+- `bundle [manifest]` — pack an over-the-air update bundle described by a
+  `bundle.toml`, and with `--upload <url>` post it to a running board.
+  See below.
+
+`list` and `bundle` are the two subcommands that neither open a port nor
+need one.
 
 The bulk commands (`mem-write`, `sd-read`, `sd-write`, `boot`,
 `eeprom-read`, `eeprom-write`) also take
@@ -92,6 +97,62 @@ to reproduce the classic one-shot upload flow.
 
 The wire protocol is documented on the device side in
 `firmware/src/main.rs` and on the host side in `cli/src/link.rs`.
+
+## Over-the-air bundles
+
+`bundle` is the odd one out: it speaks no serial protocol at all. A board
+running its own firmware — not this loader — can be sent a bundle over
+the network and install it on itself, and the container that carries one
+is `rpi-loader-ota`, the package in `ota/`. It is here because a wire
+format needs exactly one implementation, and this is where the half that
+builds one belongs.
+
+A project describes its card in a `bundle.toml` beside its `Makefile`:
+
+```toml
+magic = "WATR"          # four ASCII bytes, matching the firmware's
+name  = "water"         # -> target/water.bundle
+
+[kernel]
+source = "target/kernel7.img"
+dest   = "KERNEL7.IMG"
+
+[[files]]
+source = "www"          # a directory: everything under it, recursively
+dest   = "WWW"
+
+[[files]]
+source = "vendor/start.elf"
+dest   = "START.ELF"
+role   = "firmware"     # file (default), firmware, or config
+```
+
+```sh
+# Pack it.
+rpi-loader bundle                       # or: rpi-loader bundle path/to/bundle.toml
+
+# Pack it and send it to a board, which answers with what the update
+# cost its card.
+rpi-loader bundle --upload http://10.0.0.5/api/v1/ota
+```
+
+Notes worth knowing before writing one:
+
+- **`magic` lives in the manifest and has no command-line override.** It
+  is the only thing stopping one board's update being installed on
+  another, and a flag that could change it would be a way to build a
+  bundle carrying the wrong one. A project shipping both a 32- and a
+  64-bit build wants two magics, since nothing else in a bundle says
+  which architecture its kernel is for.
+- **Paths are relative to the manifest**, not to where the command runs.
+- **A directory source is packed recursively and sorted**, so the same
+  tree always produces the same bytes. Anything beginning with a dot is
+  skipped at every level.
+- **A `start*.elf` must be packed with its matching `fixup*.dat`.** They
+  are released as a pair and a mismatched one does not boot, so the
+  packer refuses rather than letting a board find out.
+- **`--upload` is plain HTTP, with no TLS in the dependency tree.** The
+  endpoint is a board on a local network.
 
 ## 32-bit and 64-bit
 

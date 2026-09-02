@@ -9,6 +9,7 @@
 //! next invocation can handshake at the rate the loader is left listening
 //! on. The wire protocol itself is documented in [`link`].
 
+mod bundle;
 mod link;
 
 use std::fs;
@@ -207,6 +208,26 @@ enum Command {
         baud: u32,
     },
 
+    /// Pack an over-the-air bundle from a manifest, and optionally upload
+    /// it to a running board.
+    ///
+    /// The only subcommand that touches no serial port: a bundle reaches a
+    /// board over the network, and this is here because the format has to
+    /// have one implementation, shared with the firmware that installs it.
+    Bundle {
+        /// The manifest describing what the bundle holds.
+        #[arg(default_value = "bundle.toml")]
+        manifest: PathBuf,
+        /// Where to write it. Defaults to `target/<name>.bundle` beside
+        /// the manifest.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// POST it to a running board once built, e.g.
+        /// http://10.0.0.5/api/v1/ota.
+        #[arg(long, value_name = "URL")]
+        upload: Option<String>,
+    },
+
     /// Passthrough serial terminal only, with no handshake.
     Terminal,
 
@@ -229,7 +250,10 @@ impl Command {
     /// exists to watch an already-running kernel, which doesn't speak the
     /// loader protocol, so a HELLO would never be answered.
     fn needs_handshake(&self) -> bool {
-        !matches!(self, Command::Terminal | Command::List { .. })
+        !matches!(
+            self,
+            Command::Terminal | Command::List { .. } | Command::Bundle { .. }
+        )
     }
 }
 
@@ -397,9 +421,18 @@ fn main() -> ExitCode {
 /// runs the command.
 fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
     // Before anything opens a port: listing is how a user finds out what
-    // to pass to --device, so it cannot require one.
+    // to pass to --device, so it cannot require one, and packing a bundle
+    // never involves the serial link at all.
     if let Command::List { all } = &cli.command {
         return list_ports(*all);
+    }
+    if let Command::Bundle {
+        manifest,
+        output,
+        upload,
+    } = &cli.command
+    {
+        return bundle::run(manifest, output.clone(), upload.as_deref());
     }
 
     let device = cli.device.as_deref().ok_or_else(|| {
@@ -539,6 +572,9 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
         }
 
         Command::Terminal => link.terminal()?,
+
+        // Both returned above, before a port was ever opened.
+        Command::Bundle { .. } => unreachable!(),
 
         // Handled above, before the port was opened.
         Command::List { .. } => unreachable!(),
