@@ -30,6 +30,15 @@ flag here is no reason to bump their dependency.
   Uploading is plain HTTP with no TLS anywhere in the dependency tree;
   the endpoint is a board on a local network.
 
+  `--sdcard <dir>` writes the bundle's contents onto a card in a reader
+  instead, for the update that cannot arrive over the network — a build
+  that changes the format the running firmware reads, or one that broke
+  networking, or a board not on the network yet. It unpacks the bundle it
+  just built rather than copying the sources again, so a card written by
+  hand and a board updated over HTTP carry the same bytes by
+  construction. It writes only what the bundle carries, which is less
+  than a card needs to boot.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added

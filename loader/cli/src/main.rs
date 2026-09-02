@@ -222,6 +222,12 @@ enum Command {
         /// the manifest.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Also write the bundle's contents into this directory — a
+        /// mounted SD card's boot partition — for an update a board
+        /// cannot be sent over the network. Writes only what the bundle
+        /// carries, which is less than a card needs to boot.
+        #[arg(long, value_name = "DIR")]
+        sdcard: Option<PathBuf>,
         /// POST it to a running board once built, e.g.
         /// http://10.0.0.5/api/v1/ota.
         #[arg(long, value_name = "URL")]
@@ -429,10 +435,16 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
     if let Command::Bundle {
         manifest,
         output,
+        sdcard,
         upload,
     } = &cli.command
     {
-        return bundle::run(manifest, output.clone(), upload.as_deref());
+        return bundle::run(
+            manifest,
+            output.clone(),
+            sdcard.as_deref(),
+            upload.as_deref(),
+        );
     }
 
     let device = cli.device.as_deref().ok_or_else(|| {

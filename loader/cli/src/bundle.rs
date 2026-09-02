@@ -16,12 +16,12 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use rpi_loader_ota::{encode, Entry, Format, Role};
+use rpi_loader_ota::{encode, Bundle, Entry, Format, Role};
 use serde::Deserialize;
 
 /// Entries a bundle may hold unless the manifest says otherwise.
@@ -110,9 +110,14 @@ struct Loaded {
     data: Vec<u8>,
 }
 
-/// Builds the bundle `manifest` describes, writes it, and optionally posts
-/// it to a running board.
-pub fn run(manifest: &Path, output: Option<PathBuf>, upload: Option<&str>) -> Result<()> {
+/// Builds the bundle `manifest` describes, writes it, and optionally
+/// unpacks it onto a card or posts it to a running board.
+pub fn run(
+    manifest: &Path,
+    output: Option<PathBuf>,
+    sdcard: Option<&Path>,
+    upload: Option<&str>,
+) -> Result<()> {
     let text = fs::read_to_string(manifest)
         .with_context(|| format!("reading the manifest {}", manifest.display()))?;
     let parsed: Manifest = toml::from_str(&text)
@@ -148,10 +153,80 @@ pub fn run(manifest: &Path, output: Option<PathBuf>, upload: Option<&str>) -> Re
 
     report(&out, &bytes, &loaded);
 
+    if let Some(directory) = sdcard {
+        unpack(&format, &bytes, directory)?;
+    }
     match upload {
         Some(url) => post(url, &bytes),
         None => Ok(()),
     }
+}
+
+/// Writes the bundle's contents onto a mounted card.
+///
+/// For the update a board cannot be sent: a build that changes the bundle
+/// format it reads, or one that broke networking, or a first install. The
+/// card goes in a reader and comes out holding what an over-the-air update
+/// would have put there.
+///
+/// **This writes what the bundle carries, which is deliberately less than a
+/// card needs to boot.** A manifest names what an *update* replaces; the
+/// Raspberry Pi firmware, and any settings file a project excludes on
+/// purpose so that updates do not reset it, are not in it and are not
+/// written here.
+///
+/// # Why it decodes what it just encoded
+///
+/// The entries are in hand already, so writing them directly would be
+/// shorter. Going back through [`Bundle::parse`] means the card is written
+/// from the same bytes a device would install, checked by the same code —
+/// so "I flashed it by hand" and "I sent it over the network" cannot come
+/// to different answers. It also means the paths have been validated
+/// against escaping their directory before any of them is joined to a path
+/// on this machine.
+fn unpack(format: &Format, bytes: &[u8], directory: &Path) -> Result<()> {
+    // Refused rather than created. A mount point exists; a typo does not,
+    // and silently making one produces a card that looks written and a
+    // directory of files nobody will find again.
+    if !directory.is_dir() {
+        bail!(
+            "{} is not a directory — is the card mounted?",
+            directory.display()
+        );
+    }
+
+    let bundle = Bundle::parse(format, bytes)?;
+    println!(
+        "\nwriting {} entries to {}",
+        bundle.count(),
+        directory.display()
+    );
+
+    for entry in bundle.iter() {
+        // Component by component rather than joining the whole path: a
+        // bundle's separator is always `/`, and this machine's may not be.
+        let mut destination = directory.to_path_buf();
+        for component in entry.path.split('/') {
+            destination.push(component);
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+
+        // Written and flushed to the device, not merely to the page cache.
+        // Without the sync this prints "done" while the card still holds
+        // none of it, and the next thing anyone does is pull the card out.
+        let mut file = fs::File::create(&destination)
+            .with_context(|| format!("creating {}", destination.display()))?;
+        file.write_all(entry.data)
+            .with_context(|| format!("writing {}", destination.display()))?;
+        file.sync_all()
+            .with_context(|| format!("flushing {}", destination.display()))?;
+
+        println!("  {:>9}  {}", entry.data.len(), entry.path);
+    }
+
+    Ok(())
 }
 
 /// Reads every source the manifest names.

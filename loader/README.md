@@ -134,7 +134,24 @@ rpi-loader bundle                       # or: rpi-loader bundle path/to/bundle.t
 # Pack it and send it to a board, which answers with what the update
 # cost its card.
 rpi-loader bundle --upload http://10.0.0.5/api/v1/ota
+
+# Pack it and write its contents onto a card in a reader, for an update
+# a board cannot be sent over the network.
+rpi-loader bundle --sdcard /media/you/boot
 ```
+
+`--sdcard` exists for the update that cannot arrive the usual way: a build
+that changes the bundle format the running firmware reads, or one that
+broke networking, or a board that is not on the network yet. It unpacks
+the bundle it just built rather than writing the source files again, so a
+card written by hand and a board updated over HTTP carry provably the same
+bytes.
+
+It writes **only what the bundle carries**, which is deliberately less than
+a card needs to boot: a manifest describes what an *update* replaces, so
+the Raspberry Pi firmware, and any settings file a project leaves out on
+purpose so updates do not reset it, are not written. The directory has to
+exist already — a mount point does, and a typo does not.
 
 Notes worth knowing before writing one:
 

@@ -323,6 +323,76 @@ fn an_unknown_manifest_key_is_refused() {
 }
 
 #[test]
+fn sdcard_writes_what_the_bundle_carries() {
+    let project = Project::new("sdcard");
+    project
+        .write(
+            "bundle.toml",
+            br#"
+                magic = "WATR"
+                name  = "water"
+
+                [kernel]
+                source = "target/kernel7.img"
+                dest   = "KERNEL7.IMG"
+
+                [[files]]
+                source = "www"
+                dest   = "WWW"
+            "#,
+        )
+        .write("target/kernel7.img", b"kernel")
+        .write("www/index.htm", b"<html>")
+        .write("www/css/site.css", b"body{}");
+
+    // Stands in for a mounted card, and has to exist already — see below.
+    let card = project.root.join("card");
+    fs::create_dir_all(&card).expect("creating the card directory");
+
+    let output = project.pack(&["--sdcard", card.to_str().expect("a path")]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert_eq!(fs::read(card.join("KERNEL7.IMG")).unwrap(), b"kernel");
+    assert_eq!(fs::read(card.join("WWW/index.htm")).unwrap(), b"<html>");
+    // Nested destinations mean directories the card did not have.
+    assert_eq!(fs::read(card.join("WWW/css/site.css")).unwrap(), b"body{}");
+
+    // The bundle file is written too: the card and a later upload should be
+    // able to carry provably the same bytes.
+    assert!(project.output("water").is_file());
+}
+
+#[test]
+fn sdcard_refuses_a_directory_that_is_not_there() {
+    // A mount point exists; a typo does not. Creating one silently produces
+    // a card that looks written and files nobody will find again.
+    let project = Project::new("sdcard-missing");
+    project
+        .write(
+            "bundle.toml",
+            br#"
+                magic = "WATR"
+                name  = "water"
+
+                [[files]]
+                source = "a.txt"
+                dest   = "A.TXT"
+            "#,
+        )
+        .write("a.txt", b"a");
+
+    let absent = project.root.join("not-mounted");
+    let output = project.pack(&["--sdcard", absent.to_str().expect("a path")]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("is the card mounted?"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!absent.exists(), "the directory was created anyway");
+}
+
+#[test]
 fn a_missing_source_names_itself() {
     let project = Project::new("missing-source");
     project.write(
