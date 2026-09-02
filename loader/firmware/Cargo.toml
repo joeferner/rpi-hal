@@ -1,6 +1,6 @@
 [package]
 name = "rpi-loader-firmware"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Self-relocating UART upload loader for Raspberry Pi 2/3/4 (BCM2836/BCM2837/BCM2711) — flash once, then upload new firmware over serial instead of rewriting the SD card"
 license = "MIT OR Apache-2.0"
