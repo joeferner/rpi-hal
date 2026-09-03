@@ -30,7 +30,7 @@ serialport = { version = "4.9.0", default-features = false }
 # The bundle container, shared with whatever firmware installs one. The
 # whole point of it being a crate rather than a module here is that the
 # packer and the parser cannot drift apart.
-rpi-loader-ota = { version = "0.1.0", path = "../ota" }
+rpi-loader-ota = { version = "0.2.0", path = "../ota" }
 # Reading `bundle.toml`. `display` is off because nothing here writes TOML.
 serde = { version = "1.0.229", features = ["derive"] }
 toml = { version = "1.1.4", default-features = false, features = ["parse", "serde"] }

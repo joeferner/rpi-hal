@@ -64,22 +64,36 @@ format.
    `## [<version>] - <YYYY-MM-DD>` heading plus a link reference at the
    bottom. The workflow greps for that date and refuses to publish without
    it.
-2. `make package-ota` on a clean tree.
-3. Merge the PR, then tag and push:
+2. **Raise the CLI's requirement to match**, in the same change:
+   `rpi-loader-ota`'s version in `cli/Cargo.toml`, then a `cargo check` in
+   `cli/` for its lockfile. This is not optional and not a follow-up — a
+   path dependency has to satisfy the version written beside it, so
+   leaving the CLI asking for the old one fails *every* job with
+   `failed to select a version`, not just the packaging one.
+3. `make package-ota` on a clean tree.
+4. Merge the PR, then tag and push:
 
    ```sh
    git checkout main && git pull
    git tag ota-v<version> && git push origin ota-v<version>
    ```
-4. Approve the parked workflow.
+5. Approve the parked workflow.
 
 **The CLI depends on this package, so it has to be published first.**
 `cargo package` on the CLI resolves `rpi-loader-ota` from crates.io — the
 path dependency is stripped when packaging, which is the point of writing
 both a `version` and a `path` — and a version that is not there yet fails
-the CLI's release before it starts. That is also why CI's package job is
-the first thing to go red if this package is ever bumped without being
-released.
+the CLI's release before it starts.
+
+**So `package verifies` is red from step 2 until step 5, and that is the
+expected state rather than a fault.** Once step 2 has raised the CLI's
+requirement, every other job is green and that one job asks crates.io for
+a version this release has not published yet. It cannot be made to pass
+earlier: publishing is what fixes it. Since the ruleset lists it among the
+required checks, merging in step 4 needs `gh pr merge --admin` — the one
+place in either release where a protection is deliberately stepped over,
+and the reason to do the publish immediately rather than leaving `main`
+sitting in that state.
 
 **What counts as breaking:** the Rust API as usual, and the bundle format
 itself. A change to the container's bytes is breaking in a way a semver
