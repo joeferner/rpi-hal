@@ -46,6 +46,15 @@ jobs:
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
 
+      # `ota/tests/apply.rs` builds its FAT32 volumes with `mkfs.vfat` and
+      # judges the result with `fsck.vfat`. Testing a filesystem writer
+      # against another implementation of the same filesystem is the whole
+      # point — a check written here could only agree with the code it is
+      # checking — so these tests fail rather than skip without the tools,
+      # and CI has to supply them.
+      - name: Install dosfstools
+        run: sudo apt-get update && sudo apt-get install -y dosfstools
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |

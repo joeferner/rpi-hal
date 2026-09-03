@@ -15,11 +15,21 @@ categories = ["embedded", "no-std", "filesystem"]
 # this that any configuration of this package could build on.
 rust-version = "1.85"
 
-# Repository-only. `rust-toolchain.toml` exists so `make clippy-ota`'s bare
-# metal pass works from a fresh checkout; rustup reads that file from the
-# directory a command runs in, never from a dependency's source, so a copy
-# inside a downloaded crate does nothing but take up space.
-exclude = ["rust-toolchain.toml"]
+# Repository-only, and shipping either would be worse than leaving it out.
+#
+# `rust-toolchain.toml` exists so `make clippy-ota`'s bare metal pass works
+# from a fresh checkout; rustup reads that file from the directory a command
+# runs in, never from a dependency's source, so a copy inside a downloaded
+# crate does nothing but take up space.
+#
+# `tests/` is the entry worth explaining, because shipping a test suite is
+# usually a kindness. Here it would be a broken one: `tests/apply.rs` builds
+# its FAT32 volumes with `mkfs.vfat` and judges them with `fsck.vfat`, so it
+# fails rather than skips on a machine without dosfstools. A suite that
+# cannot run from the tarball it ships in is worse than no suite, because a
+# red result there says nothing about this crate. The place to run these is
+# the repository, where CI installs the tools.
+exclude = ["rust-toolchain.toml", "tests/"]
 
 # Unlike the CLI beside it, this package is versioned on its own. It is a
 # library whose consumers are firmware projects in other repositories, and
@@ -52,6 +62,13 @@ crc = { version = "3", default-features = false }
 # already empty -- the `embedded-sdmmc` bridge and the MBR parser are both
 # opt-in there -- so nothing needs turning off.
 resident-fat = { version = "0.1.0", optional = true }
+
+[dev-dependencies]
+# Named again, though the `apply` feature already pulls it in, because the
+# integration tests implement `BlockDevice` and mount a volume themselves —
+# they are a consumer of it in their own right, not merely a consumer of
+# this crate. No `mbr`: the tests mount a whole device, not a partition.
+resident-fat = "0.1.0"
 
 [package.metadata.docs.rs]
 # Document the apply half as well as the format; without this, docs.rs

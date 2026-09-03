@@ -10,6 +10,48 @@ wire protocol; this is a library, its consumers are firmware projects in
 other repositories, and tying it to that version would bump their
 dependency every time a command-line flag was renamed.
 
+## [Unreleased]
+
+### Added
+
+- **`apply`**, behind the feature of the same name: the other half of an
+  update. It takes a validated bundle and a `resident-fat` volume and
+  writes every entry where its path says, in an order the crate imposes
+  rather than one the bundle chooses — ordinary files, then Raspberry Pi
+  firmware, then `config.txt`, then the kernel. The kernel is last
+  because while a board has one boot image that write *is* the commit, so
+  everything that could fail has to have failed already.
+
+  Nested destinations are created as needed, since a bundle can carry a
+  path and `write_file` resolves a parent rather than making one.
+
+- **Entries the card already holds are read and not rewritten.** The same
+  function answers both halves of the question — before a write it
+  decides whether to write at all, and after one it *is* the
+  verification — so a skipped entry is checked exactly as strictly as a
+  written one. A bundle carrying the Raspberry Pi firmware carries about
+  3 MB of it, and that changes roughly once a year; on hardware, applying
+  an unchanged bundle now costs 1055 ms and **no card writes at all**,
+  against 3724 ms to write the same thing in full.
+
+- **`Progress`**, which is how timing stays with the caller. Every method
+  defaults to doing nothing and `()` implements the whole trait, so a
+  caller names only what it wants. The boundaries separate the write from
+  the read-back deliberately: those are not the same operation and do not
+  have the same fix, so one figure covering both would hide which of them
+  an improvement had touched.
+
+- **`Checksum`**, the streaming form of `checksum`, for checking a file
+  already on a card against a fixed scratch buffer rather than a second
+  copy of it in memory.
+
+### Changed
+
+- `tests/` is no longer published. The suite builds its FAT32 volumes
+  with `mkfs.vfat` and judges them with `fsck.vfat`, so it fails rather
+  than skips without `dosfstools` — a suite that cannot run from the
+  tarball it ships in says nothing about the crate.
+
 ## [0.1.0] - 2026-09-01
 
 First release.

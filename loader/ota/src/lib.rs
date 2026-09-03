@@ -66,7 +66,13 @@ extern crate alloc;
 
 pub mod bundle;
 
-pub use bundle::{Bundle, Entry, Error, Format, Role, checksum};
+#[cfg(feature = "apply")]
+pub mod apply;
+
+pub use bundle::{Bundle, Checksum, Entry, Error, Format, Role, checksum};
 
 #[cfg(feature = "alloc")]
 pub use bundle::encode;
+
+#[cfg(feature = "apply")]
+pub use apply::{Progress, Report, apply};

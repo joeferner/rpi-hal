@@ -55,7 +55,11 @@ const TRAILER_LEN: usize = 4;
 const MIN_LEN: usize = HEADER_LEN + TRAILER_LEN;
 
 /// IEEE CRC-32, the same one the host packer computes.
-const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+///
+/// A `static` rather than a `const` because [`Checksum`] borrows it for the
+/// life of the program: a `const` is a fresh temporary at every mention and
+/// cannot be borrowed past the expression naming it.
+static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 /// The IEEE CRC-32 of `data`, as it appears in a bundle.
 ///
@@ -65,6 +69,46 @@ const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 /// is worse, because nothing would ever report it.
 pub fn checksum(data: &[u8]) -> u32 {
     CRC32.checksum(data)
+}
+
+/// The same checksum, over data that arrives in pieces.
+///
+/// [`checksum`] is what a caller holding the whole thing wants. This is for
+/// the other side of the comparison — a file already on a card, read a chunk
+/// at a time precisely so that checking it needs no second copy of it in
+/// memory.
+pub struct Checksum(crc::Digest<'static, u32>);
+
+impl Checksum {
+    /// Starts one.
+    pub fn new() -> Checksum {
+        Checksum(CRC32.digest())
+    }
+
+    /// Adds the next piece.
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    /// The checksum of everything added, comparable with [`checksum`] of the
+    /// same bytes.
+    pub fn finish(self) -> u32 {
+        self.0.finalize()
+    }
+}
+
+impl Default for Checksum {
+    fn default() -> Checksum {
+        Checksum::new()
+    }
+}
+
+impl core::fmt::Debug for Checksum {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // `crc::Digest` is not `Debug`, and what it holds mid-stream is not
+        // something a reader could act on anyway.
+        f.write_str("Checksum(..)")
+    }
 }
 
 /// What an application must agree with its packer about.
