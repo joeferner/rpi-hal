@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bcm2711-lpa",
  "bcm2837-lpa",
