@@ -1,6 +1,6 @@
 [package]
 name = "rpi-hal-embassy"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Embassy time driver and executor for bare-metal Raspberry Pi 2/3 (BCM2836/BCM2837), on top of rpi-hal"
 license = "MIT OR Apache-2.0"
@@ -40,7 +40,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # rpi-hal's chip features is on by default (see its Cargo.toml), and this
 # crate only targets BCM2836/2837 today (its time driver is IRQ-driven via
 # `Lic`, which doesn't exist under rpi-hal's `bcm2711` feature).
-rpi-hal = { version = "0.3.0", default-features = false, features = ["bcm2837"] }
+rpi-hal = { version = "0.4.0", default-features = false, features = ["bcm2837"] }
 # Deliberately no `platform-*` feature: those select an upstream executor
 # backend, and this crate supplies its own `__pender` and idle loop instead
 # so that AArch32 and AArch64 behave identically. `platform-cortex-ar`
@@ -89,7 +89,7 @@ embassy-futures = { version = "0.1.2", optional = true }
 # canonical source per dependency across all build targets, and rejects
 # the manifest outright ("different source paths depending on the build
 # target") if a normal and a dev edge disagree.
-rpi-hal = { version = "0.3.0", features = ["rt", "async"] }
+rpi-hal = { version = "0.4.0", features = ["rt", "async"] }
 # The application-facing time API (`Instant`, `Duration`, `Timer::after`),
 # used by the examples to exercise the driver in this crate. A library
 # dependency here would be wrong: an application picks its own

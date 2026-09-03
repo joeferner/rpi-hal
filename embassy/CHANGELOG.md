@@ -4,6 +4,23 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-02
+
+### Changed
+
+- **Requires `rpi-hal` 0.4.0.** Breaking, and not because anything here
+  moved: the two crates share types, so a consumer cannot hold this crate
+  at 0.3.0 and the HAL at 0.4.0 — cargo would resolve both and hand the
+  runner a `Lan9514` from a different crate version than the one it was
+  compiled against. Raising the requirement is what keeps the two in one
+  graph, and the version number matches the HAL release it is built
+  against, as every release here has since 0.3.0.
+
+  Nothing in this crate's own API changes. The HAL release it moves to is
+  breaking for one reason — `rpi_hal::sd::Error` gained a `NoCard`
+  variant, which breaks an exhaustive match — and nothing here matches on
+  it, so the upgrade is a version requirement and a lockfile.
+
 ## [0.3.0] - 2026-08-30
 
 ### Added
@@ -83,5 +100,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.4.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.3.0
 [0.1.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.1.0
