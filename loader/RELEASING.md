@@ -85,15 +85,33 @@ path dependency is stripped when packaging, which is the point of writing
 both a `version` and a `path` — and a version that is not there yet fails
 the CLI's release before it starts.
 
-**So `package verifies` is red from step 2 until step 5, and that is the
-expected state rather than a fault.** Once step 2 has raised the CLI's
+**So `package verifies` is red from step 2 until the publish, and that is
+the expected state rather than a fault.** Once step 2 has raised the CLI's
 requirement, every other job is green and that one job asks crates.io for
-a version this release has not published yet. It cannot be made to pass
-earlier: publishing is what fixes it. Since the ruleset lists it among the
-required checks, merging in step 4 needs `gh pr merge --admin` — the one
-place in either release where a protection is deliberately stepped over,
-and the reason to do the publish immediately rather than leaving `main`
-sitting in that state.
+a version this release has not published yet. Nothing in the pull request
+can make it pass; publishing is what fixes it. Since the ruleset lists it
+among the required checks, the merge in step 4 has to get past a check
+that cannot go green first, and there are two ways:
+
+- **Bypass it**, with `gh pr merge --squash --admin`. This works only if
+  the `main` ruleset grants a bypass actor. A ruleset is not classic
+  branch protection: with `bypass_actors` empty it refuses a repository
+  admin as flatly as anyone else, and `--admin` comes back with
+  `Required status check "package verifies" is failing`. Check with
+  `gh api repos/:owner/:repo/rulesets/<id> --jq .bypass_actors` before
+  planning around it.
+- **Publish first, then merge with no bypass at all.** Dispatch the
+  release job against the release branch —
+  `gh workflow run release.yml --ref <branch> -f package=ota` — which is
+  what the `package` input exists for, since a dispatch has no tag to
+  read. crates.io then has the version, `package verifies` goes green on
+  a re-run, and the pull request merges normally. Tagging `main`
+  afterwards is safe: the publish step asks the sparse index first and
+  skips a version that is already there, so the tag lands where the
+  changelog's link expects it without publishing twice.
+
+Either way the publish wants doing promptly rather than leaving `main`
+sitting with a red required check.
 
 **What counts as breaking:** the Rust API as usual, and the bundle format
 itself. A change to the container's bytes is breaking in a way a semver
