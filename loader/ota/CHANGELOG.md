@@ -10,7 +10,7 @@ wire protocol; this is a library, its consumers are firmware projects in
 other repositories, and tying it to that version would bump their
 dependency every time a command-line flag was renamed.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-02
 
 ### Added
 
@@ -87,4 +87,5 @@ First release.
   same way the packer checksummed the entry, and can skip rewriting one
   whose bytes have not changed.
 
+[0.2.0]: https://github.com/joeferner/rpi-loader/releases/tag/ota-v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/ota-v0.1.0

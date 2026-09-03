@@ -1,6 +1,6 @@
 [package]
 name = "rpi-loader-ota"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Over-the-air update bundle format for bare-metal Raspberry Pi firmware — one container, packed on a host and validated on the device"
 license = "MIT OR Apache-2.0"
