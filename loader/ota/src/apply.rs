@@ -12,6 +12,48 @@
 //! And the measurement — [`Progress`] reports what happened and the caller
 //! decides what to time, which is what keeps an async runtime's clock and
 //! whatever counts device commands out of this crate.
+//!
+//! # Why it writes the way it does
+//!
+//! Two rules below look like implementation detail and are not: they are
+//! the difference between an update that takes seconds and one that takes
+//! minutes. The figures come from a Pi 2 writing a 1.6 MB kernel to an SD
+//! card, and they are here rather than in an application because the rules
+//! they justify are here.
+//!
+//! **The card charges per command, not per block.** A single-block write
+//! cost 17.5 ms on that card; a 128-block write about 26 ms — one and a
+//! half times the cost for a hundred and twenty-eight times the data, so
+//! 62× cheaper per block. Nothing about the card changed between those two
+//! numbers. It was being asked the wrong way.
+//!
+//! So: **one `write_file` per entry, with the length known up front.** The
+//! chain is then allocated in one go and the file comes out contiguous,
+//! which is what lets the layer underneath issue one long transfer instead
+//! of thousands of short ones. A file grown a write at a time gets whatever
+//! clusters happen to be spare at each step, and no amount of care further
+//! down recovers from that. Through a filesystem that wrote single blocks,
+//! the same kernel took 99,683 ms and 5,703 card commands; written this
+//! way, 928 ms and 36. That is the whole of the 107×.
+//!
+//! And: **the read-back buffer is 64 KiB**, which is 128 blocks a command —
+//! the same argument from the reading side.
+//!
+//! **Skipping costs a read, and a read is much cheaper than a write.**
+//! Reading an entry back to decide whether to write it sounds like added
+//! work and is how a bundle carrying 3 MB of Raspberry Pi firmware — which
+//! changes about once a year — stays affordable to ship every time. A
+//! 6-entry, 4.8 MB bundle whose contents the card already held cost 1055 ms
+//! and **no write commands at all**, against 3724 ms to write the same
+//! thing in full.
+//!
+//! **What is left is a floor of roughly 250 ms per entry, whatever its
+//! size**, nearly all of it filesystem bookkeeping rather than data: a
+//! rewrite frees the old chain and allocates a new one, each of which
+//! flushes the allocation table, and FAT32 keeps two copies of it. So the
+//! cost of an update scales with the *number* of entries far more than with
+//! their bytes. Six files is nothing; several hundred small assets would be
+//! the thing to think about.
 
 use resident_fat::{BlockDevice, FileSystem};
 
