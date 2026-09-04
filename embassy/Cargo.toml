@@ -40,7 +40,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # rpi-hal's chip features is on by default (see its Cargo.toml), and this
 # crate only targets BCM2836/2837 today (its time driver is IRQ-driven via
 # `Lic`, which doesn't exist under rpi-hal's `bcm2711` feature).
-rpi-hal = { version = "0.4.0", default-features = false, features = ["bcm2837"] }
+rpi-hal = { version = "0.5.0", default-features = false, features = ["bcm2837"] }
 # Deliberately no `platform-*` feature: those select an upstream executor
 # backend, and this crate supplies its own `__pender` and idle loop instead
 # so that AArch32 and AArch64 behave identically. `platform-cortex-ar`
@@ -89,7 +89,7 @@ embassy-futures = { version = "0.1.2", optional = true }
 # canonical source per dependency across all build targets, and rejects
 # the manifest outright ("different source paths depending on the build
 # target") if a normal and a dev edge disagree.
-rpi-hal = { version = "0.4.0", features = ["rt", "async"] }
+rpi-hal = { version = "0.5.0", features = ["rt", "async"] }
 # The application-facing time API (`Instant`, `Duration`, `Timer::after`),
 # used by the examples to exercise the driver in this crate. A library
 # dependency here would be wrong: an application picks its own
@@ -123,6 +123,7 @@ heapless = { version = "0.8.0", default-features = false }
 embassy-net = { version = "0.9.1", default-features = false, features = [
     "dhcpv4",
     "tcp",
+    "udp",
     "auto-icmp-echo-reply",
 ] }
 # A no_std HTTP server built on embassy-net, for the example that serves
@@ -185,7 +186,15 @@ name = "embassy_net_echo"
 required-features = ["embassy-net-driver"]
 
 [[example]]
+name = "embassy_net_burst"
+required-features = ["embassy-net-driver"]
+
+[[example]]
 name = "embassy_picoserve"
+required-features = ["embassy-net-driver"]
+
+[[example]]
+name = "embassy_picoserve_site"
 required-features = ["embassy-net-driver"]
 
 [profile.dev]

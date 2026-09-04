@@ -547,9 +547,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rpi-hal"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fa5be50a2f2ae1276c2e640592d5f6a57427cf2b66bd1a068d620a21e76b090"
+checksum = "78a2ab87e97d51576e1e2e5373b3f21f69e85cf0d72cf127557fb64e1f90001e"
 dependencies = [
  "bcm2837-lpa",
  "critical-section",
