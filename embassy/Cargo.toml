@@ -1,6 +1,6 @@
 [package]
 name = "rpi-hal-embassy"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Embassy time driver and executor for bare-metal Raspberry Pi 2/3 (BCM2836/BCM2837), on top of rpi-hal"
 license = "MIT OR Apache-2.0"

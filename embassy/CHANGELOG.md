@@ -4,6 +4,60 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-04
+
+### Changed
+
+- **Requires `rpi-hal` 0.5.0** — breaking, since the two crates share
+  types and a consumer has to move with it.
+
+  That release fixes a bug worth upgrading for on its own: the LAN9514's
+  MAC was left in half duplex, so it discarded frames whenever the
+  interface transmitted and received at the same time. Nothing in this
+  crate could see it — the adapter handed every frame over successfully —
+  and the symptom was a peer waiting out a retransmission timeout. On a
+  real board it took the median response time for a page of eight files
+  from 1.0 s to 13.7 ms.
+
+  The receive loop is ported to that release's `receive_frames_async`,
+  which returns an iterator over the frames a transfer carried rather than
+  the first one, and drains it. No behavioural change today: with
+  `HW_CFG.MEF` clear the chip still sends one frame per transfer, which
+  `RxStats::batched` staying at zero confirms on hardware.
+
+### Added
+
+- `lan9514::rx_stats` and `lan9514::tx_stats`, reporting what the two
+  frame loops managed since boot: frames attempted and delivered, sends
+  the chip refused, receives that came back empty or errored, transfers
+  that carried more than one frame, and the last `TransferError` in each
+  direction.
+
+  A frame either loop drops is otherwise invisible. The receive loop
+  discards a transfer that yields nothing usable and asks again; the
+  transmit loop releases the buffer whether or not the send succeeded.
+  Both are deliberate — the queue would wedge on the first failure
+  otherwise — but between them there was no way to tell a frame that went
+  from a frame that did not, and the symptom of either is latency
+  somewhere else. Three relaxed atomics per frame, against a USB transfer.
+
+- Two network examples, both printing machine-readable result lines and
+  carrying their measured numbers in their comments:
+
+  - `embassy_net_burst` — measures *inbound* loss without transmitting.
+    The host sends a burst of marked UDP datagrams, each carrying its
+    sequence number and the burst total; the board reports how many
+    arrived. Establishes that the receive path handles a sustained 4,000
+    frames a second and a 256-frame back-to-back burst without losing
+    one. A `STARVE` switch holds interrupts off in bursts, for asking what
+    a receive loop that cannot be woken costs.
+  - `embassy_picoserve_site` — serves eight files at realistic sizes over
+    eight web tasks, with a real application's buffer sizes and timeouts,
+    for measuring what a browser actually does to this stack. Its `write`
+    timeout is deliberately not `picoserve`'s default: one second is where
+    a response is *aborted* mid-body, and a concurrent burst of these
+    files crosses it.
+
 ## [0.4.0] - 2026-09-02
 
 ### Changed
@@ -100,6 +154,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.5.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.3.0
 [0.1.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.1.0
