@@ -11,7 +11,7 @@
 //! documents, and without it nothing here completes.
 //!
 //! One thing genuinely differs, and it is the reason this exists:
-//! [`Lan9514::receive_frame_async`] can afford to leave a bulk IN parked
+//! [`Lan9514::receive_frames_async`] can afford to leave a bulk IN parked
 //! on an empty receive FIFO, which the blocking twin cannot. See that
 //! method.
 //!
@@ -26,11 +26,11 @@
 //! right shape for.
 
 use super::{
-    IdRevision, Lan9514, Rx, Tx, BMSR_LINK_UP, HW_CFG_BIR, LED_GPIO_CFG_FDX_LED,
-    LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_FDPX, MAC_CR_RXEN, MAC_CR_TXEN, MII_BUSY,
-    MII_TIMEOUT_US, PHY_ID_INTERNAL, PHY_REG_STATUS, READ_REGISTER, REG_ADDRH, REG_ADDRL,
-    REG_HW_CFG, REG_ID_REV, REG_LED_GPIO_CFG, REG_MAC_CR, REG_MII_ADDR, REG_MII_DATA, REG_TX_CFG,
-    TX_CFG_ON, WRITE_REGISTER,
+    Frames, IdRevision, Lan9514, Rx, Tx, BMSR_LINK_UP, HW_CFG_BIR, HW_CFG_RXDOFF,
+    LED_GPIO_CFG_FDX_LED, LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_FDPX, MAC_CR_RXEN,
+    MAC_CR_TXEN, MII_BUSY, MII_TIMEOUT_US, PHY_ID_INTERNAL, PHY_REG_STATUS, READ_REGISTER,
+    REG_ADDRH, REG_ADDRL, REG_HW_CFG, REG_ID_REV, REG_LED_GPIO_CFG, REG_MAC_CR, REG_MII_ADDR,
+    REG_MII_DATA, REG_TX_CFG, TX_CFG_ON, WRITE_REGISTER,
 };
 use crate::timer::Timer;
 use crate::usb::control::{vendor_in_async, vendor_out_async};
@@ -60,8 +60,8 @@ impl Rx {
     /// chip's endpoint 0, which carries the address and speed the bulk
     /// endpoint shares.
     ///
-    /// Shared by [`Lan9514::receive_frame_async`] and
-    /// [`Lan9514Rx::receive_frame_async`] rather than either delegating
+    /// Shared by [`Lan9514::receive_frames_async`] and
+    /// [`Lan9514Rx::receive_frames_async`] rather than either delegating
     /// to the other: the returned frame borrows this buffer, so a
     /// delegation through a temporary [`Lan9514Rx`] would tie it to the
     /// temporary.
@@ -70,7 +70,7 @@ impl Rx {
         device: ControlEndpoint,
         channel: &mut Channel<'_>,
         timer: &Timer,
-    ) -> Result<Option<&[u8]>, TransferError> {
+    ) -> Result<Frames<'_>, TransferError> {
         let endpoint = self.endpoint(device);
         let number = self.bulk_in.number;
         let received = match channel
@@ -84,10 +84,10 @@ impl Rx {
             .await
         {
             Ok(received) => received,
-            Err(TransferError::Nak) => return Ok(None),
+            Err(TransferError::Nak) => 0,
             Err(error) => return Err(error),
         };
-        Ok(self.frame(received))
+        Ok(self.frames(received))
     }
 }
 
@@ -118,15 +118,15 @@ impl Tx {
 }
 
 impl Lan9514Rx<'_> {
-    /// Awaits one received Ethernet frame on the bulk IN endpoint —
-    /// [`Lan9514::receive_frame_async`] restricted to this direction,
+    /// Awaits received Ethernet frames on the bulk IN endpoint —
+    /// [`Lan9514::receive_frames_async`] restricted to this direction,
     /// with the same behaviour and the same caveats. Read that method
     /// before using this one.
-    pub async fn receive_frame_async(
+    pub async fn receive_frames_async(
         &mut self,
         channel: &mut Channel<'_>,
         timer: &Timer,
-    ) -> Result<Option<&[u8]>, TransferError> {
+    ) -> Result<Frames<'_>, TransferError> {
         self.rx.receive_async(self.endpoint, channel, timer).await
     }
 }
@@ -245,8 +245,13 @@ impl Lan9514 {
         self.set_mac_address_async(channel, timer, mac).await?;
 
         let hw_cfg = self.read_register_async(channel, timer, REG_HW_CFG).await?;
-        self.write_register_async(channel, timer, REG_HW_CFG, hw_cfg | HW_CFG_BIR)
-            .await?;
+        self.write_register_async(
+            channel,
+            timer,
+            REG_HW_CFG,
+            (hw_cfg & !HW_CFG_RXDOFF) | HW_CFG_BIR,
+        )
+        .await?;
 
         self.write_register_async(
             channel,
@@ -281,7 +286,7 @@ impl Lan9514 {
     /// transmits go out on another.
     ///
     /// That is not a convenience but the only way to express it: both
-    /// [`Self::send_frame_async`] and [`Self::receive_frame_async`] take
+    /// [`Self::send_frame_async`] and [`Self::receive_frames_async`] take
     /// `&mut self`, so with the driver whole, a transmit can only happen
     /// by cancelling a parked receive — dropping a transfer the chip may
     /// be part-way through answering, and losing the frame with it. The
@@ -320,11 +325,15 @@ impl Lan9514 {
             .await
     }
 
-    /// Awaits one received Ethernet frame (destination MAC through
-    /// payload, CRC stripped). The returned slice borrows this driver's
-    /// RX buffer until the next call.
+    /// Awaits received Ethernet frames (destination MAC through payload,
+    /// CRC stripped), returning every one the transfer carried. They
+    /// borrow this driver's RX buffer until the next call.
     ///
-    /// Unlike [`Lan9514::receive_frame`] this does **not** read
+    /// **Drain it.** One transfer routinely carries several frames and
+    /// the next call overwrites the buffer, so taking the first and
+    /// asking again silently discards the rest; see [`Frames`].
+    ///
+    /// Unlike [`Lan9514::receive_frames`] this does **not** read
     /// `RX_FIFO_INF` first to find out whether a frame is waiting, and
     /// that difference is the point of the whole async path. A bulk IN
     /// against an empty receive FIFO is answered with a NAK, and the
@@ -344,14 +353,14 @@ impl Lan9514 {
     /// future. Doing so aborts the channel, which is safe, but a frame
     /// the chip was mid-way through handing over is lost with it.
     ///
-    /// `Ok(None)` means the transfer produced nothing usable — a
+    /// An empty iterator means the transfer produced nothing usable — a
     /// zero-length or truncated answer, or a frame the chip flagged as
     /// errored. Ask again.
-    pub async fn receive_frame_async(
+    pub async fn receive_frames_async(
         &mut self,
         channel: &mut Channel<'_>,
         timer: &Timer,
-    ) -> Result<Option<&[u8]>, TransferError> {
+    ) -> Result<Frames<'_>, TransferError> {
         self.rx.receive_async(self.endpoint, channel, timer).await
     }
 

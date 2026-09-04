@@ -12,17 +12,19 @@
 //! configures the device and finds its bulk endpoints;
 //! [`start`](crate::usb::lan9514::Lan9514::start) programs the MAC and
 //! enables the receiver/transmitter; then
-//! [`receive_frame`](crate::usb::lan9514::Lan9514::receive_frame) and
+//! [`receive_frames`](crate::usb::lan9514::Lan9514::receive_frames) and
 //! [`send_frame`](crate::usb::lan9514::Lan9514::send_frame) move Ethernet
 //! frames over the bulk endpoints (each frame carries the chip's TX
-//! command header / RX status word, handled here). Register access is
+//! command header / RX status word, handled here — and a single receive
+//! transfer carries as many frames as the chip had waiting, which is why
+//! that one is plural; see [`Frames`](crate::usb::lan9514::Frames)). Register access is
 //! over vendor control transfers, and the MII PHY is reachable for link
 //! status ([`is_link_up`](crate::usb::lan9514::Lan9514::is_link_up)).
 //!
 //! Every method above has an interrupt-driven `async` twin under the
 //! `async` feature —
 //! [`send_frame_async`](crate::usb::lan9514::Lan9514::send_frame_async),
-//! [`receive_frame_async`](crate::usb::lan9514::Lan9514::receive_frame_async)
+//! [`receive_frames_async`](crate::usb::lan9514::Lan9514::receive_frames_async)
 //! and the register accessors behind them — so a driver running under an
 //! executor gives the CPU back for the time a transfer spends on the bus
 //! instead of busy-waiting on it. The blocking methods are not deprecated
@@ -36,7 +38,7 @@
 //! application code. With the `smoltcp` feature enabled,
 //! [`Lan9514Phy`](crate::usb::lan9514::Lan9514Phy) wraps
 //! [`send_frame`](crate::usb::lan9514::Lan9514::send_frame) /
-//! [`receive_frame`](crate::usb::lan9514::Lan9514::receive_frame) as a
+//! [`receive_frames`](crate::usb::lan9514::Lan9514::receive_frames) as a
 //! `smoltcp` `phy::Device` so a stack can run on top; the
 //! `usb_ethernet_smoltcp` example uses it, leasing an address over DHCP
 //! and running a poll loop that answers pings. For `embassy-net`, the
@@ -97,6 +99,17 @@ const REG_MII_DATA: u16 = 0x118;
 /// `HW_CFG.BIR` — make a bulk-IN with no frame available return a
 /// zero-length packet instead of NAKing, so RX polling is deterministic.
 const HW_CFG_BIR: u32 = 0x0000_1000;
+
+/// `HW_CFG.RXDOFF` — bytes of padding the chip puts between a frame's RX
+/// status word and the frame itself.
+///
+/// Cleared explicitly. [`Frames`] reads a frame as starting immediately
+/// after its status word, and the next status word as dword-aligned from
+/// there; a non-zero offset shifts every frame in a transfer. Zero is the
+/// reset default, so this says the parser depends on it rather than
+/// changing anything.
+const HW_CFG_RXDOFF: u32 = 0x0000_0600;
+
 /// `LED_GPIO_CFG` bit routing the speed LED to its pin.
 const LED_GPIO_CFG_SPD_LED: u32 = 0x0100_0000;
 /// `LED_GPIO_CFG` bit routing the link LED to its pin.
@@ -143,8 +156,6 @@ const MII_BUSY: u32 = 0x01;
 const PHY_ID_INTERNAL: u32 = 0x01;
 /// MII register 1, the PHY's basic-mode status register (`BMSR`).
 const PHY_REG_STATUS: u8 = 0x01;
-/// `BMSR` bit 2 — link is up.
-const BMSR_LINK_UP: u16 = 1 << 2;
 /// MII register 4 — what this PHY advertised in auto-negotiation.
 const PHY_REG_ADVERTISE: u8 = 0x04;
 /// MII register 5 — what the link partner advertised.
@@ -153,6 +164,8 @@ const PHY_REG_LINK_PARTNER: u8 = 0x05;
 const AN_100_FULL: u16 = 1 << 8;
 /// Auto-negotiation ability bit for 10BASE-T full duplex.
 const AN_10_FULL: u16 = 1 << 6;
+/// `BMSR` bit 2 — link is up.
+const BMSR_LINK_UP: u16 = 1 << 2;
 
 /// `TX_CMD_A.FIRST_SEG` — this buffer holds the start of the frame.
 const TX_CMD_A_FIRST_SEG: u32 = 0x0000_2000;
@@ -161,6 +174,11 @@ const TX_CMD_A_LAST_SEG: u32 = 0x0000_1000;
 
 /// `RX_STS` error-summary bit — the frame had a receive error.
 const RX_STATUS_ERROR: u32 = 0x0000_8000;
+/// Bytes of `RX_STS` in front of every received packet.
+///
+/// Also the boundary the next one is aligned to, which is why it is one
+/// constant rather than two that happen to be equal.
+const RX_STATUS_SIZE: usize = 4;
 /// `RX_STS` frame-length field (bits 16–29), including the 4-byte CRC.
 const RX_STATUS_FRAME_LENGTH: u32 = 0x3FFF_0000;
 
@@ -221,7 +239,7 @@ struct Tx {
 /// A configured LAN9514 Ethernet function: its endpoint 0 (for register
 /// access) and bulk IN/OUT endpoints (for frame RX/TX), plus DMA frame
 /// buffers. Build it with [`Self::from_device`], [`Self::start`] it, then
-/// move frames with [`Self::send_frame`]/[`Self::receive_frame`].
+/// move frames with [`Self::send_frame`]/[`Self::receive_frames`].
 pub struct Lan9514 {
     endpoint: ControlEndpoint,
     rx: Rx,
@@ -264,37 +282,151 @@ impl Rx {
         }
     }
 
-    /// Turns the `received` bytes now in [`Self::buffer`] into a frame,
-    /// stripping the chip's 4-byte RX status word and the Ethernet CRC.
+    /// The frames the `received` bytes now in [`Self::buffer`] carry.
     ///
-    /// `None` for anything that isn't a frame the caller wants: a
-    /// zero-length or truncated transfer (the chip had nothing to give),
-    /// or one the status word flags as errored.
-    fn frame(&self, received: usize) -> Option<&[u8]> {
-        // Every received frame is prefixed by a 4-byte RX status word.
-        if received < 4 {
-            return None;
-        }
-        let status = u32::from_le_bytes([
-            self.buffer.0[0],
-            self.buffer.0[1],
-            self.buffer.0[2],
-            self.buffer.0[3],
-        ]);
-        if status & RX_STATUS_ERROR != 0 {
-            return None;
-        }
+    /// **Plural.** One bulk IN can arrive holding several; see [`Frames`].
+    fn frames(&self, received: usize) -> Frames<'_> {
+        Frames::new(&self.buffer.0[..received.min(FRAME_BUFFER_SIZE)])
+    }
+}
 
-        // The status word's frame length counts the 4-byte Ethernet CRC,
-        // which the caller doesn't want. Frame data starts just past the
-        // status word (index 4), so dropping the CRC leaves it in
-        // `buffer[4..4 + (frame_length - 4)]` == `buffer[4..frame_length]`.
-        let frame_length = ((status & RX_STATUS_FRAME_LENGTH) >> 16) as usize;
-        if frame_length <= 4 {
-            return None;
+/// The received frames one bulk-IN transfer carried, in order.
+///
+/// # Why a transfer carries more than one
+///
+/// The chip packs as many received packets as will fit into a single
+/// transfer, each behind its own 4-byte RX status word and padded so that
+/// the next status word starts on a 4-byte boundary. It is not an
+/// optimisation the host asks for — it is simply what arrives when more
+/// than one packet is waiting in the RX FIFO, and the receive buffer is
+/// deliberately large enough to take a whole max-size frame — which means
+/// it is large enough to take *dozens* of small ones. A bare TCP
+/// acknowledgement is 54 bytes, plus 4 of CRC and 4 of status word and
+/// padding to 64, so one 2048-byte transfer can hold 32 of them.
+///
+/// Parsing only the first and issuing another transfer therefore throws
+/// the rest away. Nothing reports it: no error is raised, the discarded
+/// packets simply never reach the stack, and the peer recovers by
+/// retransmission timeout hundreds of milliseconds later. The loss scales
+/// with load, because the busier the link the more packets are waiting to
+/// be coalesced — which is the opposite of how a driver should behave and
+/// very hard to see from outside. Hence an iterator: a caller either
+/// drains it or visibly does not.
+///
+/// # Why this currently only ever yields one frame
+///
+/// Coalescing is not on. The chip does it only with `HW_CFG.MEF` (Multiple
+/// Ethernet Frames) set, together with `HW_CFG.BCE` and a `BURST_CAP`
+/// saying how much a transfer may carry, and [`Lan9514::start`]
+/// deliberately sets none of them. So this iterator yields exactly one
+/// frame per transfer today and the loop around it is inert — kept because
+/// it is the prerequisite for turning coalescing on, and because a receive
+/// path that structurally cannot return a second frame is how the
+/// discarding bug would come back.
+///
+/// It is worth turning on. Measured on a Pi 3 with one frame per transfer,
+/// the receive path handles a *sustained* 4,000 frames a second with no
+/// loss at all, but cannot absorb a burst: eight frames arriving
+/// back-to-back lose 10% of themselves, 64 lose 26%, and a line-rate burst
+/// loses 71%. The frames die in the chip's RX FIFO during the gap between
+/// one transfer completing and the next being submitted, which recurs per
+/// frame, and nothing anywhere reports it. What it costs is a TCP peer
+/// whose acknowledgements went missing waiting out a retransmission
+/// timeout — a page that should load in 20 ms taking a second.
+///
+/// **`MEF` alone stops traffic dead, and this is the trap.** Setting it
+/// makes a transfer complete when `BURST_CAP` is reached rather than after
+/// one frame, and how long the chip waits before flushing a partial burst
+/// is `BULK_IN_DLY`'s to say. Without that register programmed, a lone
+/// frame on a quiet link — a DHCP offer, say — sits in the chip waiting
+/// for a burst that never arrives, and the interface delivers nothing at
+/// all. Tried on real hardware, that is exactly what it did: link up, no
+/// address, no frames. Anything enabling `MEF` has to set `BULK_IN_DLY`
+/// with it, and has to be tested somewhere the card can be pulled — an
+/// interface this broken cannot be recovered over the network it broke.
+///
+/// # Trailing bytes it will not guess at
+///
+/// Iteration stops at the first status word that does not describe a
+/// plausible frame — one whose length is impossible, or which claims more
+/// bytes than the transfer actually delivered. That is the conservative
+/// end to be wrong at: the alternative, trusting a length and handing the
+/// stack whatever bytes followed, would turn a padding-rule mistake into
+/// corrupt frames rather than into missing ones.
+pub struct Frames<'a> {
+    /// The transfer's bytes — exactly what arrived, no more.
+    buffer: &'a [u8],
+    /// Where the next status word should be.
+    offset: usize,
+}
+
+impl<'a> Frames<'a> {
+    /// Parses the frames out of one transfer's `buffer`.
+    ///
+    /// `buffer` must be the bytes the transfer actually delivered, not the
+    /// whole receive buffer: the length is what says where the frames stop.
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Frames { buffer, offset: 0 }
+    }
+
+    /// The raw transfer bytes these frames are parsed out of.
+    ///
+    /// For a caller that has to keep a whole batch rather than consume it
+    /// in one pass — copy this, then parse the copy with [`Frames::new`].
+    /// Cheaper than copying each frame separately, and the only way to
+    /// hold a batch without borrowing the driver.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.buffer
+    }
+}
+
+impl<'a> Iterator for Frames<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<&'a [u8]> {
+        loop {
+            let remaining = self.buffer.len().checked_sub(self.offset)?;
+            if remaining < RX_STATUS_SIZE {
+                return None;
+            }
+
+            let status = u32::from_le_bytes([
+                self.buffer[self.offset],
+                self.buffer[self.offset + 1],
+                self.buffer[self.offset + 2],
+                self.buffer[self.offset + 3],
+            ]);
+            // Counts the 4-byte Ethernet CRC, which the caller doesn't
+            // want.
+            let frame_length = ((status & RX_STATUS_FRAME_LENGTH) >> 16) as usize;
+
+            // Anything that cannot be a frame ends the iteration rather
+            // than being skipped: past this point the offsets are guesses,
+            // and a guess produces garbage rather than a gap.
+            if frame_length <= 4
+                || frame_length > MTU + 4
+                || RX_STATUS_SIZE + frame_length > remaining
+            {
+                self.offset = self.buffer.len();
+                return None;
+            }
+
+            let start = self.offset + RX_STATUS_SIZE;
+            // Frame data starts just past the status word, so dropping the
+            // CRC leaves it in `[start, start + frame_length - 4)`.
+            let end = start + frame_length - 4;
+
+            // The next status word is dword-aligned, so the packet is
+            // followed by 0-3 bytes of padding. Stepped over even for a
+            // frame being skipped, or every frame behind a bad one would
+            // be lost with it.
+            self.offset = (start + frame_length).next_multiple_of(RX_STATUS_SIZE);
+
+            if status & RX_STATUS_ERROR != 0 {
+                continue;
+            }
+            return Some(&self.buffer[start..end]);
         }
-        let end = frame_length.min(received);
-        Some(&self.buffer.0[4..end])
     }
 }
 
@@ -506,6 +638,10 @@ impl Lan9514 {
     /// receiver and transmitter (`MAC_CR`, `TX_CFG`). The internal PHY
     /// auto-negotiates the link on its own; poll [`Self::is_link_up`] to
     /// wait for it before expecting frames.
+    ///
+    /// One frame arrives per receive transfer, which is what the chip does
+    /// out of reset. [`Frames`] records what turning that off would buy,
+    /// and why doing it needs more than the one bit it looks like.
     pub fn start(
         &mut self,
         channel: &mut Channel,
@@ -514,8 +650,16 @@ impl Lan9514 {
     ) -> Result<(), TransferError> {
         self.set_mac_address(channel, timer, mac)?;
 
+        // `RXDOFF` cleared explicitly because [`Frames`] depends on it
+        // being zero, even though zero is the reset default. `MEF` is
+        // deliberately *not* set here — see [`Frames`].
         let hw_cfg = self.read_register(channel, timer, REG_HW_CFG)?;
-        self.write_register(channel, timer, REG_HW_CFG, hw_cfg | HW_CFG_BIR)?;
+        self.write_register(
+            channel,
+            timer,
+            REG_HW_CFG,
+            (hw_cfg & !HW_CFG_RXDOFF) | HW_CFG_BIR,
+        )?;
 
         self.write_register(
             channel,
@@ -632,23 +776,28 @@ impl Lan9514 {
         Ok(())
     }
 
-    /// Polls for one received Ethernet frame. Returns `Ok(Some(frame))`
-    /// with the frame bytes (destination MAC through payload, CRC
-    /// stripped) when one arrived, or `Ok(None)` when there's nothing to
-    /// receive (an empty bulk-IN — see `HW_CFG.BIR` — or a NAK) or the
-    /// chip flagged the frame as errored. The returned slice borrows this
-    /// driver's RX buffer until the next call.
-    pub fn receive_frame(
+    /// Polls for received Ethernet frames, returning every one the
+    /// transfer carried (destination MAC through payload, CRC stripped).
+    /// The frames borrow this driver's RX buffer until the next call.
+    ///
+    /// An empty iterator means there was nothing to receive — an empty
+    /// bulk-IN (see `HW_CFG.BIR`) or a NAK.
+    ///
+    /// **Drain it.** One transfer routinely carries several frames and
+    /// the next call overwrites the buffer, so a caller that takes the
+    /// first and calls again silently discards the others; see
+    /// [`Frames`].
+    pub fn receive_frames(
         &mut self,
         channel: &mut Channel,
         timer: &Timer,
-    ) -> Result<Option<&[u8]>, TransferError> {
+    ) -> Result<Frames<'_>, TransferError> {
         // Only issue a bulk-IN when the chip actually has a frame
         // buffered. A bulk-IN against an empty RX FIFO just NAKs, and the
         // DWC2 doesn't halt a bulk channel on NAK (it retries), so it
         // would block for the full transfer timeout on every idle poll.
         if self.read_register(channel, timer, REG_RX_FIFO_INF)? == 0 {
-            return Ok(None);
+            return Ok(self.rx.frames(0));
         }
 
         let endpoint = self.rx.endpoint(self.endpoint);
@@ -662,11 +811,11 @@ impl Lan9514 {
         ) {
             Ok(received) => received,
             // No frame waiting -- an empty response or a NAK.
-            Err(TransferError::Nak) => return Ok(None),
+            Err(TransferError::Nak) => 0,
             Err(error) => return Err(error),
         };
 
-        Ok(self.rx.frame(received))
+        Ok(self.rx.frames(received))
     }
 
     /// Reads MII (PHY) register `index` (see [`Self::is_link_up`]). The
@@ -738,6 +887,21 @@ pub struct Lan9514Phy<'a, 'c> {
     timer: &'a Timer,
     /// Scratch the TX token fills for smoltcp and hands to the driver.
     tx_scratch: [u8; MTU + 2],
+    /// The last transfer's bytes, copied out of the driver.
+    ///
+    /// `smoltcp` asks for one frame per [`PhyDevice::receive`] call, and a
+    /// transfer carries several (see [`Frames`]). Without somewhere to
+    /// keep the remainder, each call would issue a fresh transfer and
+    /// discard every frame after the first — a silent loss that grows
+    /// with load. Copied rather than borrowed because the driver has to
+    /// be handed to the TX token returned alongside the RX one.
+    rx_batch: [u8; FRAME_BUFFER_SIZE],
+    /// Bytes of [`Self::rx_batch`] the last transfer filled.
+    rx_filled: usize,
+    /// How many of that batch's frames have been handed to `smoltcp`
+    /// already. The batch is re-parsed from the start each time, which
+    /// costs nothing at these sizes and avoids storing offsets.
+    rx_served: usize,
 }
 
 #[cfg(feature = "smoltcp")]
@@ -751,7 +915,16 @@ impl<'a, 'c> Lan9514Phy<'a, 'c> {
             channel,
             timer,
             tx_scratch: [0; MTU + 2],
+            rx_batch: [0; FRAME_BUFFER_SIZE],
+            rx_filled: 0,
+            rx_served: 0,
         }
+    }
+
+    /// The next frame of the batch already in hand, or `None` once it is
+    /// exhausted.
+    fn next_pending(&self) -> Option<&[u8]> {
+        Frames::new(&self.rx_batch[..self.rx_filled]).nth(self.rx_served)
     }
 }
 
@@ -771,17 +944,28 @@ impl<'c> PhyDevice for Lan9514Phy<'_, 'c> {
     /// the driver is free for the TX token returned alongside — see the
     /// type docs.
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let frame = match self.lan9514.receive_frame(&mut self.channel, self.timer) {
-            Ok(Some(frame)) => frame,
-            Ok(None) => return None,
-            Err(_) => return None,
-        };
+        // Only ask the chip for more once the batch in hand is used up:
+        // a transfer carries several frames and the next one overwrites
+        // the buffer they live in.
+        if self.next_pending().is_none() {
+            let batch = match self.lan9514.receive_frames(&mut self.channel, self.timer) {
+                Ok(frames) => frames.as_bytes(),
+                Err(_) => return None,
+            };
+            let filled = batch.len().min(FRAME_BUFFER_SIZE);
+            self.rx_batch[..filled].copy_from_slice(&batch[..filled]);
+            self.rx_filled = filled;
+            self.rx_served = 0;
+        }
+
+        let frame = self.next_pending()?;
         let len = frame.len().min(MTU);
         let mut rx = Lan9514RxToken {
             buffer: [0; MTU],
             len,
         };
         rx.buffer[..len].copy_from_slice(&frame[..len]);
+        self.rx_served += 1;
 
         let tx = Lan9514TxToken {
             lan9514: &mut self.lan9514,
