@@ -4,6 +4,79 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-04
+
+### Fixed
+
+- **The LAN9514's MAC ran half duplex** — frames were discarded whenever
+  the interface transmitted and received at the same time, on every link
+  this driver has ever run on.
+
+  `start` wrote `MAC_CR` with `RCVOWN` set and `FDPX` clear, which is a
+  half-duplex MAC doing CSMA/CD against a switch that had auto-negotiated
+  full duplex. Transmitting while receiving is a collision, and the frame
+  goes away.
+
+  Only bidirectional traffic showed it, which is why it lasted. A single
+  request was always fast, and receiving alone was lossless — a 256-frame
+  back-to-back burst arrived complete, and a sustained 4,000 frames a
+  second lost nothing. It took eight files fetched over eight concurrent
+  connections: **62% of requests stalled, median 1.0 s against 3.9 ms for
+  the same file fetched alone**, worst case 7 s, sitting exactly on the
+  peer's retransmission timeout. Against the fix, on the same board and
+  the same test: median **13.7 ms**, **0** stalls out of 200, and the
+  client's `TcpRetransSegs`, `TcpExtTCPSynRetrans` and
+  `TcpExtTCPTimeouts` all zero.
+
+  Nothing above or below the MAC could see it. The driver handed each
+  frame over and the transfer succeeded, so a send-failure count read
+  zero; the receive loop was healthy, so its counters read zero and the
+  window with no bulk IN pending measured 7 µs. Loss inside the MAC is
+  invisible from both sides of it.
+
+### Changed
+
+- **`Lan9514::receive_frame` is now `receive_frames` and returns an
+  iterator** — breaking, for anyone calling it or its `_async` twin
+  directly. Consumers going through `Lan9514Phy` or `rpi-hal-embassy` are
+  unaffected.
+
+  ```rust
+  // before
+  if let Ok(Some(frame)) = lan9514.receive_frame(channel, timer) { ... }
+  // after
+  for frame in lan9514.receive_frames(channel, timer)? { ... }
+  ```
+
+  A bulk IN can carry several frames, each behind its own status word.
+  With `HW_CFG.MEF` clear — as this driver leaves it — the chip sends one
+  per transfer, so the old signature was correct by accident of a bit that
+  is not set rather than by design. Returning an iterator means the API
+  can no longer express the bug, and enabling coalescing later becomes a
+  change to `start` rather than to every caller.
+
+  Iteration stops at the first status word that cannot describe a frame,
+  because past that point the offsets are guesses and a guess yields
+  corrupt frames rather than a gap. `start` also clears `HW_CFG.RXDOFF`
+  explicitly: zero is the reset default, so nothing changes, but the
+  parser depends on it.
+
+### Added
+
+- `Lan9514::set_duplex` and `Lan9514::is_full_duplex`, for programming the
+  MAC from what auto-negotiation actually settled on. `start` still
+  assumes full duplex, because it runs before the link is up and half
+  duplex needs a hub; the sequence for certainty is `start`, poll
+  `is_link_up`, then `set_duplex`. `is_full_duplex` intersects the two
+  standard MII ability registers the way auto-negotiation does, rather
+  than trusting one PHY's summary of the result.
+- `Lan9514::set_all_multicast` and its `_async` twin, for the `MAC_CR`
+  multicast filter. The chip comes up dropping multicast before the host
+  sees it, which anything speaking only unicast or broadcast never notices
+  — DHCP is broadcast — and which makes mDNS fail completely and silently,
+  since its queries and announcements are multicast. A read-modify-write,
+  so it composes with `start` and `set_duplex`, which share that register.
+
 ## [0.4.0] - 2026-09-02
 
 ### Changed
@@ -506,6 +579,7 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.5.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.2.0
