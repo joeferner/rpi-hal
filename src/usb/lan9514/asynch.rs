@@ -27,7 +27,7 @@
 
 use super::{
     IdRevision, Lan9514, Rx, Tx, BMSR_LINK_UP, HW_CFG_BIR, LED_GPIO_CFG_FDX_LED,
-    LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_RCVOWN, MAC_CR_RXEN, MAC_CR_TXEN, MII_BUSY,
+    LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_FDPX, MAC_CR_RXEN, MAC_CR_TXEN, MII_BUSY,
     MII_TIMEOUT_US, PHY_ID_INTERNAL, PHY_REG_STATUS, READ_REGISTER, REG_ADDRH, REG_ADDRL,
     REG_HW_CFG, REG_ID_REV, REG_LED_GPIO_CFG, REG_MAC_CR, REG_MII_ADDR, REG_MII_DATA, REG_TX_CFG,
     TX_CFG_ON, WRITE_REGISTER,
@@ -259,7 +259,7 @@ impl Lan9514 {
             channel,
             timer,
             REG_MAC_CR,
-            MAC_CR_RCVOWN | MAC_CR_TXEN | MAC_CR_RXEN,
+            MAC_CR_FDPX | MAC_CR_TXEN | MAC_CR_RXEN,
         )
         .await?;
         self.write_register_async(channel, timer, REG_TX_CFG, TX_CFG_ON)

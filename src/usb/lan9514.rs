@@ -103,8 +103,33 @@ const LED_GPIO_CFG_SPD_LED: u32 = 0x0100_0000;
 const LED_GPIO_CFG_LNK_LED: u32 = 0x0010_0000;
 /// `LED_GPIO_CFG` bit routing the full-duplex LED to its pin.
 const LED_GPIO_CFG_FDX_LED: u32 = 0x0001_0000;
-/// `MAC_CR.RCVOWN` — receive own transmissions (needed in half duplex).
+/// `MAC_CR.RCVOWN` — receive own transmissions. Half duplex only; in full
+/// duplex it must be clear, and [`MAC_CR_FDPX`] set instead.
 const MAC_CR_RCVOWN: u32 = 0x0080_0000;
+
+/// `MAC_CR.FDPX` — put the MAC in full duplex.
+///
+/// **Leaving this clear is expensive and does not look like a driver
+/// fault.** A clear `FDPX` is a half-duplex MAC, which means CSMA/CD: the
+/// MAC treats transmitting while receiving as a collision and discards the
+/// frame. On a link the PHY has auto-negotiated as full duplex — which is
+/// every switch — that loses frames precisely when traffic runs in both
+/// directions at once, and only then.
+///
+/// What that cost while it was clear here: a page of eight files fetched
+/// over eight concurrent connections stalled on 62% of requests, with a
+/// median response time of 1.0 s against 3.9 ms for the same file fetched
+/// one at a time. The stalls sat exactly on the peer's retransmission
+/// timeout, and every layer above reported success — the driver had handed
+/// each frame over, so its own send counter recorded no failure, and the
+/// receive counters showed nothing wrong either. Loss inside the MAC is
+/// invisible from both sides of it, which is what made it expensive to
+/// find rather than expensive to fix.
+///
+/// [`Lan9514::set_duplex`] programs this from the negotiated duplex;
+/// [`Lan9514::start`] assumes full, because half duplex needs a hub rather
+/// than a switch.
+const MAC_CR_FDPX: u32 = 0x0010_0000;
 /// `MAC_CR.TXEN` — enable the transmitter.
 const MAC_CR_TXEN: u32 = 0x0000_0008;
 /// `MAC_CR.RXEN` — enable the receiver.
@@ -120,6 +145,14 @@ const PHY_ID_INTERNAL: u32 = 0x01;
 const PHY_REG_STATUS: u8 = 0x01;
 /// `BMSR` bit 2 — link is up.
 const BMSR_LINK_UP: u16 = 1 << 2;
+/// MII register 4 — what this PHY advertised in auto-negotiation.
+const PHY_REG_ADVERTISE: u8 = 0x04;
+/// MII register 5 — what the link partner advertised.
+const PHY_REG_LINK_PARTNER: u8 = 0x05;
+/// Auto-negotiation ability bit for 100BASE-TX full duplex.
+const AN_100_FULL: u16 = 1 << 8;
+/// Auto-negotiation ability bit for 10BASE-T full duplex.
+const AN_10_FULL: u16 = 1 << 6;
 
 /// `TX_CMD_A.FIRST_SEG` — this buffer holds the start of the frame.
 const TX_CMD_A_FIRST_SEG: u32 = 0x0000_2000;
@@ -490,11 +523,18 @@ impl Lan9514 {
             REG_LED_GPIO_CFG,
             LED_GPIO_CFG_SPD_LED | LED_GPIO_CFG_LNK_LED | LED_GPIO_CFG_FDX_LED,
         )?;
+        // Full duplex, not half. The link is not up yet — auto-negotiation
+        // has not finished, so the negotiated duplex cannot be known here
+        // — and this is the assumption to be wrong in: half duplex needs a
+        // hub, and no switch has negotiated it in twenty years. A caller
+        // that wants certainty polls `is_link_up` and then `set_duplex`
+        // with `is_full_duplex`. See `MAC_CR_FDPX` for what leaving this
+        // clear costs.
         self.write_register(
             channel,
             timer,
             REG_MAC_CR,
-            MAC_CR_RCVOWN | MAC_CR_TXEN | MAC_CR_RXEN,
+            MAC_CR_FDPX | MAC_CR_TXEN | MAC_CR_RXEN,
         )?;
         self.write_register(channel, timer, REG_TX_CFG, TX_CFG_ON)?;
         Ok(())
@@ -515,6 +555,58 @@ impl Lan9514 {
     /// auto-negotiation completes.
     pub fn is_link_up(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
         Ok(self.phy_read(channel, timer, PHY_REG_STATUS)? & BMSR_LINK_UP != 0)
+    }
+
+    /// Whether auto-negotiation settled on full duplex.
+    ///
+    /// The highest common denominator of what this PHY advertised and what
+    /// the link partner did, which is what auto-negotiation selects. Only
+    /// meaningful once [`Self::is_link_up`] returns `true` — before that
+    /// the partner's advertisement register holds nothing.
+    ///
+    /// Read from the two standard MII ability registers rather than from
+    /// this PHY's vendor status register, so the arithmetic is the one IEEE
+    /// defines rather than one particular chip's summary of it.
+    pub fn is_full_duplex(
+        &self,
+        channel: &mut Channel,
+        timer: &Timer,
+    ) -> Result<bool, TransferError> {
+        let ours = self.phy_read(channel, timer, PHY_REG_ADVERTISE)?;
+        let theirs = self.phy_read(channel, timer, PHY_REG_LINK_PARTNER)?;
+        Ok(ours & theirs & (AN_100_FULL | AN_10_FULL) != 0)
+    }
+
+    /// Puts the MAC in full or half duplex.
+    ///
+    /// **This has to match what the link actually negotiated**, and getting
+    /// it wrong does not look like a driver fault. A half-duplex MAC means
+    /// CSMA/CD: it treats transmitting while receiving as a collision and
+    /// discards the frame. On a link the PHY negotiated as full duplex that
+    /// loses frames precisely when traffic runs both ways at once, and only
+    /// then — and it reports nothing, because the driver handed the frame
+    /// over successfully and the loss happened below it. Measured here, a
+    /// half-duplex MAC on a full-duplex link stalled 62% of requests when
+    /// eight files were fetched over eight concurrent connections, at a
+    /// median of 1.0 s against 3.9 ms for the same file fetched alone.
+    ///
+    /// A read-modify-write, so it can be called after [`Self::start`] has
+    /// enabled the receiver and transmitter without turning them off again.
+    /// The intended sequence is: `start`, poll [`Self::is_link_up`], then
+    /// `set_duplex` with what [`Self::is_full_duplex`] reports.
+    pub fn set_duplex(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        full: bool,
+    ) -> Result<(), TransferError> {
+        let mac_cr = self.read_register(channel, timer, REG_MAC_CR)?;
+        let mac_cr = if full {
+            (mac_cr | MAC_CR_FDPX) & !MAC_CR_RCVOWN
+        } else {
+            (mac_cr | MAC_CR_RCVOWN) & !MAC_CR_FDPX
+        };
+        self.write_register(channel, timer, REG_MAC_CR, mac_cr)
     }
 
     /// Sends one Ethernet frame (destination MAC through payload, without
