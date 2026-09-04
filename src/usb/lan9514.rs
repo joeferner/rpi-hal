@@ -143,6 +143,15 @@ const MAC_CR_RCVOWN: u32 = 0x0080_0000;
 /// [`Lan9514::start`] assumes full, because half duplex needs a hub rather
 /// than a switch.
 const MAC_CR_FDPX: u32 = 0x0010_0000;
+/// `MAC_CR.MCPAS` — pass every multicast frame up to the host instead of
+/// filtering it.
+///
+/// The chip comes up filtering to unicast-for-this-MAC plus broadcast, and
+/// drops multicast before it ever reaches the host. That is invisible to
+/// anything speaking only unicast or broadcast — DHCP is broadcast — and
+/// then total for anything that is not: every mDNS query and announcement
+/// is multicast, so a responder binds a socket that nothing arrives on.
+const MAC_CR_MCPAS: u32 = 0x0008_0000;
 /// `MAC_CR.TXEN` — enable the transmitter.
 const MAC_CR_TXEN: u32 = 0x0000_0008;
 /// `MAC_CR.RXEN` — enable the receiver.
@@ -719,6 +728,41 @@ impl Lan9514 {
         let ours = self.phy_read(channel, timer, PHY_REG_ADVERTISE)?;
         let theirs = self.phy_read(channel, timer, PHY_REG_LINK_PARTNER)?;
         Ok(ours & theirs & (AN_100_FULL | AN_10_FULL) != 0)
+    }
+
+    /// Whether to pass every multicast frame up to the host, or filter it.
+    ///
+    /// **Off is the chip's reset state, and it is not a neutral default.**
+    /// The receiver comes up accepting unicast for its own address plus
+    /// broadcast, and dropping multicast before the host ever sees it.
+    /// Anything speaking only unicast or broadcast never notices — DHCP is
+    /// broadcast — and anything else fails completely rather than
+    /// partially: mDNS queries and announcements are multicast, so a
+    /// responder binds a socket nothing ever arrives on, with no error to
+    /// explain it.
+    ///
+    /// Passing all of it is the blunt option. The chip also offers a hash
+    /// filter, which is a table to keep in step with the stack's group
+    /// memberships; for a handful of groups, the traffic that gets past a
+    /// pass-all filter only to be dropped by the stack is a few packets a
+    /// second on a busy link, and the table is a second place for the
+    /// membership list to be wrong.
+    ///
+    /// A read-modify-write, so it can be called after [`Self::start`] has
+    /// enabled the receiver and transmitter without turning them back off.
+    pub fn set_all_multicast(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        let mac_cr = self.read_register(channel, timer, REG_MAC_CR)?;
+        let mac_cr = if pass {
+            mac_cr | MAC_CR_MCPAS
+        } else {
+            mac_cr & !MAC_CR_MCPAS
+        };
+        self.write_register(channel, timer, REG_MAC_CR, mac_cr)
     }
 
     /// Puts the MAC in full or half duplex.

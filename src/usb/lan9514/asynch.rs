@@ -27,10 +27,10 @@
 
 use super::{
     Frames, IdRevision, Lan9514, Rx, Tx, BMSR_LINK_UP, HW_CFG_BIR, HW_CFG_RXDOFF,
-    LED_GPIO_CFG_FDX_LED, LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_FDPX, MAC_CR_RXEN,
-    MAC_CR_TXEN, MII_BUSY, MII_TIMEOUT_US, PHY_ID_INTERNAL, PHY_REG_STATUS, READ_REGISTER,
-    REG_ADDRH, REG_ADDRL, REG_HW_CFG, REG_ID_REV, REG_LED_GPIO_CFG, REG_MAC_CR, REG_MII_ADDR,
-    REG_MII_DATA, REG_TX_CFG, TX_CFG_ON, WRITE_REGISTER,
+    LED_GPIO_CFG_FDX_LED, LED_GPIO_CFG_LNK_LED, LED_GPIO_CFG_SPD_LED, MAC_CR_FDPX, MAC_CR_MCPAS,
+    MAC_CR_RXEN, MAC_CR_TXEN, MII_BUSY, MII_TIMEOUT_US, PHY_ID_INTERNAL, PHY_REG_STATUS,
+    READ_REGISTER, REG_ADDRH, REG_ADDRL, REG_HW_CFG, REG_ID_REV, REG_LED_GPIO_CFG, REG_MAC_CR,
+    REG_MII_ADDR, REG_MII_DATA, REG_TX_CFG, TX_CFG_ON, WRITE_REGISTER,
 };
 use crate::timer::Timer;
 use crate::usb::control::{vendor_in_async, vendor_out_async};
@@ -279,6 +279,24 @@ impl Lan9514 {
         timer: &Timer,
     ) -> Result<bool, TransferError> {
         Ok(self.phy_read_async(channel, timer, PHY_REG_STATUS).await? & BMSR_LINK_UP != 0)
+    }
+
+    /// Async [`Lan9514::set_all_multicast`]. Read that one for why the
+    /// chip's default is worth changing.
+    pub async fn set_all_multicast_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        let mac_cr = self.read_register_async(channel, timer, REG_MAC_CR).await?;
+        let mac_cr = if pass {
+            mac_cr | MAC_CR_MCPAS
+        } else {
+            mac_cr & !MAC_CR_MCPAS
+        };
+        self.write_register_async(channel, timer, REG_MAC_CR, mac_cr)
+            .await
     }
 
     /// Borrows the two frame directions apart, so each can be driven
