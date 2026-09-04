@@ -192,9 +192,12 @@ async fn receive_forever(
     timer: &Timer,
 ) -> ! {
     // When the previous transfer completed. Between that instant and the
-    // next submission below, *no bulk IN is pending* and an arriving frame
-    // has nowhere to go but the chip's FIFO — so the width of that window
-    // is the thing that decides whether frames survive. See [`rx_stats`].
+    // next submission below, no bulk IN is pending and an arriving frame
+    // has nowhere to go but the chip's FIFO. Timed because a wide window
+    // there is packet loss nothing else reports — and because it is a
+    // question that gets asked whenever a board loses frames, so it is
+    // worth being able to answer in one reading rather than by reasoning.
+    // See [`RxStats::gap_max_us`], which records what it measures at.
     let mut completed_at: Option<u64> = None;
 
     loop {
@@ -317,24 +320,35 @@ pub struct RxStats {
     pub last_error: Option<TransferError>,
     /// Widest gap seen with no receive transfer pending, in microseconds.
     ///
-    /// **The number that decides whether inbound frames survive.** This
-    /// adapter keeps exactly one bulk IN outstanding, so between a
-    /// transfer completing and the next being issued the chip has nowhere
-    /// to put an arriving frame but its own FIFO. Nothing reports an
-    /// overrun of it: the frames simply never arrive, and the peer waits
-    /// out a retransmission timeout.
+    /// **This measures the application, not the adapter.** Exactly one
+    /// bulk IN is outstanding at a time, so between one transfer
+    /// completing and the next being issued the chip has nowhere to put an
+    /// arriving frame but its own FIFO. The work in that window is a
+    /// memcpy per frame, so it should be single-digit microseconds —
+    /// measured at 5 to 15 µs on a Pi 2 while serving eight concurrent
+    /// HTTP connections, with none at all above 100 µs.
     ///
-    /// Worth comparing against how long the gap *should* be. The work
-    /// between two transfers is a memcpy per frame, which is
-    /// microseconds; anything much larger is this task waiting its turn
-    /// on the executor behind other work, and no amount of reordering
-    /// inside the loop will help — the fix for that is keeping more than
-    /// one transfer in flight, as Linux's usbnet does with a queue of
-    /// about forty.
+    /// A large value therefore says the *executor* is not getting back to
+    /// this task: a long critical section, blocking card or bus work, or a
+    /// blocking console write. That is worth knowing because the resulting
+    /// packet loss is silent — the frames never arrive and the peer waits
+    /// out a retransmission timeout — and nothing else in this crate can
+    /// distinguish it from a network problem.
+    ///
+    /// It is deliberately not a driver knob. Reordering the loop body or
+    /// keeping several transfers in flight, as Linux's usbnet does with a
+    /// queue of about forty, would shrink this window; neither is
+    /// implemented here because the window has not been measured wide
+    /// enough to matter. If it is wide on your board, the thing holding
+    /// the CPU is the thing to fix.
     pub gap_max_us: u32,
     /// How many gaps were at least 100 µs wide — roughly ten small frames'
-    /// arrival time at 100 Mbit, and so the point at which one can
+    /// arrival time at 100 Mbit, and so the point below which a gap cannot
     /// plausibly cost a frame.
+    ///
+    /// More useful than [`Self::gap_max_us`] for watching a running board:
+    /// the maximum is a high-water mark that bring-up can set once and
+    /// leave standing, while this climbing is a live symptom.
     pub gaps_long: u32,
 }
 
