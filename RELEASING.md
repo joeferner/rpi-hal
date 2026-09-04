@@ -134,7 +134,7 @@ exists.
 
 ```sh
 gh release create v<version> \
-  --title "rpi-hal <version>" \
+  --title "v<version>" \
   --notes-file <(awk -v v="## [<version>]" '
     index($0, v) == 1 { inside = 1; next }
     inside && /^## \[/ { exit }
