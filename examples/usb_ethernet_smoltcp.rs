@@ -8,7 +8,7 @@
 // firmware MAC, enable RX/TX, wait for link). From there this example
 // wraps the LAN9514 in a `smoltcp` `phy::Device` -- the adapter that lets
 // the stack move Ethernet frames through `Lan9514::send_frame` /
-// `receive_frame` -- gets an address over DHCP, and runs the poll loop.
+// `receive_frames` -- gets an address over DHCP, and runs the poll loop.
 //
 // With `auto-icmp-echo-reply` on, the interface answers pings on its own.
 // A UDP socket on top runs a line-level echo server on port 7 (the

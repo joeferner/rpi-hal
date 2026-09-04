@@ -165,10 +165,15 @@ fn run_ethernet(
         // Pace polls -- bulk endpoints mustn't be hammered back to back.
         timer.delay_ms(10);
 
-        match lan9514.receive_frame(channel, timer) {
-            Ok(Some(frame)) => print_frame(uart, frame),
-            // Nothing received this poll.
-            Ok(None) => {}
+        match lan9514.receive_frames(channel, timer) {
+            // Every frame the transfer carried, not just the first: one
+            // bulk IN arrives holding as many as the chip had waiting,
+            // and taking the head of that discards the rest.
+            Ok(frames) => {
+                for frame in frames {
+                    print_frame(uart, frame);
+                }
+            }
             Err(e) => {
                 let _ = writeln!(
                     uart,
