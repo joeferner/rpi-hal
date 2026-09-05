@@ -94,7 +94,7 @@ decision keys off the capability bitmap.
 | Value | Board |
 | --- | --- |
 | 1 | RP2040 on a Raspberry Pi Pico |
-| 2 | RP2350B on an Olimex PICO2-XL |
+| 2 | RP2350B on an Olimex PICO2-XL or PICO2-XXL |
 
 #### Capability bits
 

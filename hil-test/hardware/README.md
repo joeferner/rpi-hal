@@ -35,7 +35,7 @@ The software either side of this split:
 
 | Part | Approx. | Tier | Purpose |
 | --- | --- | --- | --- |
-| Olimex PICO2-XL (RP2350B) | €5 | fixture | the fixture MCU |
+| Olimex PICO2-XXL (RP2350B) | €9 | fixture | the fixture MCU |
 | HAT rev A PCB + passives | $25–40 | fixture | wiring, power switching, real devices |
 | High-side load switch | ~$2 | fixture | Pi power control |
 | INA226 or shunt | ~$2 | fixture | rail current sense |
@@ -55,13 +55,19 @@ Scaling to the four-board rack lands around $350–450 — see
 [Multi-board rack](#multi-board-rack) — but that spend is staged behind
 driver support rather than paid up front.
 
-## Fixture MCU: Olimex PICO2-XL
+## Fixture MCU: Olimex PICO2-XXL
 
-An [Olimex PICO2-XL](https://www.olimex.com/Products/RaspberryPi/PICO/PICO2-XL/open-source-hardware)
-(RP2350B, 48 GPIO, €5), socketed on the HAT. Development starts on
-RP2040 boards, since those are already on hand and the firmware keeps its
-board differences in one pin-map module, so the move is a feature flag
-rather than a port.
+An [Olimex PICO2-XXL](https://www.olimex.com/Products/RaspberryPi/PICO/PICO2-XXL/open-source-hardware)
+(RP2350B, 48 GPIO, 16 MB flash, 8 MB PSRAM, microSD, €9). Development
+starts on RP2040 boards, since those are already on hand and the firmware
+keeps its board differences in one pin-map module, so the move is a
+feature flag rather than a port.
+
+The board is the reason there is no fixture PCB to design. It arrives as
+a finished, breadboardable module with all 48 GPIO, its own regulator,
+USB-C and a bootloader, so the bench can be wired up and running before
+any HAT exists — and when the HAT does exist, it is socketed rather than
+reflowed onto it.
 
 ### Why not a Pico or Pico 2
 
@@ -72,14 +78,16 @@ of its 30 GPIO — GP23/24/25/29 go to SMPS mode, VBUS sense, the LED and
 the VSYS divider. Raspberry Pi has never shipped a B-package Pico, so 48
 GPIO means a third-party board or a bare QFN-80 on the HAT itself.
 
-| | Pico (RP2040) | Pico 2 (RP2350A) | PICO2-XL (RP2350B) |
+| | Pico (RP2040) | Pico 2 (RP2350A) | PICO2-XXL (RP2350B) |
 | --- | --- | --- | --- |
-| SRAM (capture depth) | 264 KB | 520 KB | 520 KB |
+| SRAM (capture depth) | 264 KB | 520 KB | 520 KB + 8 MB PSRAM |
+| Flash | 2 MB | 4 MB | 16 MB |
 | Soft peripherals | 8 PIO SMs | 12 PIO SMs | 12 PIO SMs |
 | GPIO on the die | 30 | 30 | **48** |
 | GPIO exposed | 26 | 26 | **48** |
 | ADC channels free | 3 | 3 | 8 |
 | Control link | native USB CDC | same | same, USB-C |
+| Local storage | none | none | microSD |
 
 PIO is why the family is right at all: SPI-slave in all four modes, I2S
 receive, IR decode, multi-channel logic analysis, odd-baud UART and edge
@@ -100,13 +108,32 @@ which covers every burst measurement worth making.
 - **Open-source hardware.** KiCad sources, schematic and Gerbers are
   published, so the footprint drops into the HAT layout, and if a later
   revision absorbs the fixture instead of socketing it, the reference
-  design for the QFN-80 support circuitry is already in hand.
-- **Power topology fits.** VSYS takes 1.8–5.5 V and the board regulates
-  its own 3V3, so the HAT feeds it from the always-on 5V rail with no
-  LDO of its own.
-- **2 MB flash / 520 KB SRAM** is ample for the fixture firmware. The PICO2-XXL
-  (€9 — 16 MB flash, 8 MB PSRAM, microSD) is the same 50 × 28 mm outline
-  if capture depth ever justifies it.
+  design for the QFN-80 support circuitry is already in hand. Every pin
+  fact in this document is read off that schematic rather than off a
+  vendor pinout picture.
+- **Power topology fits.** USB VBUS reaches VSYS through an SS34
+  Schottky, and VSYS feeds a TPS62A02A buck (2 A, 3 A peak) that makes
+  the 3V3 rail. So the HAT can feed VSYS from the always-on 5 V rail with
+  no regulator of its own, and — because the diode blocks the other way —
+  doing that cannot push current back into the orchestrator's USB port.
+  Grounding `3V3_EN` (EXT2 pin 12, otherwise pulled to VSYS by 1 MΩ)
+  shuts the regulator down, which is worth knowing before wiring
+  anything to that pin.
+
+  The buck's input range is 2.7–6 V, narrower than the 1.8–5.5 V a
+  Pico's VSYS accepts. Irrelevant at 5 V, but it rules out running the
+  fixture from a discharging cell.
+- **16 MB flash, 8 MB PSRAM and a microSD slot.** The €5 PICO2-XL is the
+  same PCB, same silkscreen and same pin map with 2 MB of flash and none
+  of the three, and 2 MB is ample for the firmware — so this is bought
+  for capture depth, not for code. 520 KB of SRAM is tens of
+  milliseconds at 10 MSPS; PSRAM is where a capture goes when a
+  measurement wants seconds of it, and the card is where a golden
+  waveform lives without a host in the loop.
+
+  The two variants are indistinguishable to firmware — nothing on the
+  board reports which one it is — which is why `HELLO` reports a single
+  board id covering both.
 
 ### Consequences for the layout
 
@@ -115,9 +142,26 @@ unpopulated — so rev A sockets it rather than reflowing it. That is the
 better choice for a first spin regardless: the fixture stays replaceable,
 and the same board moves between the breadboard and the HAT.
 
-At 50 × 28 × 8.3 mm it occupies roughly a third of a 65 × 56.5 mm HAT,
-with header rows down both long edges. Its placement, and the stack height
+At 51 × 29 mm it occupies roughly a third of a 65 × 56.5 mm HAT, with
+header rows down both long edges. Its placement, and the stack height
 above the Pi's own header, are the dominant mechanical constraints.
+
+**The pads are four columns, not two.** EXT1 and EXT2 are 2×20
+positions, 900 mil apart centre to centre, so the columns sit at 0, 0.1,
+0.9 and 1.0 inch across a 1.14 inch board. Two consequences, and the
+second is the one that costs an afternoon:
+
+- On the HAT the whole 1.0 inch span is available, so all four columns
+  get sockets and all 48 GPIO are reachable.
+- **On a breadboard only the two outer columns are usable.** The two
+  columns of one connector are 0.1 inch apart on the same side of the
+  centre channel, which is one tie-point strip — populating both rows of
+  either connector shorts each GPIO to the one opposite it. The outer
+  columns are EXT1's even pins (GPIO0–15, `+3.3V`, `GND`) and EXT2's odd
+  pins (GPIO32–47, `+3.3V`, `GND`), 1.0 inch apart, which straddles the
+  channel with four free holes per strip on each side. That is 32 GPIO
+  on a breadboard, and it is why the header pins for the inner columns
+  are better left unsoldered until there is a HAT to plug into.
 
 Erratum **RP2350-E9** — GPIO inputs latching part-way high when relying on
 the internal pull-down — applies to both packages and needs reading before
@@ -382,10 +426,26 @@ boards worth soldering also get warm-reset coverage.
 ## Pin budget
 
 The Pi's 40-pin header carries 28 GPIO (GPIO0–27). At 48 fixture pins, a
-**1:1 shadow of the whole header** fits with roughly 20 left for
-housekeeping: load-switch enable and FAULT, the 3V3-rail sense, INA226
-I2C, the `RUN` open-drain, analog audio in, marker pins, and an
-enable/fault pair per USB VBUS switch.
+**1:1 shadow of the whole header** fits with room left for housekeeping:
+load-switch enable and FAULT, the 3V3-rail sense, INA226 I2C, the `RUN`
+open-drain, analog audio in, marker pins, and an enable/fault pair per
+USB VBUS switch.
+
+Six of the 48 are spoken for by the board itself, and they are all
+brought out to the headers, so nothing stops a design from using them —
+it just inherits what is already hanging off them:
+
+| Fixture GPIO | Committed to | What it drags along |
+| --- | --- | --- |
+| GPIO8 | PSRAM chip select (`QMI_CS1n`) | the PSRAM die; unusable for anything else if PSRAM is used |
+| GPIO9, 10, 11, 24 | microSD on SPI1 (hardware rev B and later) | 10 kΩ pull-ups and 33 Ω series into the card socket |
+| GPIO25 | the status LED | 2.2 kΩ to an LED to ground — a load, not a conflict |
+
+So 42 pins are unencumbered, 28 of which the header shadow claims. That
+still covers the housekeeping list, and the SD and PSRAM pins come back
+if a build uses neither — but a *high-impedance observation* pin is the
+one job none of the six can do, because the pull-ups and the LED both
+show up as the thing being measured.
 
 This is what 26 pins cannot do. The union of every bus under test is only
 17 pins — I2C1 (2/3), SPI0 (7–11), PWM (12/13/18/19), PCM (18–21), aux
@@ -669,7 +729,7 @@ The HAT owns each board's 5V, so exactly one board is powered at a time.
 That is what makes a rack affordable: shared infrastructure needs no
 active multiplexing, only simultaneous connection.
 
-**Per board, permanently mated (~$60):** HAT, PICO2-XL, VBUS switch board,
+**Per board, permanently mated (~$60):** HAT, PICO2-XXL, VBUS switch board,
 USB device set, an Ethernet cable to the shared switch, HDMI cable to the
 shared switch. The analog audio path needs no sharing at all, since it
 terminates at that board's own fixture ADC — and on Zero W and Pi 5 it does
@@ -734,10 +794,12 @@ that a plain load switch does not model.
 Staged so nothing is ever blocked on a PCB, and so PCB spend follows
 driver support rather than leading it.
 
-- **Phase 0** — perfboard or breadboard with an RP2040 board already on
-  hand, wired for one bus group at a time. Proves the runner design and
-  the self-reporting protocol with no new hardware.
-- **Phase 1** — HAT rev A: PICO2-XL socketed, switched 5V with the load
+- **Phase 0** — breadboard, wired for one bus group at a time. Proves the
+  runner design and the self-reporting protocol with no PCB at all. An
+  RP2040 board already on hand does the first half of this; the PICO2-XXL
+  does the rest of it, since 32 of its GPIO reach a breadboard and every
+  test that is not a full-header sweep fits in 32.
+- **Phase 1** — HAT rev A: PICO2-XXL socketed, switched 5V with the load
   switch and 3V3 sense, full-header pin shadowing through series
   resistors, ID EEPROM, the real-device complement, analog audio path,
   marker-pin header, recovery console header, optional `RUN` header, plus

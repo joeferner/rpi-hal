@@ -16,7 +16,7 @@ building one never drags in the others' targets or lockfiles.
 
 | Directory | Target | What it is |
 | --- | --- | --- |
-| `firmware/` | `thumbv6m` / `thumbv8m` | fixture firmware for the RP2040 (Pico) and RP2350 (Olimex PICO2-XL) |
+| `firmware/` | `thumbv6m` / `thumbv8m` | fixture firmware for the RP2040 (Pico) and RP2350 (Olimex PICO2-XXL) |
 | `cases/` | `armv7a` / `aarch64` | the self-reporting test binaries that run on the Pi |
 | `host/` | host Python | the protocol client, pytest fixtures and the runner |
 | `hardware/` | — | the bench design: what to build and why, see [hardware/README.md](hardware/README.md) |
@@ -36,7 +36,7 @@ and `firmware/` builds two, one per fixture chip.
 | Tier | What it is | What it owns |
 | --- | --- | --- |
 | **Orchestrator** | Linux SBC or mini PC | builds images, drives the loader, owns the capture/audio/Bluetooth/Ethernet dongles, the isolated network, pcap witnesses, report generation |
-| **Fixture** | one MCU on a HAT | anything needing microsecond accuracy or real electrical presence: pin shadowing, bus slave roles, logic analysis, I2S capture, audio ADC, board power, USB VBUS switching |
+| **Fixture** | one MCU, on a breadboard now and a HAT later | anything needing microsecond accuracy or real electrical presence: pin shadowing, bus slave roles, logic analysis, I2S capture, audio ADC, board power, USB VBUS switching |
 
 The rule that decides where anything goes: **if the orchestrator can do it
 in Python with a cheap dongle, it does not go into MCU firmware.** The
@@ -212,20 +212,41 @@ a per-case parametrisation.
     a human eye get answered by looking at pictures once, after the run,
     rather than at a monitor during it.
 
-## Wiring the Pico fixture
+## Wiring the fixture
 
-The bench starts as a bare Pico on a breadboard, before any HAT exists. Only
-the console bridge is wired, which is enough to prove the architecture and
-to make every subsequent build load through the fixture.
+The bench runs on a breadboard, before any HAT exists. Only the console
+bridge and the marker line are wired, which is enough to prove the
+architecture and to make every subsequent build load through the fixture.
 
-Three wires, plus a USB cable from the Pico to the host.
+Four wires — three signals and a ground — plus a USB cable from the fixture
+to the host. Which fixture pins those are depends on the board; the firmware
+uses GP0, GP1 and GP2 whichever it is, and the Pi side never changes.
 
-| Pico signal | Pico pin | Pi signal | Pi header pin | Direction |
+**On an Olimex PICO2-XL or PICO2-XXL** — all on EXT1, the connector carrying
+GPIO0–31, which is the left-hand pair of columns with the USB-C at the top
+and the components facing you. (EXT2, the other one, carries GPIO32–47 and
+the `RUN`/`BOOTSEL`/QSPI pins.)
+
+| Fixture signal | Fixture pin | Pi signal | Pi header pin | Direction |
 | --- | --- | --- | --- | --- |
-| GP0 — UART0 TX | 1 | GPIO15 / RXD0 | 10 | fixture → Pi |
-| GP1 — UART0 RX | 2 | GPIO14 / TXD0 | 8 | Pi → fixture |
-| GP2 — marker | 4 | GPIO4 | 7 | Pi → fixture |
-| GND | 3 | GND | 6 | — |
+| GP0 — UART0 TX | EXT1-4 | GPIO15 / RXD0 | 10 | fixture → Pi |
+| GP1 — UART0 RX | EXT1-6 | GPIO14 / TXD0 | 8 | Pi → fixture |
+| GP2 — marker | EXT1-8 | GPIO4 | 7 | Pi → fixture |
+| GND | EXT1-20 or EXT1-40 | GND | 6 | — |
+
+EXT1 is numbered down the board in two columns, even on the outside and odd
+on the inside, pin 2 being the outer pin at the USB-C end. So the outer
+column reads, from that end: `+3.3V`, GP0…GP7, `GND`, `+3.3V`, GP8…GP15,
+`GND` — which is worth counting off the board once, because the first pin is
+a supply and taking pin 2 for GP0 puts every wire one place out.
+
+All four wires land in that outer column, which is the only one a breadboard
+can reach: the two columns of one connector share a tie-point strip, so
+populating both rows shorts each pin to the one opposite it.
+[hardware/README.md](hardware/README.md) has the geometry and what it costs.
+
+**On a Pico or Pico 2**, the same three signals are physical pins 1, 2 and 4,
+with GND on pin 3.
 
 The marker line is what `hil_marker` and every later timing assertion use. It
 is a separate wire precisely so it is not GPIO14/15: the console stays up
@@ -250,7 +271,7 @@ when wrong:
 - **Common ground is mandatory**, not optional tidiness. Without it the two
   boards' references float apart and the link misbehaves in a way that looks
   intermittent rather than broken.
-- **Do not connect the Pico's VBUS or 3V3 to the Pi.** Each board keeps its
+- **Do not connect the fixture's VBUS, VSYS or 3V3 to the Pi.** Each board keeps its
   own supply for now, and a fixture output driving an unpowered Pi pushes
   current through that pin's protection diodes into the Pi's 3V3 rail — the
   classic cause of a board that will not cold-boot cleanly. Power switching
@@ -261,12 +282,12 @@ when wrong:
 
 What the firmware claims so far, so the next thing added does not collide:
 
-| Pico GPIO | Header pin | Use |
-| --- | --- | --- |
-| GP0, GP1 | 1, 2 | console bridge to the board's UART, and SIO inputs while it is detached |
-| GP2 | 4 | marker-pin edge timestamping, watched by PIO0 state machine 0 |
-| GP25 | none | on-board status LED — not brought out, nothing to wire |
-| everything else | — | unclaimed |
+| Fixture GPIO | Pico pin | PICO2-XL/XXL pin | Use |
+| --- | --- | --- | --- |
+| GP0, GP1 | 1, 2 | EXT1-4, EXT1-6 | console bridge to the board's UART, and SIO inputs while it is detached |
+| GP2 | 4 | EXT1-8 | marker-pin edge timestamping, watched by PIO0 state machine 0 |
+| GP25 | none | EXT1-25 | on-board status LED. Nothing to wire either way — on a Pico the pin does not reach the header at all, and on the Olimex board it does but is already spoken for |
+| everything else | — | — | unclaimed |
 
 DMA channel 0 is claimed too, draining the marker capture into RAM. Nothing
 else here uses DMA; a second user has to say so, because the channel is
@@ -277,6 +298,12 @@ GP23, GP24, GP25 and GP29 never reach the header on a Pico; they are the
 SMPS mode control, VBUS sense, the LED and the VSYS divider respectively.
 That is why a Pico exposes 26 of the RP2040's 30 GPIO, and part of why the
 HAT fixture is an RP2350B.
+
+The Olimex board spends pins on itself too, but exposes all of them:
+GP8 is the PSRAM chip select, GP9/10/11/24 the microSD's SPI1 (on hardware
+revision B and later), and GP25 the LED. Those are the pins to reach for
+last when adding a capability, and never for a high-impedance measurement —
+the SD lines carry pull-ups, and the LED is a load.
 
 ### Reading the status LED
 
@@ -296,12 +323,13 @@ are set up, so a hang during either still leaves a signal.
 So the first flash should give a fast even blink, and `make test` should
 settle it into the once-a-second pulse.
 
-**This assumes a plain Pico, not a Pico W.** On the W the LED is not on
-GP25 at all — it hangs off the CYW43 wireless chip as `WL_GPIO0` and is
-only reachable through that driver. The firmware would drive a pin
-connected to nothing, leaving the LED permanently dark and therefore
-indistinguishable from a board that never booted. On a W the status output
-has to move to a spare header pin and an external LED.
+GP25 drives the LED active-high on a plain Pico and on the PICO2-XL/XXL
+alike, so one line of firmware covers both. **The exception is a Pico W**,
+where the LED is not on GP25 at all — it hangs off the CYW43 wireless chip
+as `WL_GPIO0` and is only reachable through that driver. The firmware would
+drive a pin connected to nothing, leaving the LED permanently dark and
+therefore indistinguishable from a board that never booted. On a W the
+status output has to move to a spare header pin and an external LED.
 
 ## What to run, and when
 
@@ -354,10 +382,12 @@ dependencies. `make tools` reports what is present:
   therefore the prompt, entirely.
 
 **When bringing up a fixture for the first time**, or after changing the
-firmware: hold BOOTSEL while plugging the Pico in, so it appears as a mass
-storage device, then `make flash-rp2040` (`make flash-rp2350` for the
-PICO2-XL). Flashing a board that is *not* in BOOTSEL fails at the deploy
-step rather than doing nothing, so the failure is loud.
+firmware: get the fixture into BOOTSEL, so it appears as a mass storage
+device, then `make flash-rp2040` — or `make flash-rp2350` for the
+PICO2-XL/XXL. A Pico wants BOOTSEL held while the cable goes in; the Olimex
+board has both buttons, so it is BOOT held while RESET is tapped, with the
+cable left alone. Flashing a board that is *not* in BOOTSEL fails at the
+deploy step rather than doing nothing, so the failure is loud.
 
 **With a fixture attached**: `make test` again. The cases that skipped
 before should now run, and `test_hello_identifies_the_fixture` prints what
@@ -387,6 +417,16 @@ image transfers, jumps, and decodes as garbage, leaving the board silent
 with nothing to report. That is why the runner reads `config.txt` before
 loading anything — the only check that works before the case runs — and
 rewrites it, verifies the read-back, and power-cycles when it disagrees.
+
+`CHIP` is the peripheral map, not the board. A **Pi 2** is `bcm2837` like a
+Pi 3, because BCM2836 puts its peripherals at the same `0x3F000000` and the
+40-pin header is pin-for-pin identical — so `make test-board32
+CHIP=bcm2837` is the right invocation on one, and a Pi 2 is a perfectly
+good board for the smoke tier even though the rack design skips it for
+adding no coverage a Pi 3 lacks. What a Pi 2 does not have is AArch64:
+`test-board64` needs the v1.2 revision, which quietly swapped the
+Cortex-A7s for the Pi 3's A53s. Check with the mailbox revision the banner
+prints rather than by looking at the board.
 
 **To exercise the console handoff on its own**: `make test-handoff`. Split out
 from `test-board` because it is the one case that can leave the bench
@@ -478,3 +518,10 @@ The fixture starts on an RP2040 Pico with a reduced pin map, since 26 GPIO
 cannot shadow the whole header and there is no power switching yet. Those
 capabilities are simply absent from `HELLO`, and the cases needing them
 skip.
+
+**The RP2350 build does not compile yet**, so the PICO2-XL/XXL cannot be
+flashed even though everything else about it is settled. Four errors, all in
+`marker.rs` and all the same kind of thing: `rp-pac` calls the timer `TIMER0`
+on an RP2350 and wraps the DMA transfer count in a newtype. Nothing in the
+design depends on how they are fixed, which is why `pre-commit` builds only
+the RP2040 firmware — but until they are, the breadboard bench is a Pico.

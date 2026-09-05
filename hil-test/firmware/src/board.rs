@@ -16,8 +16,12 @@
 pub enum BoardId {
     /// RP2040 on a Raspberry Pi Pico. 26 GPIO, so no full-header shadow.
     Rp2040Pico = 1,
-    /// RP2350B on an Olimex PICO2-XL. All 48 GPIO.
-    Rp2350Pico2Xl = 2,
+    /// RP2350B on an Olimex PICO2-XL or PICO2-XXL. All 48 GPIO.
+    ///
+    /// One value for both, because they are the same PCB with the same pin
+    /// map — the XXL adds flash, PSRAM and a microSD socket — and nothing on
+    /// either board reports which one it is.
+    Rp2350Pico2X = 2,
 }
 
 /// One bit per thing the fixture can do, reported by `HELLO`.
@@ -65,7 +69,7 @@ pub mod caps {
 pub const BOARD: BoardId = BoardId::Rp2040Pico;
 /// Which board this build targets.
 #[cfg(feature = "rp235x")]
-pub const BOARD: BoardId = BoardId::Rp2350Pico2Xl;
+pub const BOARD: BoardId = BoardId::Rp2350Pico2X;
 
 /// What this build can actually do.
 ///

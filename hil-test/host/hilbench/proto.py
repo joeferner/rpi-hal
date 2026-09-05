@@ -65,7 +65,9 @@ class Board(enum.IntEnum):
     """Which fixture board answered."""
 
     RP2040_PICO = 1
-    RP2350_PICO2XL = 2
+    #: Olimex PICO2-XL or PICO2-XXL. One value for both: they are the same
+    #: PCB and the same pin map, and nothing on either reports which it is.
+    RP2350_PICO2X = 2
 
 
 class Cap(enum.IntFlag):

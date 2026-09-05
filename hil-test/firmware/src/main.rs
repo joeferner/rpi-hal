@@ -134,17 +134,18 @@ async fn usb_task(mut device: UsbDevice<'static, Driver<'static, USB>>) -> ! {
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    // The Pico's on-board LED, which is on GP25 and not brought out to the
-    // header. Started before anything else so a hang during USB or UART
-    // setup still leaves a visible "firmware is running" signal rather than
-    // a dark board indistinguishable from a failed flash.
+    // The on-board LED. GP25 on both fixture boards: the Pico drives it
+    // directly and does not bring the pin out to the header, while the
+    // PICO2-XL/XXL puts it behind 2.2 kΩ to ground and *does* expose GP25 on
+    // EXT1 pin 25 — so it is active-high on both, and on the Olimex board the
+    // LED is a load on a usable pin rather than a pin spent. Started before
+    // anything else so a hang during USB or UART setup still leaves a visible
+    // "firmware is running" signal rather than a dark board indistinguishable
+    // from a failed flash.
     //
-    // Two boards this is wrong for. A Pico *W* puts its LED on the CYW43
+    // One board this is wrong for: a Pico *W* puts its LED on the CYW43
     // chip's WL_GPIO0, not GP25, so this would drive nothing and the LED
-    // would stay dark — the one reading that means "did not boot". And the
-    // PICO2-XL's LED pin has not been checked against Olimex's schematic,
-    // so the rp235x build inherits GP25 on no evidence. Confirm before
-    // trusting a dark LED on either.
+    // would stay dark — the one reading that means "did not boot".
     spawner.must_spawn(status_led(Output::new(p.PIN_25, Level::Low)));
 
     // GP0/GP1 face the board's console pins: fixture TX into the board's

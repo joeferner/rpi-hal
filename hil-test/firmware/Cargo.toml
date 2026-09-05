@@ -15,7 +15,8 @@ license = "MIT OR Apache-2.0"
 default = ["rp2040"]
 # The Pico/RP2040 fixture: 26 GPIO, so a reduced pin map.
 rp2040 = ["embassy-rp/rp2040"]
-# The Olimex PICO2-XL/RP2350B fixture: all 48 GPIO.
+# The Olimex PICO2-XXL/RP2350B fixture: all 48 GPIO. Also covers the
+# PICO2-XL, which is the same PCB and pin map with less flash and no PSRAM.
 rp235x = ["embassy-rp/rp235xb"]
 
 [dependencies]

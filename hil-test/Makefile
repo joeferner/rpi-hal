@@ -27,7 +27,7 @@ tools:
 		|| echo "picotool:   MISSING  -- distro package, or build from https://github.com/raspberrypi/picotool"
 
 # The fixture firmware. `rp2040` is the default feature (a Pico), while the
-# Olimex PICO2-XL needs the RP2350 target and feature set -- the pin map
+# Olimex PICO2-XXL needs the RP2350 target and feature set -- the pin map
 # differs, not the logic.
 firmware-rp2040:
 	cd firmware && cargo build --release
@@ -186,9 +186,11 @@ fmt-check:
 # that only complains means running it twice. Everything after it fails loudly
 # instead, because those are real findings.
 #
-# Deliberately excludes the RP2350 firmware, which does not currently link,
-# and anything needing hardware -- `test` skips the whole bench when none is
-# attached, so it stays useful on a laptop.
+# Deliberately excludes the RP2350 firmware, which does not currently build
+# -- `marker.rs` reaches into the PAC, and rp-pac names the timer TIMER0 and
+# wraps the DMA transfer count in a newtype on the RP2350 -- and anything
+# needing hardware, since `test` skips the whole bench when none is attached
+# and so stays useful on a laptop.
 pre-commit: fmt lint lint-py cases firmware-rp2040 test
 
 clean:
