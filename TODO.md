@@ -79,13 +79,17 @@ claimed. Cases needing them skip with a reason until they are.
       therefore ahead of the rest of this list rather than one of it.
 - [ ] `RAIL_SENSE`, `CURRENT_SENSE`, `USB_VBUS_SWITCH`, `SPI_SLAVE`,
       `LOGIC_CAPTURE`, `I2S_CAPTURE`, `AUDIO_ADC`, `RUN_RESET`.
-- [ ] **RP2350 build does not link.** `firmware-rp2350` compiles and then
-      fails at `rust-lld: cannot find linker script link-rp.x`, so no board
-      has executed it and it is not clear anything ever could. Also the LED
-      pin is inherited from the Pico on no evidence — confirm against
-      Olimex's schematic before trusting a dark LED to mean anything there.
-- [ ] **`picotool`** is not installed, so `flash-rp2350` is blocked. Worth
-      clearing before the Olimex arrives rather than during its bring-up.
+- [ ] **A pull-down per observed line on the HAT.** RP2350 erratum E9 means
+      1 kΩ in series in front of a watched pad is not enough on its own, and
+      the HAT plans 28 such lines. The breadboard uses 10 kΩ because that is
+      what was to hand; the errata sheet's bound is 8.2 kΩ, so the board
+      should carry 8.2 kΩ or lower rather than inheriting the value that
+      happened to work on one board at one temperature.
+- [ ] **No test covers the marker wire itself.** `marker_arm()` plus
+      `captured` is a level probe, and "the first edge arrives at the
+      announced grace and not before" is a continuity check — both were used
+      by hand to find E9 and neither exists as a case, so the next broken
+      wire costs the same afternoon.
 
 ## Test cases
 

@@ -65,6 +65,16 @@ use embassy_rp::pio::{
     Config, Direction, LoadedProgram, Pio, ShiftConfig, ShiftDirection, StateMachine,
 };
 use embassy_rp::Peri;
+/// The always-running 1 MHz timer block [`spin_us`] waits on.
+///
+/// `rp-pac` calls it `TIMER` on the RP2040 and `TIMER0` on the RP2350, which
+/// has two. `embassy_rp`'s time driver aliases the same way and picks the same
+/// block, which is what keeps this counter the one `embassy_time` is built on
+/// rather than a second, independently started one.
+#[cfg(feature = "rp2040")]
+use pac::TIMER;
+#[cfg(feature = "rp235x")]
+use pac::TIMER0 as TIMER;
 
 /// How many edges one capture holds.
 ///
@@ -213,7 +223,7 @@ impl<'d> Marker<'d> {
     /// Derived from what the DMA has left to do rather than counted
     /// separately, so it cannot disagree with what is actually in the buffer.
     pub fn captured(&self) -> u16 {
-        let remaining = pac::DMA.ch(DMA_CHANNEL).trans_count().read() as usize;
+        let remaining = trans_count(pac::DMA.ch(DMA_CHANNEL)) as usize;
         CAPACITY.saturating_sub(remaining).min(u16::MAX as usize) as u16
     }
 
@@ -345,7 +355,7 @@ impl<'d> Marker<'d> {
         channel
             .write_addr()
             .write_value((&raw mut SAMPLES) as *mut u32 as u32);
-        channel.trans_count().write_value(CAPACITY as u32);
+        set_trans_count(channel, CAPACITY as u32);
         channel.ctrl_trig().write(|w| {
             w.set_treq_sel(PIO0_RX0_DREQ);
             w.set_data_size(pac::dma::vals::DataSize::SIZE_WORD);
@@ -364,8 +374,44 @@ impl<'d> Marker<'d> {
     }
 }
 
-/// Busy-waits `us` microseconds against the RP2040's always-running 1 MHz
-/// timer.
+/// Transfers the channel has left to do.
+///
+/// A bare `u32` on the RP2040 and the low 28 bits of a two-field register on
+/// the RP2350, whose other field is the transfer mode. Wrapped rather than
+/// `cfg`-ed at the call site so the arithmetic that turns this into a count of
+/// captured edges reads the same on both.
+#[cfg(feature = "rp2040")]
+fn trans_count(channel: pac::dma::Channel) -> u32 {
+    channel.trans_count().read()
+}
+
+/// Transfers the channel has left to do. See the `rp2040` arm above.
+#[cfg(feature = "rp235x")]
+fn trans_count(channel: pac::dma::Channel) -> u32 {
+    channel.trans_count().read().count()
+}
+
+/// Sets how many transfers the channel performs before it stops.
+#[cfg(feature = "rp2040")]
+fn set_trans_count(channel: pac::dma::Channel, count: u32) {
+    channel.trans_count().write_value(count);
+}
+
+/// Sets how many transfers the channel performs before it stops.
+///
+/// The RP2350 packs a transfer *mode* into the top four bits of this register,
+/// and mode 0 — what `default` leaves — is the RP2040's only behaviour:
+/// decrement per transfer, then trigger `CHAIN_TO`. Built through the setter
+/// rather than from the raw word so a count that ever grew past 28 bits would
+/// be truncated rather than quietly reinterpreted as a mode.
+#[cfg(feature = "rp235x")]
+fn set_trans_count(channel: pac::dma::Channel, count: u32) {
+    let mut value = pac::dma::regs::ChTransCount::default();
+    value.set_count(count);
+    channel.trans_count().write_value(value);
+}
+
+/// Busy-waits `us` microseconds against the chip's always-running 1 MHz timer.
 ///
 /// `timerawl` is the low word of the same counter `embassy_time` is built on,
 /// read directly because this runs in a synchronous request handler with no
@@ -373,8 +419,8 @@ impl<'d> Marker<'d> {
 /// counter rolls over every 71 minutes, and a naive `<` would turn that into a
 /// 71-minute hang once per uptime.
 fn spin_us(us: u32) {
-    let start = pac::TIMER.timerawl().read();
-    while pac::TIMER.timerawl().read().wrapping_sub(start) < us {}
+    let start = TIMER.timerawl().read();
+    while TIMER.timerawl().read().wrapping_sub(start) < us {}
 }
 
 /// `mov x, ~null`, encoded. `MOV` is opcode 0b101, then five delay/side-set

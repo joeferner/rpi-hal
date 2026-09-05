@@ -4,7 +4,7 @@
 # workspace with rpi-hal, so every target below changes directory first
 # rather than relying on the parent's cargo configuration.
 
-.PHONY: firmware-rp2040 firmware-rp2350 flash-rp2040 flash-rp2350 tools cases case images test test-board test-board-manual test-board64 test-board32 test-handoff test-loopback test-manual test-all lint lint-py fmt fmt-check pre-commit clean
+.PHONY: firmware firmware-rp2040 firmware-rp2350 flash-rp2040 flash-rp2350 tools cases case images test test-board test-board-manual test-board64 test-board32 test-handoff test-loopback test-manual test-all lint lint-py fmt fmt-check pre-commit clean
 
 # Flashing needs a host tool that cargo invokes as the target runner. When
 # it is absent cargo reports a bare "No such file or directory", naming
@@ -27,8 +27,15 @@ tools:
 		|| echo "picotool:   MISSING  -- distro package, or build from https://github.com/raspberrypi/picotool"
 
 # The fixture firmware. `rp2040` is the default feature (a Pico), while the
-# Olimex PICO2-XXL needs the RP2350 target and feature set -- the pin map
-# differs, not the logic.
+# Olimex PICO2-XXL needs the RP2350 target and feature set.
+#
+# Build both. The chips diverge in more than a pin map -- different memory
+# maps, a second-stage bootloader on one and an image-definition block on the
+# other, and several PAC registers that change shape -- so building one proves
+# nothing about the other. The RP2350 half rotted once already, for exactly as
+# long as nothing built it.
+firmware: firmware-rp2040 firmware-rp2350
+
 firmware-rp2040:
 	cd firmware && cargo build --release
 
@@ -147,13 +154,16 @@ test-handoff: images
 		tests/test_console_handoff.py
 
 # Everything that can be checked without hardware, for a pre-commit sweep.
-test-all: firmware-rp2040 cases lint test
+test-all: firmware cases lint test
 
 # Clippy over both Rust trees. The cases only need one cell of the matrix
 # linted -- the lints are not target-specific, and doing all four would
-# quadruple the time for no extra findings.
+# quadruple the time for no extra findings. The firmware gets both, because
+# there the chip is a `cfg` and half the code is invisible to the other build.
 lint:
 	cd firmware && cargo clippy --release -- -D warnings
+	cd firmware && cargo clippy --release --target thumbv8m.main-none-eabihf \
+		--no-default-features --features rp235x -- -D warnings
 	cd cases && cargo clippy --release --target $(TARGET) --features $(CHIP) -- -D warnings
 
 # The host tree, which is Python and so gets none of the above. Run through
@@ -186,12 +196,13 @@ fmt-check:
 # that only complains means running it twice. Everything after it fails loudly
 # instead, because those are real findings.
 #
-# Deliberately excludes the RP2350 firmware, which does not currently build
-# -- `marker.rs` reaches into the PAC, and rp-pac names the timer TIMER0 and
-# wraps the DMA transfer count in a newtype on the RP2350 -- and anything
-# needing hardware, since `test` skips the whole bench when none is attached
-# and so stays useful on a laptop.
-pre-commit: fmt lint lint-py cases firmware-rp2040 test
+# Deliberately excludes anything needing hardware: `test` skips the whole bench
+# when none is attached, so this stays useful on a laptop.
+#
+# It does not exclude the RP2350 firmware. It used to, and the build rotted --
+# four compile errors and a missing linker script, none of them visible to
+# anyone who only ever ran this target. A build nothing runs is not a build.
+pre-commit: fmt lint lint-py cases firmware test
 
 clean:
 	cd firmware && cargo clean

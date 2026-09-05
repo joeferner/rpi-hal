@@ -131,6 +131,14 @@ def test_a_capture_can_be_rearmed(bench: Fixture) -> None:
     against the *previous* counter, so it reads as one enormous interval at
     the front of an otherwise perfect capture, and the obvious reaction is to
     discard it as a start-up artefact rather than to distrust the run.
+
+    What it deliberately does *not* assert is that a freshly armed capture is
+    empty. The marker line's resting level belongs to the board — a Pi holds
+    GPIO4 high through its own pull-up whenever no case is driving it — and a
+    level-triggered wait loop stamps immediately on a pin that is already
+    high. That is the program's documented behaviour, not a leak, and a test
+    that forbade it would fail for the entirely normal reason that the board
+    was idle.
     """
     _require_marker(bench)
 
@@ -140,21 +148,40 @@ def test_a_capture_can_be_rearmed(bench: Fixture) -> None:
     assert first > 0, "the first capture recorded nothing"
 
     bench.marker_arm()
-    assert bench.marker_status().captured == 0, (
-        "re-arming left the previous capture's edges in the buffer"
+    leaked = bench.marker_status().captured
+    assert leaked <= 1, (
+        f"re-arming left {leaked} of the previous capture's edges in the buffer"
     )
+    # The two cases are distinguishable rather than merely bounded: a stamp
+    # taken against the reloaded counter reads as ~0 ticks since arming, and
+    # one carried over from the previous capture reads as the enormous
+    # interval this test exists to catch. A millisecond is four orders of
+    # magnitude clear of both.
+    for stamp in bench.marker_read():
+        assert stamp < bench.marker_status().tick_hz // 1000, (
+            f"the stamp left after re-arming is {stamp} ticks old, so it is "
+            "the previous capture's rather than this one's level trigger"
+        )
 
-    bench.marker_pulse(10, 100)
+    half_period_us = 100
+    bench.marker_pulse(10, half_period_us)
     second = bench.marker_read()
     assert len(second) > 0
-    # Whatever the first capture held, the second must be internally
-    # consistent: a leaked timestamp shows up as one interval far larger than
-    # the rest.
+
+    # The re-armed capture must hold a real pulse train, not merely be empty.
+    # Judged by the median interval rather than by the largest one: a capture
+    # legitimately carries a few edges that are not part of the train — the
+    # level trigger if the line rested high, the edge `pulse` makes when it
+    # takes the pin over from the board, and the one when it hands it back —
+    # and the spacing of those is host latency. A stale timestamp is already
+    # ruled out above, and precisely, which is why this does not try to catch
+    # it again by looking for an outlier it cannot tell apart from a lead-in.
     spans = intervals(second)
-    assert max(spans) < 4 * statistics.median(spans), (
-        f"one interval dwarfs the others ({max(spans)} vs a median of "
-        f"{statistics.median(spans)}), which is what a stale timestamp looks "
-        "like"
+    expected = half_period_us * bench.marker_status().tick_hz // 1_000_000
+    median = statistics.median(spans)
+    assert abs(median - expected) < expected // 5, (
+        f"the re-armed capture's median interval is {median} ticks against a "
+        f"requested {expected}, so it is not the pulse train that was driven"
     )
 
 

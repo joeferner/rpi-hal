@@ -163,12 +163,23 @@ second is the one that costs an afternoon:
   on a breadboard, and it is why the header pins for the inner columns
   are better left unsoldered until there is a HAT to plug into.
 
-Erratum **RP2350-E9** — GPIO inputs latching part-way high when relying on
-the internal pull-down — applies to both packages and needs reading before
-layout, because a fixture whose job is high-impedance observation of lines
-that go floating is close to its worst case. The errata sheet's external
-pull-down works around it, and this design wants external resistors on
-those lines anyway.
+Erratum **RP2350-E9** — GPIO inputs latching part-way high rather than
+following a weakly driven pad — applies to both packages, and this fixture
+is its worst case rather than merely near it: high-impedance observation of
+a line reached through a series resistor is the arrangement the erratum
+describes. It is not theoretical here. The marker line hit it on the first
+board bring-up, and cost a day of suspecting the firmware, the timebase and
+the wire before the pad itself. The external pull-down the errata sheet
+prescribes is therefore a committed part of every observed line, not a
+contingency — see [Rest of the HAT](#rest-of-the-hat) for the value and what
+it costs.
+
+Two details that make it expensive to diagnose rather than merely to fix.
+`embassy-rp` configures a PIO pin with **both pulls disabled**, so the
+"internal pull-down" the erratum names is not even enabled — the pad still
+misbehaves, and anyone checking the pull configuration to rule the erratum
+out will rule it out wrongly. And the failure is partial: slow edges survive
+and fast ones do not, so the bench keeps reporting plausible numbers.
 
 ### Control links
 
@@ -522,6 +533,38 @@ a wrong bit period.
   the console is unaffected — the loader still negotiates to 1.5 Mbaud and
   the whole board suite passes exactly as on direct wiring — and the fixture
   drives a released board pin cleanly in both directions.
+
+  **On an RP2350 fixture that is not enough for a line it only watches.** A
+  series resistor in front of a pad with no pull is exactly the arrangement
+  erratum E9 describes, and the marker line found it: with 1 kΩ in line and
+  nothing else, the fixture recorded 55 of the 1640 edges a case emitted.
+  Not 55 clean ones either — the 1 ms square wave came through on an exact
+  timebase grid while everything at 50 µs and below vanished, and stray
+  10–40 µs pairs appeared between the real edges. A signal that survives at
+  1 kHz and disintegrates by 20 kHz is worse than one that fails outright,
+  because a bench wired that way looks like it works.
+
+  So every **observed** line needs a pull-down at the fixture's pad, on the
+  fixture side of the series resistor — at the board's end it does nothing
+  about a latch at the pad. 8.2 kΩ is the largest value the errata sheet
+  accepts; with 1 kΩ in front of it a driven high still reaches 2.94 V
+  against a 2.31 V V<sub>IH</sub>. Restoring it takes the capture from 55
+  edges back to all 1640, and removing it loses them again.
+
+  Note the asymmetry with the console lines above, which need no such thing:
+  those are *driven* from one end or the other at all times, and a driven
+  pad has no floating state for the erratum to latch. It is only the
+  high-impedance observation case — the fixture's entire job on a shadowed
+  line — that is exposed.
+
+  What the pull-down costs is the top of the resolution range. With 1 kΩ and
+  a 10 kΩ pull-down the bench still resolves every deliberate edge — a 100
+  period square wave, 1 µs pulses at a 973 ns median, and a 1000-edge 20 kHz
+  burst with none missing, agreeing with the board's own clock to 43 ppm —
+  but of 400 back-to-back `set_high`/`set_low` runts it resolves 2, where
+  direct wiring resolves 336. Those runts are not a controlled stimulus and
+  no case can ask for one, so this is the right trade; it is also the
+  measurement behind "a marker has to be held wide enough to see."
 
   What the resistor does **not** do is let the fixture override a pin the
   board is actively driving, and it is worth being unambiguous about that

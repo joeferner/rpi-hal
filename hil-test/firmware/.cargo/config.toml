@@ -11,10 +11,13 @@ rustflags = [
     "-C", "link-arg=-Tlink-rp.x",
 ]
 
+# No `-Tlink-rp.x` here, unlike the RP2040 above: that script places the
+# second-stage bootloader, `embassy-rp` only generates it for the `rp2040`
+# feature, and an RP2350 has no such stage to place. Asking for it anyway is a
+# hard "cannot find linker script" at the very end of a successful build.
 [target.thumbv8m.main-none-eabihf]
 runner = "picotool load -u -v -x -t elf"
 rustflags = [
     "-C", "link-arg=--nmagic",
     "-C", "link-arg=-Tlink.x",
-    "-C", "link-arg=-Tlink-rp.x",
 ]

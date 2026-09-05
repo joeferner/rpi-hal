@@ -234,6 +234,15 @@ the `RUN`/`BOOTSEL`/QSPI pins.)
 | GP2 — marker | EXT1-8 | GPIO4 | 7 | Pi → fixture |
 | GND | EXT1-20 or EXT1-40 | GND | 6 | — |
 
+The marker line needs one component the other two do not: a **pull-down from
+GP2 to ground**, 8.2 kΩ or less, on the fixture side of the series resistor.
+It is not optional and it is not tidiness — without it the fixture records
+roughly 3% of the edges a case emits, in a way that still looks like a
+working bench. The reason is an RP2350 erratum and the reasoning is in
+[hardware/README.md](hardware/README.md); the short version is that the
+console lines are always driven from one end and the marker line is only
+watched, and a watched pad on this chip needs somewhere to sit.
+
 EXT1 is numbered down the board in two columns, even on the outside and odd
 on the inside, pin 2 being the outer pin at the USB-C end. So the outer
 column reads, from that end: `+3.3V`, GP0…GP7, `GND`, `+3.3V`, GP8…GP15,
@@ -256,11 +265,18 @@ Both boards are 3.3 V, so no level shifting is involved.
 
 Put **1 kΩ in series in each of the three signal lines** — not in the ground.
 It is what the HAT will have on every shadowed line, so having it here means
-the breadboard is testing the same circuit; it costs nothing measurable (the
-loader still runs at 1.5 Mbaud through it); and it bounds a contention to
-3.3 mA, which is the difference between a forgotten pin release being a
-failed test and being a dead pad. Pass `--series-resistor` once it is in and
-the suite will check it is doing its job.
+the breadboard is testing the same circuit; it costs nothing measurable on
+the console (the loader still runs at 1.5 Mbaud through it); and it bounds a
+contention to 3.3 mA, which is the difference between a forgotten pin release
+being a failed test and being a dead pad. Pass `--series-resistor` once it is
+in and the suite will check it is doing its job.
+
+On the marker line that resistor is what makes the pull-down above
+*mandatory* rather than merely advisable, and the two go in together. What
+they cost between them is the very top of the resolution range: with both
+fitted the bench measures a 1 µs pulse at a 973 ns median and captures a
+20 kHz burst with nothing missing, but resolves 2 of 400 back-to-back
+`set_high`/`set_low` runts where direct wiring resolves 336.
 
 Three things to get right, in decreasing order of how much time they cost
 when wrong:
@@ -334,10 +350,17 @@ status output has to move to a spare header pin and an external LED.
 ## What to run, and when
 
 **Before committing anything here**: `make pre-commit`. It formats both Rust
-trees and the Python one, runs clippy over the firmware and the cases, `ruff`
-and `ty` over the host package, builds all four case targets and the RP2040
-firmware, and runs the host suite. About six seconds warm, and it needs no
-hardware.
+trees and the Python one, runs clippy over the cases and over *both* firmware
+builds, `ruff` and `ty` over the host package, builds all four case targets
+and both firmware images, and runs the host suite. A couple of seconds warm,
+and it needs no hardware.
+
+Both firmware builds, because the chip is a `cfg`: the memory maps differ,
+the RP2040 has a second-stage bootloader where the RP2350 has an
+image-definition block, and several PAC registers change shape between them.
+The RP2350 half was excluded from this target once and was found broken —
+four compile errors and a missing linker script — with no commit to blame,
+because nothing in the loop had built it since.
 
 `rpi-hal`'s own `make pre-commit` calls this, so committing from the crate
 root covers the bench too and there is nothing separate to remember.
@@ -394,10 +417,10 @@ before should now run, and `test_hello_identifies_the_fixture` prints what
 the fixture reports it can do — the fastest way to see whether the bench is
 what you think it is.
 
-**When only cross-compiling**, without flashing: `make firmware-rp2040` or
-`make firmware-rp2350` for the fixture, `make cases` for all four builds of
-the device-under-test binaries. Worth having in CI, since these catch a
-build break with no hardware at all.
+**When only cross-compiling**, without flashing: `make firmware` for both
+fixture images (or `firmware-rp2040` / `firmware-rp2350` for one), `make
+cases` for all four builds of the device-under-test binaries. Worth having in
+CI, since these catch a build break with no hardware at all.
 
 **When the bridge cannot reach a board**: `make test-loopback`, with the
 fixture's TX jumpered to its RX and nothing else attached. It proves or
@@ -489,7 +512,18 @@ Nothing here is finished. Current milestone:
   | Where it stops | pulses under ~16 ns are lost or collapse to zero width |
 
   44 ppm is two crystals doing what two crystals do, and it is the floor under
-  every timing tolerance the suite will ever quote.
+  every timing tolerance the suite will ever quote — and the second rig agrees.
+  Repeated on a **Pi 2 B v1.1 with a PICO2-XXL**, a different board and a
+  different fixture chip at a 13.3 ns tick: 43 ppm over 99 periods, all 200
+  square-wave edges, all 40 narrow ones and all 1000 of the burst, with a 1 µs
+  half-period measured at a 973 ns median. Two rigs sharing no component
+  landing in the same place is what makes 44 ppm a property of crystals rather
+  than of one bench.
+
+  Getting there needed a pull-down on the marker pin that the RP2040 rig did
+  not: on an RP2350 a series resistor in front of a watched pad triggers
+  erratum E9, and the capture drops to 55 of 1640 edges while still looking
+  healthy. [hardware/README.md](hardware/README.md) has the measurement.
 
   The one constraint a case author has to know: **a marker has to be held wide
   enough to see.** Writes to `GPSET`/`GPCLR` are posted, so a bare
@@ -519,9 +553,9 @@ cannot shadow the whole header and there is no power switching yet. Those
 capabilities are simply absent from `HELLO`, and the cases needing them
 skip.
 
-**The RP2350 build does not compile yet**, so the PICO2-XL/XXL cannot be
-flashed even though everything else about it is settled. Four errors, all in
-`marker.rs` and all the same kind of thing: `rp-pac` calls the timer `TIMER0`
-on an RP2350 and wraps the DMA transfer count in a newtype. Nothing in the
-design depends on how they are fixed, which is why `pre-commit` builds only
-the RP2040 firmware — but until they are, the breadboard bench is a Pico.
+The RP2350 image runs: a PICO2-XXL enumerates, bridges a Pi 2's console at
+1.5 Mbaud, and drives the whole board suite including the marker capture. So
+the image-definition block, the memory map and the PIO capture against
+TIMER0 are all settled. What is not is the rest of the pin map — power
+switching, the header shadow, the bus slave roles — none of which exists in
+firmware yet on either chip.
