@@ -36,13 +36,21 @@
 //!    [`route_irq`](crate::generic_timer::GenericTimer::route_irq);
 //! 3. the CPU-level IRQ mask open -- [`crate::irq::enable_irq`].
 //!
-//! The counter is already free-running from boot at the firmware-
-//! programmed rate reported by
+//! The counter is free-running from boot, but *not* at a rate that can be
+//! taken on trust. `CNTFRQ` -- what
 //! [`GenericTimer::frequency`](crate::generic_timer::GenericTimer::frequency)
-//! (19.2 MHz on
-//! this hardware), so -- like the System Timer -- it needs no clock setup;
-//! this deliberately does not touch the ARM-local control/prescaler
-//! registers and relies on the firmware's default counter configuration.
+//! reports -- is a register firmware writes; the rate the counter actually
+//! advances at comes from the ARM-local prescaler, and nothing makes the two
+//! agree. On a Pi 3 in AArch32 they disagree by exactly 19.2x: the firmware
+//! divides the 19.2 MHz crystal down to 1 MHz while `CNTFRQ` still reads
+//! 19_200_000, so a duration computed from the pair is 19.2x short. The
+//! 64-bit path escapes it only because `armstub8` sets the prescaler to
+//! unity.
+//!
+//! So [`GenericTimer::new`](crate::generic_timer::GenericTimer::new) sets the
+//! prescaler to unity itself, which makes the counter run at the crystal rate
+//! `CNTFRQ` claims and makes both execution states behave the same. Unlike
+//! the System Timer, this one does need that much clock setup.
 
 use core::arch::asm;
 
@@ -51,6 +59,15 @@ use core::arch::asm;
 /// ARM-local peripheral block `mmu.rs` device-maps for the inter-core
 /// mailboxes (see [`crate::multicore`]).
 const LOCAL_TIMER_IRQCTL_BASE: usize = 0x4000_0040;
+
+/// ARM-local "Core timer prescaler". The counter advances at
+/// `source * prescaler / 2^31`, where the source is the 19.2 MHz crystal
+/// unless the control register selects the APB clock.
+const LOCAL_TIMER_PRESCALER: usize = 0x4000_0008;
+
+/// Prescaler value for a 1:1 divide, so the counter runs at the source
+/// clock and `CNTFRQ` describes it correctly.
+const PRESCALER_UNITY: u32 = 0x8000_0000;
 
 /// `CNTPNSIRQ` (non-secure physical timer) IRQ-enable bit in a core's
 /// "timers interrupt control" register -- the physical timer this module
@@ -83,9 +100,33 @@ pub struct GenericTimer {
 }
 
 impl GenericTimer {
-    /// Creates a handle to the calling core's generic timer. Needs no
-    /// configuration -- the counter is already free-running from boot.
+    /// Creates a handle to the calling core's generic timer.
+    ///
+    /// Sets the ARM-local counter prescaler to unity, so the counter advances
+    /// at the rate `CNTFRQ` reports. Idempotent, and already the value a
+    /// 64-bit boot arrives with; see the module docs for why a 32-bit boot
+    /// does not.
     pub fn new() -> Self {
+        // Make the counter tick at the rate `CNTFRQ` advertises.
+        //
+        // `CNTFRQ` is not wired to anything: it is a register firmware writes,
+        // and nothing ties it to how fast `CNTPCT` actually advances. That
+        // rate comes from the prescaler above, and the two do not have to
+        // agree -- on a Pi 3 they do not. The 32-bit firmware sets the
+        // prescaler to `0x06AA_AAAB`, exactly 19.2 MHz / 19.2, so the counter
+        // runs at 1 MHz while `CNTFRQ` still reads 19_200_000; every duration
+        // derived from the pair then comes out 19.2x short. The 64-bit path
+        // does not have the problem because `armstub8` sets the prescaler to
+        // unity, which is what this restores.
+        //
+        // Writing it here rather than trusting firmware keeps both execution
+        // states identical and keeps `CNTFRQ` honest. The cost is a write to
+        // a register shared by all four cores, which is idempotent and
+        // already the value the 64-bit boot arrives with.
+        //
+        // SAFETY: an ARM-local peripheral register, device-mapped by
+        // `mmu.rs` alongside the inter-core mailboxes.
+        unsafe { core::ptr::write_volatile(LOCAL_TIMER_PRESCALER as *mut u32, PRESCALER_UNITY) };
         Self { _private: () }
     }
 

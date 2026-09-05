@@ -1,0 +1,34 @@
+# Lets the runner reach the fixture without root.
+#
+# Install with:
+#   sudo cp 99-hil-fixture.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# then replug the fixture -- rules apply at enumeration, not retroactively.
+#
+# Two rules, because the fixture presents two things that need separate
+# permissions: the raw USB device, for the vendor-class control interface
+# claimed through libusb, and the CDC tty, which the loader CLI opens by
+# path. Granting one does not grant the other.
+#
+# GROUP and TAG both, deliberately:
+#
+#   TAG+="uaccess" grants an ACL to the user of the active *local* seat.
+#   That covers someone sitting at the machine and needs no group setup,
+#   but it does nothing over SSH or a remote display, and nothing at all
+#   for an unattended runner -- systemd-logind has no active local session
+#   to hand the device to. Since a HIL rig is meant to run headless, that
+#   is the normal case here, not the exception.
+#
+#   GROUP="plugdev" is what actually covers those. Add yourself with
+#   `sudo usermod -aG plugdev $USER` and log back in if you are not
+#   already a member; check with `groups`.
+#
+# Note the tty rule needs ATTRS{} rather than ATTR{}: a tty inherits the
+# USB ids from a parent device, so a non-recursive match never fires.
+#
+# This covers the fixture only. A plain USB-serial adapter -- what the
+# smoke tier uses to reach a board directly -- is owned by the serial
+# group instead (uucp on Arch, dialout on Debian), so joining that group
+# is worth doing regardless of this file.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", MODE="0660", GROUP="plugdev", TAG+="uaccess"
