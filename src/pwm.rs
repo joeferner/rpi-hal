@@ -61,6 +61,12 @@
 //! call takes effect on the very next period with nothing to drain
 //! first.
 //!
+//! What it does *not* mean is that a duty write is free of timing
+//! constraints. Two of them closer together than a couple of PWM clock
+//! cycles can both be lost, leaving the channel on the duty that
+//! preceded them — so `set_duty_cycle` holds off after each write. See
+//! `SetDutyCycle::set_duty_cycle` for the measurement and the cost.
+//!
 //! ## Enable sequence
 //!
 //! `channel1`/`channel2` write `CTL` twice — the exact same field
@@ -187,6 +193,10 @@ pub enum Channel2Pin {
 /// channels.
 pub struct Pwm {
     pwm0: PWM0,
+    /// What [`Self::init`] actually programmed the PWM clock to, after
+    /// clamping. Carried so each channel can size the settling delay its
+    /// duty writes need.
+    clock_hz: u32,
 }
 
 impl Pwm {
@@ -287,7 +297,10 @@ impl Pwm {
         });
         while cm_pwm.cs().read().busy().bit_is_clear() {}
 
-        Self { pwm0 }
+        Self {
+            pwm0,
+            clock_hz: Self::clock_hz(clock_divisor),
+        }
     }
 
     /// Routes `pin` to channel 1 (ALT function `PWM0_0` either way —
@@ -331,7 +344,10 @@ impl Pwm {
             w.pwen1().set_bit()
         });
 
-        Channel1 { pwm0: &self.pwm0 }
+        Channel1 {
+            pwm0: &self.pwm0,
+            clock_hz: self.clock_hz,
+        }
     }
 
     /// Channel 2 counterpart of [`Self::channel1`] (ALT function
@@ -357,7 +373,10 @@ impl Pwm {
             w.pwen2().set_bit()
         });
 
-        Channel2 { pwm0: &self.pwm0 }
+        Channel2 {
+            pwm0: &self.pwm0,
+            clock_hz: self.clock_hz,
+        }
     }
 
     /// Configures both channels for DMA-fed stereo audio playback and
@@ -521,6 +540,82 @@ fn settle_delay() {
     }
 }
 
+/// How many PWM clock cycles [`duty_settle`] holds off for after a duty
+/// write.
+///
+/// Two, which is past the last failure measured at either clock and matches
+/// the figure Linux uses for the analogous hazard on this SoC's SD host
+/// controller — it works around the Arasan block losing "successive writes to
+/// registers that are within two SD-card clock cycles of each other" with a
+/// delay of its own.
+const DUTY_SETTLE_CYCLES: u32 = 2;
+
+/// Loop iterations per second assumed for [`duty_settle`]'s busy-wait.
+///
+/// Deliberately higher than any Pi core can actually manage, because the
+/// error is one-directional: overestimating makes the wait longer than needed,
+/// which costs microseconds, and underestimating makes it too short, which
+/// silently reintroduces the fault. Two billion is roughly one iteration per
+/// cycle on the fastest part this crate supports, and the loop is three
+/// instructions.
+const DUTY_SETTLE_LOOP_HZ: u64 = 2_000_000_000;
+
+/// Busy-waits [`DUTY_SETTLE_CYCLES`] PWM clock cycles at `clock_hz`.
+///
+/// # Why a duty write needs a delay after it
+///
+/// **Two `DAT` writes closer together than a couple of PWM clock cycles can
+/// both be lost**, leaving the channel emitting the duty that was in force
+/// before either of them. Not the second write losing to the first, and not a
+/// value that takes effect a period late: both are discarded and the channel
+/// carries on with the older setting, while `DAT` reads back as the value that
+/// was written.
+///
+/// Measured on a Pi 3 by sampling the output pin, as failures out of eight
+/// trials at each gap between two writes:
+///
+/// ```text
+/// gap      125kHz clock (tick 8us)   500kHz clock (tick 2us)
+/// 0us      7/8                       6/8
+/// 1us      7/8                       3/8
+/// 2us      6/8                       1/8
+/// 3us      5/8                       0/8
+/// 4us      5/8                       0/8
+/// 6us      2/8                       0/8
+/// 8us      0/8                       0/8
+/// ```
+///
+/// Three things in that shape decide the fix. It is **probabilistic** near the
+/// boundary — single-trial sweeps produced clean-looking thresholds that
+/// disagreed run to run, because whether a write survives depends on where it
+/// lands within the PWM clock cycle. It **scales with the clock** rather than
+/// being a fixed time, which is why this takes `clock_hz` instead of waiting a
+/// constant. And the rate **decays rather than falling off a cliff**, so the
+/// first gap with no observed failures is not a safe place to sit;
+/// [`DUTY_SETTLE_CYCLES`] is past the last failure at both clocks.
+///
+/// # Blind, like [`settle_delay`]
+///
+/// There is no time base here to wait against — `Pwm` holds no `Timer` — so
+/// this is a nop loop sized from a deliberately pessimistic guess at the CPU's
+/// rate. It waits too long rather than too little, by up to a few times, which
+/// costs microseconds; the alternative is threading a timer through
+/// [`Pwm::init`] and every caller, to gain precision on a delay whose required
+/// value is itself only known to within a factor of two.
+///
+/// The cost scales the right way. At the ~122 kHz floor of the clock range
+/// this is about 16 µs per duty write, and at a megahertz-range clock it is
+/// well under a microsecond — so the callers who pay most are the ones
+/// changing duty least often. It is not on the audio path, which streams
+/// through the FIFO rather than through `DAT` — see [`Pwm::audio`].
+fn duty_settle(clock_hz: u32) {
+    let iterations =
+        u64::from(DUTY_SETTLE_CYCLES) * DUTY_SETTLE_LOOP_HZ / u64::from(clock_hz.max(1));
+    for _ in 0..iterations {
+        unsafe { core::arch::asm!("nop") };
+    }
+}
+
 /// Muxes `pin` to channel 1's output (ALT function `PWM0_0`). Shared by
 /// [`Pwm::channel1`] and [`Pwm::audio`] so the pin table lives in one
 /// place.
@@ -559,6 +654,8 @@ fn route_channel2_pin(gpio: &GPIO, pin: Channel2Pin) {
 /// [`Pwm::channel1`].
 pub struct Channel1<'a> {
     pwm0: &'a PWM0,
+    /// The programmed PWM clock, for sizing the post-write settling delay.
+    clock_hz: u32,
 }
 
 impl embedded_hal::pwm::ErrorType for Channel1<'_> {
@@ -575,11 +672,26 @@ impl embedded_hal::pwm::SetDutyCycle for Channel1<'_> {
         self.pwm0.rng1().read().bits() as u16
     }
 
-    /// Writes `DAT1` directly.
+    /// Writes `DAT1` directly, then holds off for a couple of PWM clock
+    /// cycles before returning.
+    ///
+    /// The delay is not optional and it is not padding. **Two duty writes
+    /// closer together than that can both be lost**, leaving the channel
+    /// driving the duty that was in force before either of them, while `DAT`
+    /// reads back as the value written. Waiting after the write rather than
+    /// before it makes the guarantee stateless — the next write is separated
+    /// whatever it is — and means the last write of a sequence has settled
+    /// before the caller moves on, which is the case that first exposed this.
+    ///
+    /// The cost is bounded by the clock: about 16 µs per write at the bottom
+    /// of the clock range, and well under a microsecond in the megahertz
+    /// range. Audio is unaffected, streaming through the FIFO rather than
+    /// `DAT` — see [`Pwm::audio`].
     fn set_duty_cycle(&mut self, duty: u16) -> Result<(), Self::Error> {
         unsafe {
             self.pwm0.dat1().write(|w| w.bits(duty as u32));
         }
+        duty_settle(self.clock_hz);
         Ok(())
     }
 }
@@ -588,6 +700,8 @@ impl embedded_hal::pwm::SetDutyCycle for Channel1<'_> {
 /// [`Pwm::channel2`].
 pub struct Channel2<'a> {
     pwm0: &'a PWM0,
+    /// The programmed PWM clock, for sizing the post-write settling delay.
+    clock_hz: u32,
 }
 
 impl embedded_hal::pwm::ErrorType for Channel2<'_> {
@@ -601,11 +715,12 @@ impl embedded_hal::pwm::SetDutyCycle for Channel2<'_> {
         self.pwm0.rng2().read().bits() as u16
     }
 
-    /// See [`Channel1`]'s `set_duty_cycle`.
+    /// See [`Channel1`]'s `set_duty_cycle`, including the settling delay.
     fn set_duty_cycle(&mut self, duty: u16) -> Result<(), Self::Error> {
         unsafe {
             self.pwm0.dat2().write(|w| w.bits(duty as u32));
         }
+        duty_settle(self.clock_hz);
         Ok(())
     }
 }
