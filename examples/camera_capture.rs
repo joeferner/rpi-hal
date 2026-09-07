@@ -61,7 +61,7 @@ pub extern "C" fn kmain() -> ! {
     let _ = mailbox.set_power_domain(POWER_DOMAIN_UNICAM1, true);
     timer.delay_ms(50);
 
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc);
+    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
 
     if !ov5647::detect(&mut i2c) {
         let _ = writeln!(uart, "OV5647 not found; aborting");

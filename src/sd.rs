@@ -14,7 +14,9 @@
 //! don't also need SDIO for WiFi.
 //!
 //! GPIO alternate function 7 routes CLK/CMD/DAT0-3 (GPIO48-53) to this
-//! controller. It reads and writes one 512-byte block at a time
+//! controller — on BCM2836/2837; see the "BCM2711 (Pi 4)" section below,
+//! where none of that applies. It reads and writes one 512-byte block at
+//! a time
 //! ([`read_block`](crate::sd::Sd::read_block)/
 //! [`write_block`](crate::sd::Sd::write_block)) or a run of consecutive blocks
 //! in a single command ([`read_blocks`](crate::sd::Sd::read_blocks)/
@@ -58,17 +60,54 @@
 //! (`CMD_APP_CMD` must expect a response so the following `ACMD41`
 //! isn't issued into it).
 //!
+//! # Card presence
+//!
+//! Discovered, never sensed. No Raspberry Pi wires a card-detect line
+//! anywhere a driver could read it — GPIO47, the pin usually named for
+//! the job, is something different on every board and a card detect on
+//! none of them — and this controller doesn't implement the SDHCI
+//! present-state bits either. So an empty slot is found the only way
+//! available: [`init`](crate::sd::Sd::init) asks, gets no answer, and
+//! returns [`Error::NoCard`](crate::sd::Error::NoCard).
+//! `examples/sd_presence.rs` shows it happening, card in and card out.
+//!
+//! # Async
+//!
+//! Under the `async` feature the same [`Sd`](crate::sd::Sd) also carries
+//! interrupt-driven twins of the transfer methods — `read_blocks_async`
+//! and friends — which park on the controller's interrupt rather than
+//! spinning on `INTERRUPT`, so an executor gets the card's own thinking
+//! time back. Most of a write is exactly that: the final `DATA_DONE`
+//! only arrives once the card has programmed an entire internal erase
+//! block, milliseconds at a time on a cheap card. The blocking methods
+//! are untouched and remain the right choice for a program with nothing
+//! else to do.
+//!
+//! They need the usual three gates plus a handler: the controller's own
+//! `IRPT_EN` (opened by each transfer as it parks, so nothing is needed
+//! from the application), `crate::lic::Lic::enable_emmc_irq`, the CPU
+//! mask ([`enable_irq`](crate::irq::enable_irq)), and a call to
+//! `sd::on_irq` from the application's `__irq_handler`.
+//! Cancelling a transfer — dropping the future, as
+//! `embassy_time::with_timeout` does — aborts it on the card and resets
+//! the controller's data circuit before the drop returns, so the next
+//! transfer starts clean; see `read_blocks_async` for the details.
+//! `examples/sd_async.rs` is the whole thing end to end.
+//!
 //! # BCM2711 (Pi 4)
 //!
 //! This controller (`EMMC`, at the same address as BCM2836/2837) is
 //! *not* what the physical SD card slot is wired to on a Pi 4 — confirmed
 //! against the upstream device tree (`bcm2711-rpi-4-b.dts`: `/* EMMC2 is
-//! used to drive the SD card */`), not assumed. GPIO48-53's ALT3 routing
-//! is unchanged (confirmed by diffing `bcm2711-lpa` against
-//! `bcm2837-lpa`'s generated source), so `route_gpio_to_emmc` needs no
-//! BCM2711-specific change; only the controller register block itself
-//! does, hence `Emmc2` and the `ClockId::Emmc2` mailbox clock id (EMMC2
-//! has its own base clock, separate from the classic `EMMC`'s). The
+//! used to drive the SD card */`), not assumed. So the controller
+//! register block changes, hence `Emmc2` and the `ClockId::Emmc2` mailbox
+//! clock id (EMMC2 has its own base clock, separate from the classic
+//! `EMMC`'s) — and so does the pin routing, which goes away entirely.
+//! EMMC2 drives dedicated pads outside the 54-pin bank (`bcm2711.dtsi`'s
+//! `emmc2` node carries no `pinctrl` property at all), while GPIO48-53
+//! on that board are the gigabit Ethernet PHY's RGMII interface — so
+//! `route_gpio_to_emmc` is compiled out here rather than adapted, and
+//! `Sd::init` takes its `GPIO` argument without using it. The
 //! DMA-backed `Sd::read_blocks_dma`/`Sd::write_blocks_dma` aren't
 //! available under `bcm2711`: EMMC2 sits on its own bus with its own
 //! VideoCore bus-address mapping (`bcm2711.dtsi`'s `emmc2bus`, a
@@ -86,9 +125,21 @@ use crate::pac::EMMC;
 use crate::pac::GPIO;
 use crate::timer::Timer;
 
+// Scoped to `bcm2837` as well as to the feature: routing this
+// controller's line to the ARM core needs `crate::lic`, which the
+// BCM2711 doesn't have (its GIC-400 isn't supported yet), so on that
+// chip an async transfer could only ever park forever. The blocking
+// path is unaffected and is what a Pi 4 uses.
+#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+mod asynch;
+#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+pub use asynch::on_irq;
+
+// The pins below, and everything that touches them, are BCM2836/2837
+// only: a Pi 4's card slot is on EMMC2, whose pins aren't in this bank
+// at all -- see `route_gpio_to_emmc`.
 /// GPIO pin carrying the SD clock (`CLK`). Only used computing the
-/// legacy pull-mask below; the `bcm2711` pull-control branch names its
-/// pins directly through the PAC instead.
+/// pull-mask below.
 #[cfg(not(feature = "bcm2711"))]
 const GPIO_CLK: u32 = 48;
 /// GPIO pin carrying the SD command line (`CMD`). See `GPIO_CLK`.
@@ -98,30 +149,8 @@ const GPIO_CMD: u32 = 49;
 #[cfg(not(feature = "bcm2711"))]
 const GPIO_DAT: [u32; 4] = [50, 51, 52, 53];
 /// GPIO alternate function routing GPIO48-53 to this controller.
+#[cfg(not(feature = "bcm2711"))]
 const GPIO_ALT_FUNCTION: u8 = 0b111;
-
-/// GPIO peripheral base address, matching `bcm2837_lpa::GPIO::PTR` —
-/// see `uart.rs`'s identical constant/reasoning: the legacy pull
-/// registers below aren't in `bcm2837-lpa`'s SVD (modeled on BCM2711,
-/// which replaced them), so this pokes the known physical addresses
-/// directly instead.
-#[cfg(not(feature = "bcm2711"))]
-const GPIO_BASE: usize = 0x3f20_0000;
-/// GPIO Pull-up/down Enable (BCM2835 ARM Peripherals datasheet §6.1).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD: *mut u32 = (GPIO_BASE + 0x94) as *mut u32;
-/// GPIO Pull-up/down Enable Clock 1, covers GPIO32-53 — the pins this
-/// driver uses all fall in this register, unlike `uart.rs`'s
-/// GPIO14/15 (covered by `GPPUDCLK0`).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUDCLK1: *mut u32 = (GPIO_BASE + 0x9c) as *mut u32;
-/// `GPPUD` value selecting pull-up. The SD bus (particularly `CMD`)
-/// needs a pull-up, not the pulls disabled the way `uart.rs` leaves
-/// UART0's pins — matching the reference driver's own choice here,
-/// and standard SD electrical requirements (open-drain-ish behavior
-/// before the bus is fully driven).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD_PULL_UP: u32 = 2;
 
 /// Firmware property tag's `ClockId` for the EMMC base clock feeding
 /// [`set_clock`]'s divider — queried at runtime rather than hardcoded,
@@ -283,7 +312,22 @@ const BUS_WIDTH_4BIT: u32 = 2;
 
 /// Mask over the `INTERRUPT` register's error bits — any of these set
 /// means the just-issued command or data transfer failed.
+///
+/// Note which bit this does *not* cover: `CTO_ERR`
+/// ([`INT_CMD_TIMEOUT`], bit 16). The value is bztsrc's `sd.c`'s, and a
+/// command timeout reaches the driver through the `ERR` summary bit
+/// (bit 15) that the mask does include, so nothing goes unnoticed — but
+/// it means "timed out" has to be read from `INTERRUPT` rather than
+/// inferred from this mask, which [`Sd::diagnose_empty_slot`] does.
 const INT_ERROR_MASK: u32 = 0x017e_8000;
+/// `INTERRUPT.ERR` — the summary bit, set alongside whichever specific
+/// error fired. Part of [`INT_ERROR_MASK`], and singled out here because
+/// telling one error apart from another means looking past it.
+const INT_ERR_SUMMARY: u32 = 0x0000_8000;
+/// `INTERRUPT.CTO_ERR` — the card didn't respond to a command within the
+/// controller's timeout. With no card in the slot this is the only thing
+/// that ever fires, since nothing is there to answer.
+const INT_CMD_TIMEOUT: u32 = 0x0001_0000;
 /// `INTERRUPT.CMD_DONE`.
 const INT_CMD_DONE: u32 = 0x0000_0001;
 /// `INTERRUPT.DATA_DONE` (transfer complete) — for a write, only
@@ -341,8 +385,28 @@ pub type Block = [u8; 512];
 /// Errors from [`Sd::init`] and the block read/write methods
 /// ([`Sd::read_block`]/[`Sd::read_blocks`]/[`Sd::write_block`]/
 /// [`Sd::write_blocks`] and their `_dma` variants).
+/// `#[non_exhaustive]` because this enum has already had to grow once:
+/// [`Self::NoCard`] arrived after the fact, and adding it was a breaking
+/// change for no better reason than that a downstream `match` might have
+/// been exhaustive. Consumers now need a `_` arm, and the next thing the
+/// driver learns to tell apart costs nobody a major version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
+    /// No card is in the slot: the identification sequence's first
+    /// command that expects an answer got none, and neither did a second
+    /// one sent to confirm it — see [`Sd::init`].
+    ///
+    /// A conclusion rather than a reading. No Raspberry Pi wires a
+    /// card-detect line anywhere this crate could look: GPIO47, the pin
+    /// usually named for the job, is the ACT LED on a Pi 1/2, the PMIC's
+    /// I2C data line on a Pi 3 and part of the Ethernet PHY's RGMII
+    /// interface on a Pi 4; no board's device tree gives its SD host a
+    /// `cd-gpios`; and this controller doesn't implement the SDHCI
+    /// present-state bits that would say so directly. Asking the card is
+    /// the only detection there is, which also means this can't be
+    /// checked before `init` — it *is* `init`, failing early.
+    NoCard,
     /// A wait for the controller or card to reach some state (clock
     /// stable, command/data-line idle, command/data done) exceeded its
     /// budget.
@@ -478,14 +542,24 @@ impl Sd {
         }
     }
 
-    /// Brings the SD card up: routes GPIO48-53 to this controller,
-    /// resets it, and runs the SD physical layer's card
-    /// identification sequence (`CMD0`, `CMD8`, `ACMD41`, `CMD2`,
-    /// `CMD3`, `CMD7`) — the same sequence real host controllers use,
-    /// ending with the card in the "transfer" state. From there it
-    /// also tries (best-effort — see [`Self::four_bit_bus`]) to
-    /// negotiate the 4-bit bus via `ACMD51`/`ACMD6`, before returning
-    /// ready for [`Self::read_block`].
+    /// Brings the SD card up: routes GPIO48-53 to this controller (on
+    /// BCM2836/2837 — a Pi 4's slot is on EMMC2, whose pins aren't in
+    /// the GPIO bank, so `gpio` goes unused there), resets it, and runs
+    /// the SD physical layer's card identification sequence (`CMD0`,
+    /// `CMD8`, `ACMD41`, `CMD2`, `CMD3`, `CMD7`) — the same sequence
+    /// real host controllers use, ending with the card in the "transfer"
+    /// state. From there it also tries (best-effort — see
+    /// [`Self::four_bit_bus`]) to negotiate the 4-bit bus via
+    /// `ACMD51`/`ACMD6`, before returning ready for
+    /// [`Self::read_block`].
+    ///
+    /// This is also how a caller finds out whether there is a card at
+    /// all: an empty slot returns [`Error::NoCard`], typically in a few
+    /// tens of milliseconds — the controller's own bring-up (the power
+    /// domain, the clock, their settling delays) rather than the wait
+    /// for an answer, which times out fast. There is no cheaper check to
+    /// do first, and nowhere to look that doesn't involve asking; see
+    /// [`Error::NoCard`].
     pub fn init(
         gpio: &GPIO,
         emmc: SdEmmc,
@@ -505,7 +579,14 @@ impl Sd {
             return Err(Error::PowerOnFailed);
         }
 
+        #[cfg(not(feature = "bcm2711"))]
         route_gpio_to_emmc(gpio);
+        // EMMC2's pins aren't in the GPIO bank at all -- see
+        // `route_gpio_to_emmc` on why muxing anything here would be
+        // actively wrong on a Pi 4. `gpio` stays in the signature so a
+        // consumer's call site is the same on either chip.
+        #[cfg(feature = "bcm2711")]
+        let _ = gpio;
         // Let the pull-ups actually settle before trusting a level
         // read from them.
         timer.delay_ms(1);
@@ -575,9 +656,13 @@ impl Sd {
         set_clock(&emmc, base_clock_hz, SETUP_CLOCK_HZ, timer)?;
 
         // Unmask every interrupt status bit so it's visible in
-        // `INTERRUPT` -- this driver polls that register directly
-        // rather than routing to the CPU's own interrupt controller,
-        // so `IRPT_EN` (which gates that routing) stays untouched.
+        // `INTERRUPT` -- the blocking path polls that register directly.
+        // `IRPT_EN`, the separate register deciding which of those
+        // visible bits actually assert the controller's interrupt line,
+        // stays untouched at zero: an async transfer opens only the bits
+        // it is about to park on and closes them again on the way out
+        // (see the `asynch` module), so a bit nobody is servicing can
+        // never leave a level source asserted.
         emmc.irpt_mask().write(|w| unsafe { w.bits(0xffff_ffff) });
 
         let sd = Self {
@@ -588,7 +673,13 @@ impl Sd {
         };
 
         sd.command(CMD_GO_IDLE, 0, timer)?;
-        sd.command(CMD_SEND_IF_COND, 0x0000_01aa, timer)?;
+        // `CMD0` above expects no response, so `CMD8` is the first
+        // command that can tell an empty slot from a populated one --
+        // and the first whose failure is worth interpreting rather than
+        // just propagating.
+        if let Err(error) = sd.command(CMD_SEND_IF_COND, 0x0000_01aa, timer) {
+            return Err(sd.diagnose_empty_slot(error, timer));
+        }
 
         // ACMD41: poll until the card reports its power-up sequence
         // complete, budgeting a generous 1 second total -- the SD
@@ -970,6 +1061,70 @@ impl Sd {
         })
     }
 
+    /// Decides whether `error` — from [`Self::init`]'s `CMD8`, the first
+    /// command in the identification sequence that expects an answer —
+    /// means the slot is empty, returning [`Error::NoCard`] if so and
+    /// `error` unchanged if not.
+    ///
+    /// An empty slot answers nothing, so what comes back is a command
+    /// timeout and only a command timeout: `INTERRUPT` reads
+    /// `CTO_ERR | ERR` (`0x0001_8000`) with no other error bit set.
+    /// Anything else — a CRC error, a bad response index, a data-side
+    /// fault — is a card that is present and unhappy, and gets to keep
+    /// its own error, which says far more than "no card" would.
+    ///
+    /// A timeout alone isn't proof, though, which is why this sends a
+    /// second command before concluding. `CMD8` was introduced with SD
+    /// 2.0, so a v1.x card doesn't answer it either; reporting an absent
+    /// card for one that is physically in the slot would be a worse
+    /// answer than the generic error it replaces. `CMD55` (`APP_CMD`)
+    /// has existed since 1.0 and every card answers it, so a card that
+    /// stays silent through both really isn't there. One extra command,
+    /// only on a path that has already failed.
+    ///
+    /// (A v1.x card therefore still fails `init` exactly as it did
+    /// before, with `CMD8`'s own error. Supporting one means skipping
+    /// `CMD8` and dropping the HCS bit from `ACMD41`, which is a
+    /// different feature; this only avoids mislabelling it.)
+    ///
+    /// The command circuit has to be reset before that second command,
+    /// and finding out why cost a probe: the SD host controller
+    /// specification requires a `SRST_CMD` after any command error, and
+    /// until it happens a write to `CMDTM` starts nothing at all. Not an
+    /// error — *nothing*, so the following `CMD55` produced neither
+    /// `CMD_DONE` nor `CTO_ERR` and simply sat there until
+    /// [`Self::wait_interrupt`]'s one-second budget expired, turning a
+    /// 43ms answer into a 1043ms one and confirming nothing. (It is also
+    /// why [`Self::init`] can recover from this at all: it opens with a
+    /// `SRST_HC`, which takes the command circuit with it.)
+    fn diagnose_empty_slot(&self, error: Error, timer: &Timer) -> Error {
+        let Error::CardError { interrupt, .. } = error else {
+            return error;
+        };
+        if interrupt & INT_CMD_TIMEOUT == 0 || interrupt & INT_ERROR_MASK != INT_ERR_SUMMARY {
+            return error;
+        }
+
+        self.emmc.control1().modify(|_, w| w.srst_cmd().set_bit());
+        if wait_for(timer, 10_000, || {
+            !self.emmc.control1().read().srst_cmd().bit_is_set()
+        })
+        .is_err()
+        {
+            // A controller that won't reset one of its own circuits in
+            // 10ms has more wrong with it than an empty slot, and the
+            // probe below would only time out again.
+            return error;
+        }
+
+        match self.command(CMD_APP_CMD, 0, timer) {
+            Err(Error::CardError { interrupt, .. }) if interrupt & INT_CMD_TIMEOUT != 0 => {
+                Error::NoCard
+            }
+            _ => error,
+        }
+    }
+
     /// Issues one command: waits for the command line to be free,
     /// clears any stale interrupt status, writes the argument and
     /// command, and waits for `CMD_DONE` (or an error). Returns
@@ -1007,13 +1162,39 @@ impl Sd {
     }
 
     /// Waits for `mask` (or any [`INT_ERROR_MASK`] bit) to appear in
-    /// `INTERRUPT`, then clears *only* the bits it was waiting on (the
-    /// `mask` bits plus the error bits) and returns the full value from
-    /// just before clearing. `command` is the `CMDTM` code of the command
-    /// whose completion or data phase is being awaited (e.g. the same
-    /// command for both `CMD_DONE` and its following `READ_RDY`/
-    /// `WRITE_RDY`/`DATA_DONE`), passed through only to
+    /// `INTERRUPT` and consumes it — see [`Self::poll_interrupt`], which
+    /// does the consuming and documents what it clears. This is the
+    /// spinning form; `command` is passed through only to
     /// [`Error::CardError`]/[`Error::WaitTimeout`]'s diagnostic fields.
+    fn wait_interrupt(&self, mask: u32, command: u32, timer: &Timer) -> Result<u32, Error> {
+        let start = timer.now_micros();
+        loop {
+            if let Some(result) = self.poll_interrupt(mask, command) {
+                return result;
+            }
+            if timer.now_micros() - start > 1_000_000 {
+                return Err(Error::WaitTimeout {
+                    waiting_for: mask,
+                    interrupt: self.emmc.interrupt().read().bits(),
+                    status: self.emmc.status().read().bits(),
+                    command,
+                });
+            }
+        }
+    }
+
+    /// Reads `INTERRUPT` once and, if `mask` or any [`INT_ERROR_MASK`]
+    /// bit is set there, consumes it: clears *only* those bits and
+    /// returns the full register value from just before clearing (or
+    /// [`Error::CardError`] if an error bit was among them). `None` means
+    /// nothing being waited for has appeared yet — the caller decides
+    /// whether to spin ([`Self::wait_interrupt`]) or park on the
+    /// controller's interrupt (the `async` path).
+    ///
+    /// `command` is the `CMDTM` code of the command whose completion or
+    /// data phase is being awaited (e.g. the same command for both
+    /// `CMD_DONE` and its following `READ_RDY`/`WRITE_RDY`/`DATA_DONE`),
+    /// carried only into [`Error::CardError`]'s diagnostic field.
     ///
     /// Clearing only `mask | INT_ERROR_MASK`, rather than every set bit,
     /// is load-bearing: a write command's `WRITE_RDY` (buffer-write-ready)
@@ -1025,37 +1206,46 @@ impl Sd {
     /// hang forever. (Reads don't hit this: `READ_RDY` only asserts once
     /// the card has actually shipped data, well after `CMD_DONE`, so it's
     /// never set at clear-time.)
-    fn wait_interrupt(&self, mask: u32, command: u32, timer: &Timer) -> Result<u32, Error> {
+    ///
+    /// Every consumer goes through here for that reason: the rule is
+    /// subtle enough that a second copy of it — in an interrupt handler,
+    /// say — would be a second chance to get it wrong.
+    fn poll_interrupt(&self, mask: u32, command: u32) -> Option<Result<u32, Error>> {
         let full_mask = mask | INT_ERROR_MASK;
-        let start = timer.now_micros();
-        let interrupt = loop {
-            let interrupt = self.emmc.interrupt().read().bits();
-            if interrupt & full_mask != 0 {
-                break interrupt;
-            }
-            if timer.now_micros() - start > 1_000_000 {
-                return Err(Error::WaitTimeout {
-                    waiting_for: mask,
-                    interrupt,
-                    status: self.emmc.status().read().bits(),
-                    command,
-                });
-            }
-        };
+        let interrupt = self.emmc.interrupt().read().bits();
+        if interrupt & full_mask == 0 {
+            return None;
+        }
         self.emmc
             .interrupt()
             .write(|w| unsafe { w.bits(interrupt & full_mask) });
         if interrupt & INT_ERROR_MASK != 0 {
-            return Err(Error::CardError { interrupt, command });
+            return Some(Err(Error::CardError { interrupt, command }));
         }
-        Ok(interrupt)
+        Some(Ok(interrupt))
     }
 }
 
 /// Routes GPIO48-53 (`CLK`/`CMD`/`DAT0..DAT3`) to this controller
 /// (alternate function 7) with their pull resistors set to pull-up
-/// (see [`GPPUD_PULL_UP`]'s doc comment on why, unlike `uart.rs`
+/// (see [`set_emmc_pull_up`] on why pull-up, unlike `uart.rs`
 /// disabling its own pins' pulls entirely).
+///
+/// Not compiled under `bcm2711`, and that is about the board rather
+/// than the chip. EMMC2 — the controller a Pi 4's card slot is actually
+/// wired to — drives dedicated pads outside the 54-pin bank, which is
+/// why `bcm2711.dtsi`'s `emmc2` node carries no `pinctrl` property at
+/// all, and why the Pi 4 SD path works without any muxing here. What
+/// those six pins carry on that board is the gigabit Ethernet PHY's
+/// RGMII interface (`bcm2711-rpi-4-b.dts` names GPIO48-53
+/// `RGMII_RXD0`..`RXD3`, `RGMII_TXCLK`, `RGMII_TXCTL`), so muxing them
+/// to ALT3 there severs the MAC from the PHY — and points four lines
+/// the PHY drives at a host controller that drives them back during a
+/// transfer. ALT3 does still select SD1 on BCM2711, which is what a
+/// `bcm2711-lpa`/`bcm2837-lpa` diff shows and what this comment used to
+/// rest on; a PAC diff describes the SoC's function numbering and can't
+/// see what a board wired to the pads.
+#[cfg(not(feature = "bcm2711"))]
 fn route_gpio_to_emmc(gpio: &GPIO) {
     gpio.gpfsel4().modify(|_, w| {
         w.fsel48()
@@ -1077,56 +1267,23 @@ fn route_gpio_to_emmc(gpio: &GPIO) {
     set_emmc_pull_up(gpio);
 }
 
-/// Sets GPIO48-53's pull resistors to pull-up (see [`GPPUD_PULL_UP`]'s
-/// doc comment on why, unlike `uart.rs` disabling its own pins' pulls
-/// entirely). `gpio` is unused on this side — taken anyway so both
-/// branches share one call site; see the `bcm2711` branch below for
-/// the side that actually needs it.
+/// Sets GPIO48-53's pull resistors to pull-up. The SD bus (particularly
+/// `CMD`) needs a pull-up, not the pulls disabled the way `uart.rs`
+/// leaves UART0's pins — matching the reference driver's own choice
+/// here, and standard SD electrical requirements (open-drain-ish
+/// behavior before the bus is fully driven).
+///
+/// The register access lives in [`crate::gpio`], which handles the
+/// BCM2836/2837-vs-BCM2711 split; these pins all sit in bank 1
+/// (GPIO32-53).
 #[cfg(not(feature = "bcm2711"))]
-fn set_emmc_pull_up(_gpio: &GPIO) {
+fn set_emmc_pull_up(gpio: &GPIO) {
     let mask = (1 << (GPIO_CLK - 32))
         | (1 << (GPIO_CMD - 32))
         | GPIO_DAT
             .iter()
             .fold(0, |mask, pin| mask | (1 << (pin - 32)));
-    unsafe {
-        core::ptr::write_volatile(GPPUD, GPPUD_PULL_UP);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUDCLK1, mask);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUD, 0);
-        core::ptr::write_volatile(GPPUDCLK1, 0);
-    }
-}
-
-/// BCM2711 counterpart — see `uart.rs`'s identical `disable_pull` for
-/// the full rationale (real `GPIO_PUP_PDN_CNTRL_REG0..3` scheme,
-/// modeled correctly in `bcm2711-lpa`, so this goes through the PAC
-/// instead of poking raw addresses). GPIO48-53 all fall in `_REG3`
-/// (pins 48-57).
-#[cfg(feature = "bcm2711")]
-fn set_emmc_pull_up(gpio: &GPIO) {
-    gpio.gpio_pup_pdn_cntrl_reg3().modify(|_, w| {
-        w.gpio_pup_pdn_cntrl48()
-            .up()
-            .gpio_pup_pdn_cntrl49()
-            .up()
-            .gpio_pup_pdn_cntrl50()
-            .up()
-            .gpio_pup_pdn_cntrl51()
-            .up()
-            .gpio_pup_pdn_cntrl52()
-            .up()
-            .gpio_pup_pdn_cntrl53()
-            .up()
-    });
-}
-
-#[cfg(not(feature = "bcm2711"))]
-fn spin_delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
-    }
+    crate::gpio::set_pull_bank(gpio, 1, mask, crate::gpio::Pull::Up);
 }
 
 /// Sets the SD clock to as close to (at or below) `target_hz` as this
@@ -1302,5 +1459,206 @@ impl embedded_sdmmc::BlockDevice for SdCard<'_> {
     /// this.
     fn num_blocks(&self) -> Result<embedded_sdmmc::BlockCount, Self::Error> {
         Err(SdCardError::Unsupported)
+    }
+}
+
+/// The transfer unit, where two crates' constants have to agree.
+///
+/// [`Block`] is `[u8; 512]` and `resident_fat::BLOCK_SIZE` is 512; the
+/// `as_chunks` splits in [`SdBlockDevice`] are only well-typed while the two
+/// agree, so this takes the value from `resident-fat` rather than repeating
+/// the literal. Should that crate ever move off 512, the assertion below
+/// says so by name instead of failing as a type mismatch further down.
+#[cfg(feature = "resident-fat")]
+const BLOCK_LEN: usize = resident_fat::BLOCK_SIZE;
+
+#[cfg(feature = "resident-fat")]
+const _: () = assert!(BLOCK_LEN == core::mem::size_of::<Block>());
+
+/// A [`Sd`] card wrapped as a `resident-fat`
+/// [`BlockDevice`](resident_fat::BlockDevice), so that crate's FAT32
+/// filesystem can be layered on top. Bundles the card with a borrow of the
+/// [`Timer`] every transfer needs for its timeouts, exactly as [`SdCard`]
+/// does.
+///
+/// # Why this exists alongside [`SdCard`]
+///
+/// The two adapters differ in their unit of transfer, not in the filesystem
+/// above them. `embedded-sdmmc` moves a slice of 512-byte newtypes, which
+/// aren't guaranteed to sit contiguously in memory; `resident-fat` moves a
+/// plain `&[u8]` spanning a whole run of consecutive blocks. That byte slice
+/// is already exactly what the driver's multi-block path wants, so this
+/// adapter splits it with `as_chunks` and hands the pieces straight over —
+/// no staging buffer and no copy.
+///
+/// Reaching `resident-fat` through its own `embedded-sdmmc` bridge and
+/// [`SdCard`] works and is the right route for a consumer already invested in
+/// that trait, but it pays for the newtype twice: a bounded staging buffer
+/// (64 KiB by default), and a copy of every byte in each direction. It also
+/// caps [`max_transfer_blocks`] at the staging buffer's size, where this
+/// adapter reports the controller's real ceiling.
+///
+/// # What it reports
+///
+/// [`max_transfer_blocks`] is 65535, the largest run `BLKSIZECNT.blkcnt` can
+/// express — so a multi-megabyte read or write is split by the transfer limit
+/// rather than by a buffer, and costs one `CMD18`/`CMD25` per 32 MiB. (DMA
+/// isn't used here — that path needs a caller-supplied DMA channel; reach for
+/// `Sd::read_blocks_dma`/`Sd::write_blocks_dma` directly when throughput
+/// matters.)
+///
+/// [`block_count`] is `Ok(None)`, meaning "I cannot say", because the driver
+/// has no capacity (CSD) readout. That is a case `resident-fat`'s trait
+/// admits deliberately: it skips a sanity check on the volume's own size
+/// claims and mounts anyway, rather than refusing a good card because the
+/// driver one layer down is reticent. Note the contrast with [`SdCard`],
+/// whose trait has no way to say it doesn't know and so must return
+/// [`SdCardError::Unsupported`].
+///
+/// # Allocation
+///
+/// `resident-fat` uses `alloc`, so a binary that enables this feature must
+/// register a `#[global_allocator]`. This crate cannot: only the final
+/// binary may. See `examples/heap_alloc.rs`.
+///
+/// Available only with the `resident-fat` feature enabled.
+///
+/// [`max_transfer_blocks`]: resident_fat::BlockDevice::max_transfer_blocks
+/// [`block_count`]: resident_fat::BlockDevice::block_count
+#[cfg(feature = "resident-fat")]
+pub struct SdBlockDevice<'t> {
+    sd: Sd,
+    timer: &'t Timer,
+}
+
+#[cfg(feature = "resident-fat")]
+impl<'t> SdBlockDevice<'t> {
+    /// Wraps an initialized [`Sd`] and the [`Timer`] its transfers need.
+    pub fn new(sd: Sd, timer: &'t Timer) -> Self {
+        Self { sd, timer }
+    }
+
+    /// The wrapped card, borrowed.
+    ///
+    /// `resident-fat` owns the device once a volume is mounted and lends it
+    /// back through its own accessors, so this is the way to reach the
+    /// driver's own methods — a DMA transfer, say — without unmounting.
+    pub fn inner(&self) -> &Sd {
+        &self.sd
+    }
+
+    /// Unwraps back to the card, dropping the timer borrow.
+    pub fn into_inner(self) -> Sd {
+        self.sd
+    }
+}
+
+/// Error type for [`SdBlockDevice`]'s
+/// [`BlockDevice`](resident_fat::BlockDevice) implementation.
+///
+/// Available only with the `resident-fat` feature enabled.
+#[cfg(feature = "resident-fat")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdBlockDeviceError {
+    /// A block read or write failed at the SD driver level; carries the
+    /// underlying [`Error`].
+    Sd(Error),
+    /// The transfer started past block 2^32, which the controller's 32-bit
+    /// block address cannot reach.
+    ///
+    /// Refused rather than truncated. The alternative — letting the high
+    /// bits fall off — turns an unreachable address into a *reachable* one
+    /// and writes to the wrong place on the card, which is the kind of
+    /// failure that is only ever diagnosed after the damage.
+    ///
+    /// A 32-bit block address covers 2 TiB, so nothing short of an SDUC card
+    /// can produce this.
+    BlockOutOfRange {
+        /// The first block of the refused transfer.
+        start_block: u64,
+    },
+}
+
+#[cfg(feature = "resident-fat")]
+impl From<Error> for SdBlockDeviceError {
+    /// Wraps an SD driver [`Error`] as [`SdBlockDeviceError::Sd`].
+    fn from(e: Error) -> Self {
+        SdBlockDeviceError::Sd(e)
+    }
+}
+
+/// Narrows a `resident-fat` block address to the controller's 32 bits.
+#[cfg(feature = "resident-fat")]
+fn checked_block_index(start_block: u64) -> Result<u32, SdBlockDeviceError> {
+    u32::try_from(start_block).map_err(|_| SdBlockDeviceError::BlockOutOfRange { start_block })
+}
+
+#[cfg(feature = "resident-fat")]
+impl resident_fat::BlockDevice for SdBlockDevice<'_> {
+    type Error = SdBlockDeviceError;
+
+    /// Reads a run of consecutive blocks in a single (multi-block, when
+    /// longer than one) polled SD read.
+    ///
+    /// # Panics
+    ///
+    /// If `blocks.len()` isn't a multiple of 512, which the trait forbids.
+    /// Asserted rather than rounded down: `as_chunks_mut` would hand back
+    /// the odd tail as a remainder, and ignoring it would fill part of the
+    /// caller's buffer, return `Ok`, and leave the rest holding whatever it
+    /// held before.
+    fn read(&mut self, start_block: u64, blocks: &mut [u8]) -> Result<(), Self::Error> {
+        let index = checked_block_index(start_block)?;
+        // Zero-copy, and safely so: `Block` is `[u8; 512]`, a type alias
+        // rather than a newtype, so the split is a plain reborrow of the
+        // caller's buffer with no layout assumption behind it. This is the
+        // whole reason the adapter is worth having.
+        let (blocks, rest) = blocks.as_chunks_mut::<BLOCK_LEN>();
+        assert!(rest.is_empty(), "transfer length must be a multiple of 512");
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let count = checked_block_count(blocks.len())?;
+        self.sd
+            .read_blocks_pio(index, count, blocks.iter_mut(), self.timer)?;
+        Ok(())
+    }
+
+    /// Writes a run of consecutive blocks in a single (multi-block, when
+    /// longer than one) polled SD write — the mirror of
+    /// [`read`](resident_fat::BlockDevice::read), with the same length rule
+    /// and the same reason for it.
+    ///
+    /// Waits for transfer-complete, so a successful return means the card
+    /// took the data. `resident-fat` still has its own `sync`, which is
+    /// about the filesystem's metadata rather than this.
+    ///
+    /// # Panics
+    ///
+    /// If `blocks.len()` isn't a multiple of 512.
+    fn write(&mut self, start_block: u64, blocks: &[u8]) -> Result<(), Self::Error> {
+        let index = checked_block_index(start_block)?;
+        let (blocks, rest) = blocks.as_chunks::<BLOCK_LEN>();
+        assert!(rest.is_empty(), "transfer length must be a multiple of 512");
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let count = checked_block_count(blocks.len())?;
+        self.sd
+            .write_blocks_pio(index, count, blocks.iter(), self.timer)?;
+        Ok(())
+    }
+
+    /// Always `Ok(None)` — the driver has no capacity (CSD) readout, so it
+    /// doesn't know. See the type's documentation for why that is a better
+    /// answer here than an error.
+    fn block_count(&mut self) -> Result<Option<u64>, Self::Error> {
+        Ok(None)
+    }
+
+    /// 65535 — the largest run the controller's 16-bit `BLKSIZECNT.blkcnt`
+    /// field can express, and so the longest transfer one command can carry.
+    fn max_transfer_blocks(&self) -> u64 {
+        u64::from(u16::MAX)
     }
 }

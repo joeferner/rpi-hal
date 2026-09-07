@@ -23,7 +23,7 @@
 use core::fmt::Write as _;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
-use rpi_hal::{i2c::I2c, pac, uart::Uart};
+use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -85,7 +85,8 @@ const DISPLAY_INVERTED: u8 = 0xa7;
 pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc);
+    let timer = Timer::new(peripherals.SYSTMR);
+    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
 
     if send_command(&mut i2c, OLED_ADDR, &INIT_SEQUENCE).is_err() {
         let _ = writeln!(
@@ -105,7 +106,7 @@ pub extern "C" fn kmain() -> ! {
 
     let mut inverted = false;
     loop {
-        delay(150_000_000);
+        timer.delay_ms(1000);
         inverted = !inverted;
         let command = if inverted {
             DISPLAY_INVERTED
@@ -117,7 +118,7 @@ pub extern "C" fn kmain() -> ! {
 }
 
 /// Sends `bytes` as one complete command-mode I2C transaction.
-fn send_command(i2c: &mut I2c, addr: u8, bytes: &[u8]) -> Result<(), rpi_hal::i2c::Error> {
+fn send_command(i2c: &mut I2c<'_>, addr: u8, bytes: &[u8]) -> Result<(), rpi_hal::i2c::Error> {
     let mut buf = [0u8; INIT_SEQUENCE.len() + 1];
     buf[0] = CONTROL_CMD;
     buf[1..=bytes.len()].copy_from_slice(bytes);
@@ -151,7 +152,7 @@ fn draw_test_pattern(framebuffer: &mut [u8; WIDTH * PAGES]) {
 /// bytes) at a time -- mirrors `u8g_dev_sh1106_128x64_fn`'s
 /// `U8G_DEV_MSG_PAGE_NEXT` handler: a column/page-select command
 /// transaction, then a data transaction for that page's 128 bytes.
-fn write_frame(i2c: &mut I2c, framebuffer: &[u8; WIDTH * PAGES]) {
+fn write_frame(i2c: &mut I2c<'_>, framebuffer: &[u8; WIDTH * PAGES]) {
     for page in 0..PAGES {
         let _ = send_command(i2c, OLED_ADDR, &[0x10, 0x02, 0xb0 | page as u8]);
 
@@ -159,11 +160,5 @@ fn write_frame(i2c: &mut I2c, framebuffer: &[u8; WIDTH * PAGES]) {
         buf[0] = CONTROL_DATA;
         buf[1..].copy_from_slice(&framebuffer[page * WIDTH..(page + 1) * WIDTH]);
         let _ = i2c.write(OLED_ADDR, &buf);
-    }
-}
-
-fn delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
     }
 }

@@ -51,12 +51,16 @@ _start:
     eret
 
 .Lel1:
-    // Stack grows down from the kernel load address (_start); everything
-    // below it is free at this point in boot. Exceptions taken to EL1h run
-    // on this same SP_EL1 -- AArch64 has no separate banked IRQ stack like
-    // boot.s sets up on AArch32.
-    adrp    x0, _start
-    add     x0, x0, #:lo12:_start
+    // Main stack, from the region linker64.ld reserves rather than
+    // growing down from the load address -- see that script for why the
+    // size is stated there instead of being whatever happened to sit
+    // below the image (which here also meant growing toward the
+    // firmware's armstub8 spin table that `multicore` starts cores 1-3
+    // through). Exceptions taken to EL1h run on this same SP_EL1 --
+    // AArch64 has no separate banked stacks like boot.s sets up on
+    // AArch32.
+    adrp    x0, __stack_top
+    add     x0, x0, #:lo12:__stack_top
     mov     sp, x0
 
     // Point VBAR_EL1 at our exception vector table (vectors64.s) before

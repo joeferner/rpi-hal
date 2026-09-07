@@ -8,7 +8,7 @@
 // firmware MAC, enable RX/TX, wait for link). From there this example
 // wraps the LAN9514 in a `smoltcp` `phy::Device` -- the adapter that lets
 // the stack move Ethernet frames through `Lan9514::send_frame` /
-// `receive_frame` -- gets an address over DHCP, and runs the poll loop.
+// `receive_frames` -- gets an address over DHCP, and runs the poll loop.
 //
 // With `auto-icmp-echo-reply` on, the interface answers pings on its own.
 // A UDP socket on top runs a line-level echo server on port 7 (the
@@ -20,6 +20,12 @@
 // The `phy::Device` adapter is `rpi_hal::usb::lan9514::Lan9514Phy`, behind
 // the crate's `smoltcp` feature. The stack itself (IP config, sockets,
 // poll loop) is application policy and stays here.
+//
+// Pi 2/3 only. Both the USB hub and the Ethernet are one soldered-on
+// LAN9514 there, behind the DWC2 controller. A Pi 4 has neither half: its
+// USB host is a VL805 xHCI behind PCIe and its Ethernet is a native GENET
+// MAC on RGMII pins, neither of which this crate drives yet -- so this
+// builds for `bcm2711` and then finds an empty root port.
 
 use core::fmt::Write;
 use core::ops::ControlFlow;
@@ -88,8 +94,16 @@ pub extern "C" fn kmain() -> ! {
         &timer,
     );
 
+    // Bounded, because the hub is soldered on: a root port that hasn't
+    // reported in five seconds has nothing behind it at all, which is
+    // what a Pi 4 looks like (see the header). Falling through rather
+    // than halting here -- `usb::enumerate` reports that as
+    // `EnumerationError::NotConnected` through the same error path
+    // everything else goes through, where an unbounded wait would sit
+    // here silently and look like a lock-up.
     let _ = writeln!(uart, "waiting for the on-board hub...");
-    while !dwc2.port_connected() {
+    let deadline_us = timer.now_micros() + 5_000_000;
+    while !dwc2.port_connected() && timer.now_micros() < deadline_us {
         timer.delay_ms(100);
     }
 

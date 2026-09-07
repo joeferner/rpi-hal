@@ -113,10 +113,11 @@ pub enum ClockId {
     Uart = 2,
     /// ARM core (CPU) clock.
     Arm = 3,
-    /// SoC "core" clock — what `spi.rs`'s and `i2c.rs`'s
-    /// `clock_divider` parameters would be computed against, per
-    /// their doc comments, if a caller wants an exact target
-    /// frequency instead of a raw divider passthrough.
+    /// SoC "core" clock — what feeds the BSC and SPI0 controllers, and
+    /// so what their `clock_divider` is measured against. Query it here
+    /// and hand it to [`i2c::divider_for`](crate::i2c::divider_for) or
+    /// [`spi::divider_for`](crate::spi::divider_for) to turn a target
+    /// bus frequency into the divider those drivers take.
     Core = 4,
     /// 3D block (VideoCore GPU) clock.
     V3d = 5,
@@ -438,8 +439,8 @@ impl Mailbox {
 
     /// The real, current rate of `clock`, in Hz (tag `0x0003_0002`,
     /// "Get Clock Rate") — what a caller needing an exact frequency
-    /// (rather than `spi.rs`'s/`i2c.rs`'s raw divider passthrough)
-    /// would compute a clock divider against, instead of assuming a
+    /// computes a clock divider against (see
+    /// [`ClockId::Core`] for the two that do), instead of assuming a
     /// nominal value that may not match this specific board's
     /// configuration.
     pub fn clock_rate_hz(&mut self, clock: ClockId) -> Result<u32, Error> {

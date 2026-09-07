@@ -73,6 +73,38 @@ impl Lic {
         self.lic.pending_2().read().uart().bit_is_set()
     }
 
+    /// Routes the I2C IRQ to the ARM core. Like the AUX line below, this
+    /// one is shared: BSC0 and BSC1 raise the same interrupt, so a
+    /// handler cannot tell from the controller which of them fired and
+    /// has to read each one's `S` register — which is what
+    /// `i2c::on_irq` does (behind the `async` feature, which is what
+    /// arms those conditions in the first place).
+    ///
+    /// The interrupt conditions themselves (`C.INTD`/`INTT`/`INTR`) are
+    /// opened by the async transfer that needs them, not here.
+    pub fn enable_i2c_irq(&self) {
+        unsafe {
+            self.lic.enable_2().write_with_zero(|w| w.i2c().set_bit());
+        }
+    }
+
+    /// Masks the I2C IRQ at the interrupt controller — the inverse of
+    /// [`enable_i2c_irq`](Self::enable_i2c_irq), and it masks it for both
+    /// BSC0 and BSC1, the two sharing one line.
+    pub fn disable_i2c_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_2()
+                .write_with_zero(|w| w.i2c().clear_bit_by_one());
+        }
+    }
+
+    /// True if the I2C IRQ is currently pending at the interrupt
+    /// controller — for either controller, the line being shared.
+    pub fn is_i2c_pending(&self) -> bool {
+        self.lic.pending_2().read().i2c().bit_is_set()
+    }
+
     /// Routes the AUX IRQ to the ARM core. This one line is shared by all
     /// three AUX sub-peripherals — the mini UART (UART1), SPI1, and SPI2
     /// (the controller ORs their interrupts together), so a handler must
@@ -139,6 +171,51 @@ impl Lic {
     /// line; `GINTSTS`/`HAINT` say why.
     pub fn is_usb_pending(&self) -> bool {
         self.lic.pending_1().read().usb().bit_is_set()
+    }
+
+    /// Routes the EMMC (Arasan SD host controller) IRQ to the ARM core —
+    /// the line [`sd::on_irq`](crate::sd::on_irq) services, and what an
+    /// `async` SD transfer parks on instead of spinning on `INTERRUPT`.
+    ///
+    /// Which of the controller's conditions actually reach this line is
+    /// decided at the peripheral by its `IRPT_EN` register, and that one
+    /// is opened by the transfer that needs it rather than by
+    /// [`Sd::init`](crate::sd::Sd::init) — so a program driving the card
+    /// through the blocking API raises nothing here even with this line
+    /// routed. The controller's other register, `IRPT_MASK`, gates only
+    /// whether a condition becomes visible in `INTERRUPT` at all; `init`
+    /// opens that one wide for the polling loop's benefit, which is why
+    /// the two must not be confused.
+    ///
+    /// One line covers everything the controller can report, so a handler
+    /// dispatches on `INTERRUPT` rather than on which line fired. It is
+    /// also shared with the same controller's SDIO use
+    /// ([`crate::sdio`], which drives this same hardware for the on-board
+    /// WiFi chip): only one of the two can own the controller at a time,
+    /// so the sharing costs nothing, but it is the reason `sd::on_irq`
+    /// checks that an async transfer armed `IRPT_EN` before touching
+    /// anything.
+    pub fn enable_emmc_irq(&self) {
+        unsafe {
+            self.lic.enable_2().write_with_zero(|w| w.emmc().set_bit());
+        }
+    }
+
+    /// Masks the EMMC IRQ at the interrupt controller — the inverse of
+    /// [`enable_emmc_irq`](Self::enable_emmc_irq).
+    pub fn disable_emmc_irq(&self) {
+        unsafe {
+            self.lic
+                .disable_2()
+                .write_with_zero(|w| w.emmc().clear_bit_by_one());
+        }
+    }
+
+    /// True if the EMMC IRQ is currently pending at the interrupt
+    /// controller. This only says the controller asserted its line; its
+    /// `INTERRUPT` register says why.
+    pub fn is_emmc_pending(&self) -> bool {
+        self.lic.pending_2().read().emmc().bit_is_set()
     }
 
     /// Routes the GPIO bank IRQ that covers `pin` to the ARM core.

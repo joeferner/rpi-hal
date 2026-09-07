@@ -13,12 +13,14 @@
 // (Lic::enable_gpio_irq), and the CPU IRQ mask (irq::enable_irq) all have
 // to be open.
 //
-// Wiring: rpi-hal doesn't drive the pull-up/down hardware (GPPUD) yet, so
-// the input needs a defined idle level from outside. Wire the button
-// between GPIO17 (header pin 11) and 3V3, with a ~10k pull-down resistor
-// from GPIO17 to GND. The pin idles low (LED off); pressing pulls it high
+// Wiring: the button goes between GPIO17 (header pin 11) and 3V3, and
+// the pin's internal pull-down gives it its idle level, so no external
+// resistor is needed. The pin idles low (LED off); pressing pulls it high
 // (LED on). No debounce is done -- a bouncing contact just fires a few
 // extra edges, and the last one leaves the LED matching the final level.
+//
+// Wiring the button to GND instead works just as well: swap the pull for
+// `into_pull_up_input` and read a press as low.
 
 use core::fmt::Write;
 use embedded_hal::digital::{InputPin, OutputPin};
@@ -57,7 +59,8 @@ pub extern "C" fn kmain() -> ! {
     // Configure the button to detect both edges. A fresh GPIO token is
     // stolen because the single PAC `GPIO` peripheral covers every pin
     // and the line above consumed the first one.
-    let button = Pin::<BUTTON, Input>::new(unsafe { pac::Peripherals::steal() }.GPIO);
+    let button =
+        Pin::<BUTTON, Input>::new(unsafe { pac::Peripherals::steal() }.GPIO).into_pull_down_input();
     button.enable_interrupt(Trigger::AnyEdge);
     // Discard any edge latched before detection was armed, so startup
     // noise doesn't leave a stale event pending.

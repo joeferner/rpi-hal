@@ -2,7 +2,7 @@
 # already pinned in .cargo/config.toml, so plain `cargo` invocations
 # pick them up without repeating flags here.
 
-.PHONY: build-bcm2837 build-bcm2711 examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build-bcm2837 build-bcm2711 examples fmt fmt-check clippy doc package hil pre-commit clean
 
 # `bcm2837`/`bcm2711` (see Cargo.toml) are chip selection: neither is a
 # default feature, since there's no sensible default target chip, so
@@ -27,6 +27,11 @@ examples:
 	# Likewise the integration-adapter examples are gated on their own
 	# features (embedded-sdmmc, smoltcp) and skipped by a plain build.
 	cargo build --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan
+	# `resident-fat` gets its own line rather than joining the one above,
+	# so the feature is compiled without `embedded-sdmmc` alongside it --
+	# the two SD adapters are independent, and building them only together
+	# would hide an item in one that had come to depend on the other.
+	cargo build --release --features bcm2837,resident-fat --example sd_resident_fat_read
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo build --release --features bcm2837,v3d --example v3d_probe --example gpu_cube
 	# And the video decoder, gated on `mmal` (which pulls in `vchiq`) plus
@@ -34,6 +39,9 @@ examples:
 	# renderer on the same `mmal` stack.
 	cargo build --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode
 	cargo build --release --features bcm2837,mmal --example hdmi_audio
+	# And the interrupt-driven examples, gated on `async` -- the feature is
+	# off by default, so a plain --examples build skips both.
+	cargo build --release --features bcm2837,async --example usb_irq --example sd_async
 
 fmt:
 	cargo fmt
@@ -49,6 +57,8 @@ clippy:
 	# Same again for the integration-adapter examples and their src-side
 	# adapters, which a plain lint doesn't compile.
 	cargo clippy --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan -- -D warnings
+	# Separate line for the same reason as in `examples` above.
+	cargo clippy --release --features bcm2837,resident-fat --example sd_resident_fat_read -- -D warnings
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
@@ -59,6 +69,12 @@ clippy:
 	# compiles either.
 	cargo clippy --release --features bcm2837,mmal,embedded-sdmmc --example h264_decode -- -D warnings
 	cargo clippy --release --features bcm2837,mmal --example hdmi_audio -- -D warnings
+	# The `async` modules (gpio/uart/i2c/sd/usb `asynch.rs`) and the two
+	# examples that drive them are compiled by none of the lines above --
+	# the feature is off by default. Both examples poll their one future by
+	# hand rather than pulling in an executor, which lives in
+	# `rpi-hal-embassy` rather than here.
+	cargo clippy --release --features bcm2837,async --examples -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing -- broken intra-doc links are the main
@@ -83,8 +99,8 @@ clippy:
 # path lib.rs gates behind that cfg is exercised here rather than first
 # failing on the docs.rs builder after a release is already published.
 doc:
-	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,smoltcp,v3d,mmal
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,smoltcp
+	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,resident-fat,smoltcp,v3d,mmal
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,resident-fat,smoltcp
 
 # A chip feature is not optional here, and the reason is easy to trip over:
 # `cargo package` and `cargo publish` finish by building the packaged tarball,
@@ -104,7 +120,19 @@ doc:
 package:
 	cargo package --features bcm2837
 
-pre-commit: fmt clippy build-bcm2837 build-bcm2711 examples doc
+# The hardware-in-the-loop bench, which is three toolchains of its own --
+# thumbv6m firmware, armv7a/aarch64 case binaries, and a Python host runner --
+# none of which share this workspace, so nothing above reaches them.
+# Delegated rather than spelled out here so the bench's own Makefile stays the
+# single place that knows how to build it.
+#
+# The Python half is checked with `ruff` and `ty`, fetched on demand by `uvx`.
+# They are not project dependencies: a contributor with one board and a serial
+# cable should not have to install a linter to run a test.
+hil:
+	$(MAKE) -C hil-test pre-commit
+
+pre-commit: fmt clippy build-bcm2837 build-bcm2711 examples doc hil
 
 clean:
 	cargo clean

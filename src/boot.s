@@ -3,10 +3,12 @@
 .section ".text.boot"
 .global _start
 
-.equ IRQ_STACK_SIZE, 0x1000
 .equ MODE_HYP, 0x1a
+.equ MODE_FIQ, 0x11
 .equ MODE_IRQ, 0x12
 .equ MODE_SVC, 0x13
+.equ MODE_ABT, 0x17
+.equ MODE_UND, 0x1b
 
 _start:
     // Hypothesis under test: Broadcom's firmware on this board hands
@@ -44,17 +46,33 @@ _start:
     cmp     r1, #0
     bne     halt
 
-    // Stack grows down from the kernel load address; everything
-    // below it is free at this point in boot.
-    ldr     sp, =_start
+    // Main (SVC) mode stack, from the region linker.ld reserves rather
+    // than growing down from the load address -- see that script for
+    // why the size is stated there instead of being whatever happened
+    // to sit below the image.
+    ldr     sp, =__stack_top
 
-    // Give IRQ mode its own banked stack, clearly separated from the
-    // main-mode stack above (which grows down from _start itself) so
-    // an interrupt taken during deep main-mode recursion can't collide
-    // with it. `cps` just switches the mode field, leaving IRQ/FIQ
-    // masked as they already are at reset.
+    // Each privileged mode has its own banked `sp`, and the linker
+    // script gives each its own region, adjacent to the main stack
+    // rather than carved out of the middle of it. `cps` just switches
+    // the mode field, leaving IRQ/FIQ masked as they already are at
+    // reset.
+    //
+    // ABT/UND/FIQ are set up for the same reason IRQ is, even though
+    // this crate's default handler for them is a parking loop that
+    // touches no memory: an application can override the (weak)
+    // `__unhandled_exception` to report the fault, and a Rust function
+    // pushes a frame. Without an initialized banked `sp` that push
+    // faults again immediately, from a handler whose whole purpose is
+    // to say what happened.
     cps     #MODE_IRQ
-    ldr     sp, =(_start - IRQ_STACK_SIZE)
+    ldr     sp, =__irq_stack_top
+    cps     #MODE_ABT
+    ldr     sp, =__abt_stack_top
+    cps     #MODE_UND
+    ldr     sp, =__und_stack_top
+    cps     #MODE_FIQ
+    ldr     sp, =__fiq_stack_top
     cps     #MODE_SVC
 
     // Point VBAR at our own vector table instead of relying on the
@@ -138,11 +156,32 @@ __secondary_core_entry:
     ldr     r6, [r2, #8]           // mailbox 2: entry
 
     // IRQ-mode banked stack, then back to SVC with the main stack --
-    // same split core 0 sets up in _start.
+    // same split core 0 sets up in _start. Both come from the caller's
+    // `Stack<BYTES>` rather than the linker script: a secondary core's
+    // stack is supplied by the application (see `multicore::Stack`),
+    // and only core 0 runs on the reserved region.
     cps     #MODE_IRQ
     mov     sp, r5
     cps     #MODE_SVC
     mov     sp, r3
+
+    // ABT/UND/FIQ do come from the linker script, and so are shared
+    // with core 0 and with each other core. That is a deliberate
+    // trade: two cores taking a fault at the same instant would
+    // overwrite each other's report, but a fault is terminal anyway,
+    // and the alternative -- an uninitialized banked `sp` -- turns any
+    // application-supplied `__unhandled_exception` into a second fault
+    // that reports nothing at all. Carving them out of the
+    // application's `Stack<BYTES>` instead isn't an option: those are
+    // sized for the core's own work (8 KiB in some examples), not for
+    // three more mode stacks.
+    cps     #MODE_ABT
+    ldr     sp, =__abt_stack_top
+    cps     #MODE_UND
+    ldr     sp, =__und_stack_top
+    cps     #MODE_FIQ
+    ldr     sp, =__fiq_stack_top
+    cps     #MODE_SVC
 
     // VBAR + SCTLR.V are banked per-core, so this core programs its own
     // -- identical to core 0's sequence in _start.

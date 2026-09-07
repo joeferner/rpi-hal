@@ -4,7 +4,238 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-04
+
+### Fixed
+
+- **The LAN9514's MAC ran half duplex** — frames were discarded whenever
+  the interface transmitted and received at the same time, on every link
+  this driver has ever run on.
+
+  `start` wrote `MAC_CR` with `RCVOWN` set and `FDPX` clear, which is a
+  half-duplex MAC doing CSMA/CD against a switch that had auto-negotiated
+  full duplex. Transmitting while receiving is a collision, and the frame
+  goes away.
+
+  Only bidirectional traffic showed it, which is why it lasted. A single
+  request was always fast, and receiving alone was lossless — a 256-frame
+  back-to-back burst arrived complete, and a sustained 4,000 frames a
+  second lost nothing. It took eight files fetched over eight concurrent
+  connections: **62% of requests stalled, median 1.0 s against 3.9 ms for
+  the same file fetched alone**, worst case 7 s, sitting exactly on the
+  peer's retransmission timeout. Against the fix, on the same board and
+  the same test: median **13.7 ms**, **0** stalls out of 200, and the
+  client's `TcpRetransSegs`, `TcpExtTCPSynRetrans` and
+  `TcpExtTCPTimeouts` all zero.
+
+  Nothing above or below the MAC could see it. The driver handed each
+  frame over and the transfer succeeded, so a send-failure count read
+  zero; the receive loop was healthy, so its counters read zero and the
+  window with no bulk IN pending measured 7 µs. Loss inside the MAC is
+  invisible from both sides of it.
+
+### Changed
+
+- **`Lan9514::receive_frame` is now `receive_frames` and returns an
+  iterator** — breaking, for anyone calling it or its `_async` twin
+  directly. Consumers going through `Lan9514Phy` or `rpi-hal-embassy` are
+  unaffected.
+
+  ```rust
+  // before
+  if let Ok(Some(frame)) = lan9514.receive_frame(channel, timer) { ... }
+  // after
+  for frame in lan9514.receive_frames(channel, timer)? { ... }
+  ```
+
+  A bulk IN can carry several frames, each behind its own status word.
+  With `HW_CFG.MEF` clear — as this driver leaves it — the chip sends one
+  per transfer, so the old signature was correct by accident of a bit that
+  is not set rather than by design. Returning an iterator means the API
+  can no longer express the bug, and enabling coalescing later becomes a
+  change to `start` rather than to every caller.
+
+  Iteration stops at the first status word that cannot describe a frame,
+  because past that point the offsets are guesses and a guess yields
+  corrupt frames rather than a gap. `start` also clears `HW_CFG.RXDOFF`
+  explicitly: zero is the reset default, so nothing changes, but the
+  parser depends on it.
+
+### Added
+
+- `Lan9514::set_duplex` and `Lan9514::is_full_duplex`, for programming the
+  MAC from what auto-negotiation actually settled on. `start` still
+  assumes full duplex, because it runs before the link is up and half
+  duplex needs a hub; the sequence for certainty is `start`, poll
+  `is_link_up`, then `set_duplex`. `is_full_duplex` intersects the two
+  standard MII ability registers the way auto-negotiation does, rather
+  than trusting one PHY's summary of the result.
+- `Lan9514::set_all_multicast` and its `_async` twin, for the `MAC_CR`
+  multicast filter. The chip comes up dropping multicast before the host
+  sees it, which anything speaking only unicast or broadcast never notices
+  — DHCP is broadcast — and which makes mDNS fail completely and silently,
+  since its queries and announcements are multicast. A read-modify-write,
+  so it composes with `start` and `set_duplex`, which share that register.
+
+## [0.4.0] - 2026-09-02
+
+### Changed
+
+- **`sd::Error` is now `#[non_exhaustive]`, and has a new variant** —
+  breaking, for any consumer matching it exhaustively. Add a `_` arm.
+
+  The variant is `NoCard` (below), and `#[non_exhaustive]` comes with it
+  deliberately rather than later: without it, teaching the driver to tell
+  one failure from another costs a major version every time, which is
+  exactly why `SdBlockDeviceError` was given its own enum instead of a
+  variant here. One breaking release now, and none for this reason again.
+
+### Fixed
+
+- **`Sd::init` muxed the Ethernet PHY's pins away on a Pi 4.** It routed
+  GPIO48-53 to alternate function 7 on every chip, but on BCM2711 the
+  card slot is on EMMC2, which drives dedicated pads outside the 54-pin
+  bank — `bcm2711.dtsi`'s `emmc2` node has no `pinctrl` property at all,
+  which is why the Pi 4 SD path worked regardless. What GPIO48-53 carry
+  on that board is the gigabit Ethernet PHY's RGMII interface
+  (`RGMII_RXD0`..`RXD3`, `RGMII_TXCLK`, `RGMII_TXCTL`), so the mux was
+  pure side effect: it severs the MAC from the PHY, and points four
+  lines the PHY drives at a host controller that drives them back during
+  a transfer. `route_gpio_to_emmc` is now compiled out under `bcm2711`;
+  `Sd::init` keeps its `GPIO` argument on both chips so a call site
+  doesn't have to change. Untested on hardware in the direction that
+  matters — nothing in this crate drives BCM2711 Ethernet yet, so
+  nothing here could have noticed.
+
+  The comment that justified sharing the routing said GPIO48-53's ALT3
+  assignment was "unchanged (confirmed by diffing `bcm2711-lpa` against
+  `bcm2837-lpa`)". That was true and beside the point: a PAC diff
+  describes the SoC's function numbering, not what a board wired to the
+  pads.
+
+- **PWM and PCM clock divisors were silently masked, not clamped.** The
+  Clock Manager's `DIVI` field is 12 bits, but `Pwm::init` and `Pcm::init`
+  take a `u16` and said nothing about the limit — so a larger value was
+  neither rejected nor saturated. The PAC's field writer masked it, making a
+  divisor of 12500 program as `12500 & 0xFFF` = 212 and run the clock 59
+  times too fast, with every register reading back exactly as written. Both
+  now clamp. `Pwm::audio_clock_divisor` and `Pcm::clock_divisor` had the same
+  fault from the other end, clamping their results to `u16::MAX` — sixteen
+  times what the field holds — and now clamp to the real maximum.
+
+### Added
+
+- **`sd::Error::NoCard`**, so an empty slot says so. `Sd::init` used to
+  report it as `CardError` carrying a raw `INTERRUPT` word, indis-
+  tinguishable without decoding from a card that is present and
+  misbehaving. It now returns `NoCard` when `CMD8` — the first command in
+  the identification sequence that expects an answer — times out and a
+  `CMD55` sent afterwards times out too. Both, because `CMD8` arrived
+  with SD 2.0 and a v1.x card doesn't answer it either; a single silent
+  command would report an absent card for one sitting in the slot. (Such
+  a card still fails `init` exactly as before, with `CMD8`'s own error.
+  Supporting one is a separate feature.)
+
+  Presence can only be discovered by asking: no Pi wires a card-detect
+  line anywhere a driver could read it — GPIO47, the pin usually named
+  for the job, is the ACT LED on a Pi 1/2, the PMIC's I²C data line on a
+  Pi 3 and part of the Ethernet PHY's RGMII interface on a Pi 4 — and
+  this controller doesn't implement the SDHCI present-state bits.
+  `examples/sd_presence.rs` demonstrates it, card in and card out, and
+  decodes the controller state behind whatever error comes back.
+
+- **Interrupt-driven SD transfers**, behind the `async` feature:
+  `Sd::read_block_async`/`read_blocks_async`/`write_block_async`/
+  `write_blocks_async` and the DMA pair
+  `read_blocks_dma_async`/`write_blocks_dma_async`, plus `sd::on_irq` and
+  `Lic::enable_emmc_irq`/`disable_emmc_irq`/`is_emmc_pending` to route the
+  controller's line. The blocking methods are unchanged and untouched by
+  this; the async ones park on the controller's interrupt where those
+  spin, which matters most for a write, whose closing `DATA_DONE` is the
+  card programming an entire internal erase block — milliseconds per
+  command that an executor previously lost in full.
+  `examples/sd_async.rs` reports, for each transfer, the share of its
+  duration during which the core had nothing to do.
+
+  Dropping a transfer future — `embassy_time::with_timeout`, `select!`, a
+  cancelled task — stops the card and resets the controller's data
+  circuit before the drop returns, and so does an error return. Without
+  that, an abandoned data phase would leave part of an aborted block in
+  the host FIFO for the *next* transfer to return as though it were data.
+
+  Two things it deliberately does not do: enable anything in `IRPT_EN`
+  outside a wait (a level source nobody services is a hang on this
+  controller, so each wait opens only the bits it parks on and closes
+  them again), and impose its own timeout beyond the blocking path's
+  one-second backstop — wrap the future in the executor's own. BCM2836/7
+  only for now: routing the line needs `lic`, which BCM2711 has no
+  equivalent of yet.
+
+- **Non-blocking DMA transfers to and from a peripheral FIFO**:
+  `Channel::start_from_peripheral` and `Channel::start_to_peripheral`,
+  which start the transfers `copy_from_peripheral`/`copy_to_peripheral`
+  block on and hand back a `Transfer` guard instead, so a caller can wait
+  on something better than a polling loop. The read side defers its cache
+  invalidate to the guard's drop, which is the first point at which the
+  engine is known to have finished.
+
+- **GPIO internal pull resistors.** `gpio::Pull`, `Pin::set_pull`, and
+  `Pin::into_pull_up_input`/`into_pull_down_input`/`into_floating_input`
+  configure a pin's internal pull-up/pull-down — previously unreachable
+  from outside the crate, so a consumer wiring a button or an
+  open-collector sensor had to add an external resistor or poke
+  `GPPUD` themselves. `Pin::pull` reads the setting back, on `bcm2711`
+  only: the legacy `GPPUD`/`GPPUDCLK` pair clocks a value into a pin
+  without storing it anywhere readable. `examples/gpio_pull.rs` checks
+  both resistors against an unconnected pin, and
+  `examples/gpio_irq_button.rs` now uses the internal pull-down instead
+  of asking for a 10k resistor.
+
+  The two SoCs use unrelated registers here — the legacy
+  `GPPUD`/`GPPUDCLK` clock-in sequence versus BCM2711's
+  `GPIO_PUP_PDN_CNTRL_REG0..3`, with *different encodings* of the pull
+  value — and four drivers (`uart`, `mini_uart`, `sd`, `sdio`) each
+  carried their own copy of the sequence for their own pins. They now all
+  route through the one implementation in `src/gpio.rs`, which is the
+  only place that knows which scheme applies.
+
+- **`resident-fat` feature**: `sd::SdBlockDevice`, an adapter implementing
+  `resident-fat`'s `BlockDevice` trait over the SD driver, with
+  `sd::SdBlockDeviceError` for its errors.
+  `examples/sd_resident_fat_read.rs` mounts the boot partition and reads
+  files.
+
+  Alongside the `embedded-sdmmc` adapter rather than replacing it: the two
+  traits differ in their unit of transfer, and which one suits depends on
+  the filesystem above. `resident-fat` transfers a plain `&[u8]` spanning a
+  whole run of consecutive blocks, which is already what the driver's
+  multi-block path takes, so the adapter splits the caller's buffer with
+  `as_chunks` and hands the pieces over — no staging buffer, no copy, and
+  `max_transfer_blocks` is the controller's real 65535 rather than a
+  buffer's size. Reaching `resident-fat` through its own `embedded-sdmmc`
+  bridge and `sd::SdCard` still works, and remains the right route for a
+  consumer already invested in that trait.
+
+  Unlike every other feature here, this one carries an allocator
+  requirement: `resident-fat` uses `alloc`, so a binary that enables it
+  must register a `#[global_allocator]`. This crate still neither defines
+  nor needs one.
+- `Pwm::MAX_CLOCK_DIVISOR` and `Pcm::MAX_CLOCK_DIVISOR`, so a caller can
+  check its own constant at compile time rather than discovering the limit as
+  a peripheral running at an inexplicable rate.
+- `Pwm::clock_hz` and `Pcm::clock_hz`, reporting the rate a divisor will
+  actually produce. They apply the same clamp `init` does, so they describe
+  the hardware rather than echoing the request back; logging one beside the
+  intended rate is how an out-of-range divisor becomes visible.
+- `Pwm::MIN_CLOCK_HZ` and `Pcm::MIN_CLOCK_HZ`, the floor the 12-bit divisor
+  imposes — roughly 122 kHz, which is a real design constraint and not a
+  rounding concern.
+- `Pwm::divisor_for`, picking a divisor from a target clock rate. The
+  counterpart to `audio_clock_divisor` for callers not on the audio path,
+  where computing `500_000_000 / target` by hand is exactly where an
+  out-of-range divisor comes from.
+
+## [0.3.0] - 2026-08-30
 
 ### Added
 
@@ -42,6 +273,55 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `usb::lan9514::MTU` is now unconditional rather than gated on an
   adapter feature — it is a property of Ethernet and of this chip, and an
   out-of-crate adapter needs the same number.
+- **Async I2C** (`async` feature): `embedded_hal_async::i2c::I2c` on the
+  same `I2c` type, parking on the controller's `DONE`/`TXW`/`RXR`
+  interrupts rather than polling `S`, so the millisecond a six-byte read
+  at 100kHz costs goes to the executor instead of a spin loop. With it,
+  `i2c::on_irq` and `Lic::enable_i2c_irq`/`disable_i2c_irq`/
+  `is_i2c_pending`. BSC0 and BSC1 share one interrupt line, so the
+  handler checks both controllers, and leaves alone any that a blocking
+  transfer is driving (it arms none of these conditions).
+
+  Timeouts are the caller's here rather than the driver's: wrap the
+  future in `embassy_time::with_timeout` or equivalent. Cancelling one
+  that way is safe — the drop masks the interrupts, clears the FIFOs and
+  cleans the status, so the next transfer starts from a known state. The
+  stored `Timer` deadline still applies as a backstop, but only where the
+  future is polled at all, which the module docs spell out.
+- **`examples/soc_temperature.rs`**, printing die temperature, ARM clock
+  and throttling status together once a second. No new API —
+  `Mailbox::temperature_millicelsius` and `Mailbox::throttled` have been
+  there all along, and a consumer asking for a way to read the CPU
+  temperature is what showed they could not be found. The README's
+  mailbox entry now names them too.
+- **`i2c::divider_for` and `spi::divider_for`**: `(core_hz, target_hz)`
+  to the raw `CDIV` those drivers' `init` takes. Every consumer was
+  writing the same arithmetic and getting the same chance to be wrong,
+  the reset default of 1500 being documented as 100kHz against a nominal
+  150MHz core clock and actually being 166kHz on a board running
+  250MHz. Rounding is upwards in both, so the bus never clocks faster
+  than asked — what a device states is a maximum, and erring the other
+  way fails intermittently rather than visibly.
+
+  `core_hz` is still the caller's to fetch (`Mailbox::clock_rate_hz`
+  with `ClockId::Core`) rather than something `init` queries: it can
+  fail, it costs a round trip to the GPU, and an application bringing up
+  several buses should ask once.
+- **`i2c::I2c::<BSC0>::init_id`**: BSC0 on its GPIO0/1 (ALT0) routing —
+  `ID_SD`/`ID_SC` on header pins 27/28, the HAT ID EEPROM bus — beside the
+  existing `init`, which stays on GPIO44/45. One controller, two
+  electrically separate buses, so the routing is a constructor rather than
+  an argument, and only one of them can be live at a time. Previously the
+  ID bus was unreachable from this crate, which put any board-identity or
+  per-unit calibration part sitting on it out of reach too.
+  `examples/i2c_hat_eeprom.rs` reads a HAT EEPROM's vendor info atom over
+  it.
+- **`stack`** (`rt` feature): `stack::headroom`, `used`, `pointer`,
+  `bottom`, `top` and `size` — how much of the main stack is left, from
+  inside the running program. `headroom`/`used` are `Option` because a
+  secondary core runs on its own `multicore::Stack` and the AArch32
+  exception modes on their own banked regions, where the question has no
+  meaningful answer.
 
 ### Removed
 
@@ -59,6 +339,76 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Nothing here affects the `smoltcp` adapter or the blocking frame
   methods. `smoltcp`'s `phy::Device` is synchronous by construction, so
   those stay exactly as they were.
+
+### Changed
+
+- **The stack is a reserved region with a stated size**, rather than
+  whatever happened to sit below the load address. The linker scripts
+  reserve `__stack_size` (1 MiB), `__stack_slack` (2 MiB of margin below
+  it), and on AArch32 `__irq_stack_size` (64 KiB) plus
+  `__abt_stack_size`/`__und_stack_size`/`__fiq_stack_size` (32 KiB each);
+  the boot code points each `sp` at its own region. Any of them can be
+  changed without editing the script, via
+  `-Wl,--defsym=__stack_size=0x400000` in the consumer's own flags. The
+  region is `NOLOAD`, so none of it costs image bytes.
+
+  Programs that supply their own linker script *and* use the `rt` feature
+  must define `__stack_top` (and, on AArch32, `__irq_stack_top`,
+  `__abt_stack_top`, `__und_stack_top`, `__fiq_stack_top`); the link
+  fails loudly naming the missing symbol otherwise. A program using the
+  crate's `rpi-link.x` needs no changes.
+- **`__unhandled_exception` is now weak** on both architectures, so an
+  application can define its own and report a fault instead of parking
+  silently. The crate's default (a `wfe` loop) is unchanged when nothing
+  overrides it.
+- **`i2c::I2c` gained a lifetime and `init` a parameter**: both
+  `I2c::<BSC1>::init` and `I2c::<BSC0>::init` now take a `&Timer`, which
+  the driver stores as `I2c<'_, I>`. The timer bounds every transfer (see
+  Fixed, below); it has to be stored rather than passed per call because
+  transfers are reached through `embedded_hal::i2c::I2c::transaction`,
+  whose signature this crate doesn't control.
+- `i2c::Error` gained `Timeout` and `Incomplete { received, requested }`,
+  so it is no longer exhaustively matchable on the two previous variants.
+  Both map to `ErrorKind::Other` — `embedded-hal` 1.0 has no closer
+  variant, since its `Overrun` means the receive buffer was overrun.
+- **A clock-stretch timeout (`S.CLKT`) is now reported**, as
+  `Error::Timeout`, by the blocking transfers as well as the new async
+  ones — a slave that held SCL past the `CLKT` allowance produced a
+  transfer the hardware cut short, and returning its bytes as if nothing
+  had happened was wrong. `CLKT` is also cleared alongside `DONE`/`ERR`
+  now: it latches, so one uncleared timeout would have been read as a
+  fault by every transfer after it, on a bus that had recovered.
+
+### Fixed
+
+- **The IRQ stack no longer sits inside the main stack.** It was set to
+  `_start - IRQ_STACK_SIZE`, 4 KiB into the region main mode was growing
+  down through, so any main-mode frame deeper than 4 KiB occupied memory
+  the first interrupt would push onto — the opposite of what the comment
+  there claimed. The two are now adjacent reserved regions.
+- **The stack no longer grows down through low memory**, where the
+  firmware leaves the ATAGs and, on AArch64, the armstub8 spin table that
+  `multicore` starts cores 1-3 through.
+- **An I2C transfer can no longer hang the program.** Both transfer loops
+  polled `S` with no exit but `ERR` or `DONE`, and a slave that
+  acknowledges and then stops driving — one stretching the clock
+  indefinitely, a half-soldered part, a line held low — sets neither. The
+  loop was then infinite, and since this is a blocking driver it took
+  whatever else the program had to do with it: an executor, a network
+  stack, everything. Transfers are now bounded against the System Timer
+  (a fixed allowance plus a per-byte one) and report `Error::Timeout`.
+- **A short read no longer spins forever.** `read_one` waited for `DONE`
+  *and* a full buffer, so a transfer that completed having delivered
+  fewer bytes than `DLEN` asked for was waiting on a condition that had
+  already become unreachable. That case is now `Error::Incomplete`, which
+  carries both counts — how many bytes arrived is what says whether a
+  device is mute, truncating, or was simply over-read.
+- After either failure the controller is returned to a usable baseline
+  (FIFOs and status cleared) so a subsequent transfer starts from a known
+  state. Best-effort by necessity: the BSC has no documented abort and
+  owns the pins while enabled, so nothing here can walk a slave off a bus
+  it is still holding — that transfer times out too, which is survivable
+  where a hang wasn't.
 
 ## [0.2.0] - 2026-08-19
 
@@ -229,5 +579,8 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.5.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.5.0
+[0.4.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.4.0
+[0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.1.0

@@ -37,10 +37,15 @@
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("secondary64.s"));
 
-/// Must match `boot.s`'s `.equ IRQ_STACK_SIZE` -- both sides carve the
-/// same fixed region off the top of a core's stack for IRQ-mode use. Only
-/// meaningful on AArch32; AArch64 takes exceptions on the single SP_EL1
-/// and uses the whole stack.
+/// How much of a secondary core's [`Stack`] is carved off the top for
+/// IRQ-mode use, the rest going to main (SVC) mode.
+///
+/// Deliberately not the same number as core 0's `__irq_stack_size`: core
+/// 0's stacks are whole regions the linker script reserves, while this
+/// one is split out of a `Stack<BYTES>` the application declared and
+/// sized for its own work -- some examples pass 8 KiB. Only meaningful
+/// on AArch32; AArch64 takes exceptions on the single SP_EL1 and uses
+/// the whole stack.
 const IRQ_STACK_SIZE: usize = 0x1000;
 
 // ---- AArch32: ARM-local mailbox handoff ----------------------------------

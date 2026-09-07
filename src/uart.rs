@@ -6,85 +6,16 @@ mod asynch;
 pub use asynch::on_irq;
 use core::fmt;
 
-/// GPIO peripheral base address, matching `bcm2837_lpa::GPIO::PTR`.
-/// Kept in sync manually since the registers below aren't in that
-/// PAC's SVD at all.
-#[cfg(not(feature = "bcm2711"))]
-const GPIO_BASE: usize = 0x3f20_0000;
-/// GPIO Pull-up/down Enable (BCM2835 ARM Peripherals datasheet §6.1).
-#[cfg(not(feature = "bcm2711"))]
-const GPPUD: *mut u32 = (GPIO_BASE + 0x94) as *mut u32;
-/// GPIO Pull-up/down Enable Clock 0, covers GPIO0-31.
-#[cfg(not(feature = "bcm2711"))]
-const GPPUDCLK0: *mut u32 = (GPIO_BASE + 0x98) as *mut u32;
-
-/// Disables the pull resistor on the given GPIO0-31 pins.
+/// Disables the pull resistor on the GPIO0-31 pins selected by
+/// `pin_mask` (bank 0, whose bits map one-to-one to GPIO0-31 — the only
+/// pins this driver muxes: GPIO14/15 for the console route, GPIO30-33
+/// for the Bluetooth route).
 ///
-/// BCM2836/2837 hardware uses the legacy GPPUD/GPPUDCLK0 two-register
-/// dance (not the BCM2711-style `GPIO_PUP_PDN_CNTRL_REG0..3` scheme),
-/// but `bcm2837-lpa`'s SVD only models the BCM2711 version — those
-/// registers aren't present on this hardware at all. So this pokes the
-/// known physical addresses directly instead of going through the PAC.
-///
-/// `pin_mask` selects the affected pins in `GPPUDCLK0`, whose bits map
-/// one-to-one to GPIO0-31 — the only pins this UART driver muxes
-/// (GPIO14/15 for the console route, GPIO30-33 for the Bluetooth route).
-/// `gpio` is unused on this side (the legacy registers aren't reachable
-/// through it) — taken anyway so both branches share one call site; see
-/// the `bcm2711` branch below for the side that actually needs it.
-#[cfg(not(feature = "bcm2711"))]
-fn disable_pull(_gpio: &GPIO, pin_mask: u32) {
-    unsafe {
-        core::ptr::write_volatile(GPPUD, 0);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUDCLK0, pin_mask);
-        spin_delay(150);
-        core::ptr::write_volatile(GPPUD, 0);
-        core::ptr::write_volatile(GPPUDCLK0, 0);
-    }
-}
-
-/// BCM2711 counterpart of the `disable_pull` above: same effect (no
-/// pull resistor) through the real `GPIO_PUP_PDN_CNTRL_REG0`/`_REG1`
-/// scheme that replaced GPPUD/GPPUDCLK0 on this chip — which, unlike
-/// BCM2837's, `bcm2711-lpa`'s SVD models correctly (confirmed by
-/// diffing the two crates' generated source), so this goes through the
-/// PAC instead of poking raw addresses.
-///
-/// Only implemented for the pins this driver actually muxes (GPIO14/15,
-/// GPIO30/31 — see `pin_mask`'s doc above), not generalized to all of
-/// GPIO0-31: nothing else calls this today, and a real new caller needs
-/// its own register (`_REG0` for pins 0-15, `_REG1` for 16-31) picked
-/// deliberately, not a guessed extension of this match.
-#[cfg(feature = "bcm2711")]
+/// The register access itself lives in [`crate::gpio`], which is where
+/// the BCM2836/2837-vs-BCM2711 split is handled; this exists only to
+/// name what the UART wants of it.
 fn disable_pull(gpio: &GPIO, pin_mask: u32) {
-    for pin in [14u8, 15, 30, 31] {
-        if pin_mask & (1 << pin) == 0 {
-            continue;
-        }
-        match pin {
-            14 => gpio
-                .gpio_pup_pdn_cntrl_reg0()
-                .modify(|_, w| w.gpio_pup_pdn_cntrl14().none()),
-            15 => gpio
-                .gpio_pup_pdn_cntrl_reg0()
-                .modify(|_, w| w.gpio_pup_pdn_cntrl15().none()),
-            30 => gpio
-                .gpio_pup_pdn_cntrl_reg1()
-                .modify(|_, w| w.gpio_pup_pdn_cntrl30().none()),
-            31 => gpio
-                .gpio_pup_pdn_cntrl_reg1()
-                .modify(|_, w| w.gpio_pup_pdn_cntrl31().none()),
-            _ => unreachable!("disable_pull: pin {pin} not wired up (see this fn's doc)"),
-        }
-    }
-}
-
-#[cfg(not(feature = "bcm2711"))]
-fn spin_delay(cycles: u32) {
-    for _ in 0..cycles {
-        unsafe { core::arch::asm!("nop") };
-    }
+    crate::gpio::set_pull_bank(gpio, 0, pin_mask, crate::gpio::Pull::None);
 }
 
 /// Blocking driver for UART0 (PL011).

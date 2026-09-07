@@ -61,6 +61,12 @@
 //! call takes effect on the very next period with nothing to drain
 //! first.
 //!
+//! What it does *not* mean is that a duty write is free of timing
+//! constraints. Two of them closer together than a couple of PWM clock
+//! cycles can both be lost, leaving the channel on the duty that
+//! preceded them — so `set_duty_cycle` holds off after each write. See
+//! `SetDutyCycle::set_duty_cycle` for the measurement and the cost.
+//!
 //! ## Enable sequence
 //!
 //! `channel1`/`channel2` write `CTL` twice — the exact same field
@@ -115,6 +121,7 @@
 //! [`Channel2Pin::Gpio45`](crate::pwm::Channel2Pin::Gpio45)) to recover a
 //! clean signal.
 
+use crate::clock_manager;
 use crate::pac::{CM_PWM, GPIO, PWM0};
 
 /// The DMA DREQ (pacing) number for the PWM controller, passed to
@@ -186,9 +193,50 @@ pub enum Channel2Pin {
 /// channels.
 pub struct Pwm {
     pwm0: PWM0,
+    /// What [`Self::init`] actually programmed the PWM clock to, after
+    /// clamping. Carried so each channel can size the settling delay its
+    /// duty writes need.
+    clock_hz: u32,
 }
 
 impl Pwm {
+    /// The largest divisor [`Self::init`] can actually program, since
+    /// `CM_PWM`'s `DIVI` field is 12 bits.
+    ///
+    /// Public so a caller can check its own constant against it — a
+    /// `const` assertion catches at compile time what otherwise shows up as
+    /// a peripheral running at an inexplicable rate.
+    pub const MAX_CLOCK_DIVISOR: u16 = clock_manager::MAX_DIVISOR;
+
+    /// The slowest PWM clock available, at [`Self::MAX_CLOCK_DIVISOR`].
+    pub const MIN_CLOCK_HZ: u32 = clock_manager::MIN_CLOCK_HZ;
+
+    /// The PWM clock rate [`Self::init`] produces for `clock_divisor`.
+    ///
+    /// Applies the same clamp `init` does, so this reports what the hardware
+    /// will run at rather than echoing back what was asked for. A caller that
+    /// logs this next to its intended rate sees an out-of-range divisor
+    /// immediately; one that trusts its own arithmetic does not.
+    ///
+    /// Nominal, like everything derived from `PLLD_per` — see this module's
+    /// "Clock" section.
+    pub const fn clock_hz(clock_divisor: u16) -> u32 {
+        clock_manager::clock_hz(clock_divisor)
+    }
+
+    /// The [`Self::init`] divisor giving (nominally) a `target_hz` PWM clock,
+    /// clamped to what the hardware can hold.
+    ///
+    /// The counterpart to [`Self::audio_clock_divisor`] for callers not using
+    /// the audio path: driving a buzzer or an LED wants a PWM clock chosen
+    /// against the output frequency, and computing
+    /// `500_000_000 / target_hz` by hand is where an out-of-range divisor
+    /// comes from. Integer division makes the result approximate; pair it
+    /// with [`Self::clock_hz`] to see what it really works out to.
+    pub const fn divisor_for(target_hz: u32) -> u16 {
+        clock_manager::divisor_for(target_hz)
+    }
+
     /// Configures `CM_PWM` to run from `PLLD_per` at (nominally)
     /// `500_000_000 / clock_divisor` Hz (the fractional divider stays
     /// 0 — integer division only) and enables it — see this module's
@@ -198,6 +246,19 @@ impl Pwm {
     /// a caller may only want one channel at all, so pin muxing and
     /// channel setup are deferred to [`Self::channel1`]/
     /// [`Self::channel2`].
+    ///
+    /// **`clock_divisor` is clamped to [`Self::MAX_CLOCK_DIVISOR`]**, which
+    /// is 4095 and not 65535: the `DIVI` field is 12 bits wide, and this
+    /// parameter is a `u16` only because that is the smallest type that
+    /// holds it. Passing more than the field can take used to program the
+    /// masked low 12 bits instead — a divisor of 12500 became 212, running
+    /// the clock 59 times too fast with every register reading back exactly
+    /// as written. Clamping keeps the error bounded and in one direction;
+    /// [`Self::clock_hz`] reports what will actually be programmed, and
+    /// comparing it against the intended rate is how a caller checks.
+    ///
+    /// The reachable range is therefore roughly 122 kHz to 500 MHz. Nothing
+    /// slower is available from the integer divider.
     ///
     /// Kills any clock already running on `CM_PWM` first — the
     /// datasheet requires disabling the generator before changing its
@@ -217,7 +278,7 @@ impl Pwm {
 
         unsafe {
             cm_pwm.div().write(|w| {
-                w.divi().bits(clock_divisor);
+                w.divi().bits(clock_manager::clamp_divisor(clock_divisor));
                 w.divf().bits(0);
                 w.passwd().passwd()
             });
@@ -236,7 +297,10 @@ impl Pwm {
         });
         while cm_pwm.cs().read().busy().bit_is_clear() {}
 
-        Self { pwm0 }
+        Self {
+            pwm0,
+            clock_hz: Self::clock_hz(clock_divisor),
+        }
     }
 
     /// Routes `pin` to channel 1 (ALT function `PWM0_0` either way —
@@ -280,7 +344,10 @@ impl Pwm {
             w.pwen1().set_bit()
         });
 
-        Channel1 { pwm0: &self.pwm0 }
+        Channel1 {
+            pwm0: &self.pwm0,
+            clock_hz: self.clock_hz,
+        }
     }
 
     /// Channel 2 counterpart of [`Self::channel1`] (ALT function
@@ -306,7 +373,10 @@ impl Pwm {
             w.pwen2().set_bit()
         });
 
-        Channel2 { pwm0: &self.pwm0 }
+        Channel2 {
+            pwm0: &self.pwm0,
+            clock_hz: self.clock_hz,
+        }
     }
 
     /// Configures both channels for DMA-fed stereo audio playback and
@@ -431,21 +501,29 @@ impl Pwm {
     /// range)`, using `PLLD_per`'s nominal 500MHz.
     ///
     /// Integer division makes the result — and therefore the real sample
-    /// rate — approximate, not exact (see the "Clock" section). Clamped to
-    /// at least 1 so a too-high `sample_rate * range` product can't yield a
-    /// zero divisor.
+    /// rate — approximate, not exact (see the "Clock" section).
+    ///
+    /// Clamped to the range [`Self::init`] can program, `1` to
+    /// [`Self::MAX_CLOCK_DIVISOR`]. The upper end matters: this used to clamp
+    /// to `u16::MAX`, sixteen times what the 12-bit `DIVI` field can hold, so
+    /// a low enough `sample_rate * range` product returned a divisor that was
+    /// then silently masked down to something unrelated. The floor keeps a
+    /// too-high product from yielding a zero divisor.
+    ///
+    /// The clamp bites when `sample_rate * range` falls below
+    /// [`Self::MIN_CLOCK_HZ`] — around 122 kHz, which for any plausible
+    /// `range` is far below audio rates. Pair this with [`Self::clock_hz`] to
+    /// see the rate that will actually result.
     pub const fn audio_clock_divisor(sample_rate: u32, range: u16) -> u16 {
         let product = sample_rate as u64 * range as u64;
         if product == 0 {
-            return 1;
+            return clock_manager::MIN_DIVISOR;
         }
-        let divisor = 500_000_000u64 / product;
-        if divisor < 1 {
-            1
-        } else if divisor > u16::MAX as u64 {
-            u16::MAX
+        let divisor = clock_manager::SOURCE_HZ as u64 / product;
+        if divisor > u16::MAX as u64 {
+            clock_manager::MAX_DIVISOR
         } else {
-            divisor as u16
+            clock_manager::clamp_divisor(divisor as u16)
         }
     }
 }
@@ -458,6 +536,82 @@ impl Pwm {
 /// true minimum required delay hasn't been characterized.
 fn settle_delay() {
     for _ in 0..20_000_000u32 {
+        unsafe { core::arch::asm!("nop") };
+    }
+}
+
+/// How many PWM clock cycles [`duty_settle`] holds off for after a duty
+/// write.
+///
+/// Two, which is past the last failure measured at either clock and matches
+/// the figure Linux uses for the analogous hazard on this SoC's SD host
+/// controller — it works around the Arasan block losing "successive writes to
+/// registers that are within two SD-card clock cycles of each other" with a
+/// delay of its own.
+const DUTY_SETTLE_CYCLES: u32 = 2;
+
+/// Loop iterations per second assumed for [`duty_settle`]'s busy-wait.
+///
+/// Deliberately higher than any Pi core can actually manage, because the
+/// error is one-directional: overestimating makes the wait longer than needed,
+/// which costs microseconds, and underestimating makes it too short, which
+/// silently reintroduces the fault. Two billion is roughly one iteration per
+/// cycle on the fastest part this crate supports, and the loop is three
+/// instructions.
+const DUTY_SETTLE_LOOP_HZ: u64 = 2_000_000_000;
+
+/// Busy-waits [`DUTY_SETTLE_CYCLES`] PWM clock cycles at `clock_hz`.
+///
+/// # Why a duty write needs a delay after it
+///
+/// **Two `DAT` writes closer together than a couple of PWM clock cycles can
+/// both be lost**, leaving the channel emitting the duty that was in force
+/// before either of them. Not the second write losing to the first, and not a
+/// value that takes effect a period late: both are discarded and the channel
+/// carries on with the older setting, while `DAT` reads back as the value that
+/// was written.
+///
+/// Measured on a Pi 3 by sampling the output pin, as failures out of eight
+/// trials at each gap between two writes:
+///
+/// ```text
+/// gap      125kHz clock (tick 8us)   500kHz clock (tick 2us)
+/// 0us      7/8                       6/8
+/// 1us      7/8                       3/8
+/// 2us      6/8                       1/8
+/// 3us      5/8                       0/8
+/// 4us      5/8                       0/8
+/// 6us      2/8                       0/8
+/// 8us      0/8                       0/8
+/// ```
+///
+/// Three things in that shape decide the fix. It is **probabilistic** near the
+/// boundary — single-trial sweeps produced clean-looking thresholds that
+/// disagreed run to run, because whether a write survives depends on where it
+/// lands within the PWM clock cycle. It **scales with the clock** rather than
+/// being a fixed time, which is why this takes `clock_hz` instead of waiting a
+/// constant. And the rate **decays rather than falling off a cliff**, so the
+/// first gap with no observed failures is not a safe place to sit;
+/// [`DUTY_SETTLE_CYCLES`] is past the last failure at both clocks.
+///
+/// # Blind, like [`settle_delay`]
+///
+/// There is no time base here to wait against — `Pwm` holds no `Timer` — so
+/// this is a nop loop sized from a deliberately pessimistic guess at the CPU's
+/// rate. It waits too long rather than too little, by up to a few times, which
+/// costs microseconds; the alternative is threading a timer through
+/// [`Pwm::init`] and every caller, to gain precision on a delay whose required
+/// value is itself only known to within a factor of two.
+///
+/// The cost scales the right way. At the ~122 kHz floor of the clock range
+/// this is about 16 µs per duty write, and at a megahertz-range clock it is
+/// well under a microsecond — so the callers who pay most are the ones
+/// changing duty least often. It is not on the audio path, which streams
+/// through the FIFO rather than through `DAT` — see [`Pwm::audio`].
+fn duty_settle(clock_hz: u32) {
+    let iterations =
+        u64::from(DUTY_SETTLE_CYCLES) * DUTY_SETTLE_LOOP_HZ / u64::from(clock_hz.max(1));
+    for _ in 0..iterations {
         unsafe { core::arch::asm!("nop") };
     }
 }
@@ -500,6 +654,8 @@ fn route_channel2_pin(gpio: &GPIO, pin: Channel2Pin) {
 /// [`Pwm::channel1`].
 pub struct Channel1<'a> {
     pwm0: &'a PWM0,
+    /// The programmed PWM clock, for sizing the post-write settling delay.
+    clock_hz: u32,
 }
 
 impl embedded_hal::pwm::ErrorType for Channel1<'_> {
@@ -516,11 +672,26 @@ impl embedded_hal::pwm::SetDutyCycle for Channel1<'_> {
         self.pwm0.rng1().read().bits() as u16
     }
 
-    /// Writes `DAT1` directly.
+    /// Writes `DAT1` directly, then holds off for a couple of PWM clock
+    /// cycles before returning.
+    ///
+    /// The delay is not optional and it is not padding. **Two duty writes
+    /// closer together than that can both be lost**, leaving the channel
+    /// driving the duty that was in force before either of them, while `DAT`
+    /// reads back as the value written. Waiting after the write rather than
+    /// before it makes the guarantee stateless — the next write is separated
+    /// whatever it is — and means the last write of a sequence has settled
+    /// before the caller moves on, which is the case that first exposed this.
+    ///
+    /// The cost is bounded by the clock: about 16 µs per write at the bottom
+    /// of the clock range, and well under a microsecond in the megahertz
+    /// range. Audio is unaffected, streaming through the FIFO rather than
+    /// `DAT` — see [`Pwm::audio`].
     fn set_duty_cycle(&mut self, duty: u16) -> Result<(), Self::Error> {
         unsafe {
             self.pwm0.dat1().write(|w| w.bits(duty as u32));
         }
+        duty_settle(self.clock_hz);
         Ok(())
     }
 }
@@ -529,6 +700,8 @@ impl embedded_hal::pwm::SetDutyCycle for Channel1<'_> {
 /// [`Pwm::channel2`].
 pub struct Channel2<'a> {
     pwm0: &'a PWM0,
+    /// The programmed PWM clock, for sizing the post-write settling delay.
+    clock_hz: u32,
 }
 
 impl embedded_hal::pwm::ErrorType for Channel2<'_> {
@@ -542,11 +715,12 @@ impl embedded_hal::pwm::SetDutyCycle for Channel2<'_> {
         self.pwm0.rng2().read().bits() as u16
     }
 
-    /// See [`Channel1`]'s `set_duty_cycle`.
+    /// See [`Channel1`]'s `set_duty_cycle`, including the settling delay.
     fn set_duty_cycle(&mut self, duty: u16) -> Result<(), Self::Error> {
         unsafe {
             self.pwm0.dat2().write(|w| w.bits(duty as u32));
         }
+        duty_settle(self.clock_hz);
         Ok(())
     }
 }

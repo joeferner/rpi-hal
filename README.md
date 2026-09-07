@@ -15,17 +15,11 @@ Supported Devices:
 
 - Pi 2 Model B rev 1.1 (BCM2836, Cortex-A7)
 - Pi 3 Model B v1.2 (BCM2837, Cortex-A53)
-- Pi 4 (BCM2711, Cortex-A72) — **preliminary**: the `bcm2711` feature
-  selects the relocated peripheral memory map and PAC. HW-verified on
-  real Pi 4 hardware in both 32-bit (`armv7a-none-eabi`) and 64-bit
-  (`aarch64-unknown-none-softfloat`) builds: boot/GPIO/System Timer
-  (`blink`), the MMU identity map and mailbox coherency
-  (`aarch64_smoke`), the UART console, and the SD card via the
-  BCM2711-specific `EMMC2` controller (`sd_read`, `rpi-loader`'s
-  `sd-list`/`sd-read`/etc.). Most other drivers are still untested and
-  there is no interrupt controller at all yet — see
-  [issue #29](https://github.com/joeferner/rpi-hal/issues/29) for exactly
-  what's verified and the bring-up plan for the rest.
+- Pi 4 (BCM2711, Cortex-A72) — **preliminary**
+
+Which drivers have actually been exercised on which board, and what the
+newer chips have that this crate does not drive yet, is tracked in
+[docs/compatibility.md](docs/compatibility.md).
 
 Building for any of these requires picking exactly one of the
 `bcm2837`/`bcm2711` features (see "Features" below) — neither is a
@@ -135,22 +129,97 @@ implementations where applicable, and all verified on real hardware:
   over all 54 pins, with `embedded_hal::digital` traits. Inputs also
   support edge/level interrupts (`enable_interrupt(Trigger)` +
   `clear_interrupt`, routed via `Lic::enable_gpio_irq`) and blocking
-  `wait_for_high`/`wait_for_low` — see `examples/gpio_irq_button.rs`.
+  `wait_for_high`/`wait_for_low` — see `examples/gpio_irq_button.rs`. The
+  internal pull resistors are configurable per pin (`set_pull(Pull)`,
+  `into_pull_up_input`/`into_pull_down_input`/`into_floating_input`), so a
+  button needs no external resistor — see `examples/gpio_pull.rs`. Note
+  that no pin arrives floating: each powers up with the pull its datasheet
+  pin-table entry gives it, which the boot firmware may then change, and
+  nothing but these calls touches it.
 - **UART0** (`src/uart.rs`): blocking read/write plus interrupt-driven
   RX (`enable_rx_irq`/`try_read_byte`), `embedded_io::Read`/`Write`.
 - **SPI0** (`src/spi.rs`): `embedded_hal::spi::SpiBus`, both
   hardware-driven chip-selects (`ChipSelect::Cs0`/`Cs1`) or
   externally-managed (`ChipSelect::None`). Verified against a real
   independent STM32 fixture (see `bench-link`, below), not just a
-  MOSI→MISO loopback.
+  MOSI→MISO loopback. `init` takes a raw `CDIV`; `spi::divider_for`
+  turns a target SCLK into one — see the note under I2C below, which
+  applies to both buses.
 - **I2C** (`src/i2c.rs`): `embedded_hal::i2c::I2c`, master-only
   (matches this hardware), generic over the BSC instance. `I2c<BSC1>`
   drives I2C1 on the 40-pin header (GPIO2/3), verified against three real
-  devices/checks: a DS1307 RTC, an SH1106 OLED, and a full bus scan (see
-  `examples/ds1307_rtc.rs`/`sh1106_oled.rs`/`i2c_scan.rs`). `I2c<BSC0>`
-  drives BSC0 on GPIO44/45 (ALT1) — the Pi 3 camera/display connector bus,
-  *not* BSC0's GPIO0/1 HAT-EEPROM routing — used to read an OV5647 camera
-  sensor's chip ID (see `examples/camera_probe.rs`).
+  devices/checks: a DS1307 RTC, an SH1106 OLED, and a full bus scan.
+  Examples on that bus: `examples/i2c_scan.rs`, `i2c_sh1106_oled.rs`,
+  `i2c_sht41.rs` (an SHT41 temperature/humidity sensor) and
+  `i2c_ads1115.rs` (an ADS1115 16-bit ADC).
+  `I2c<BSC0>` drives BSC0 on either of its two routings, one controller
+  and two pin pairs: `init` takes GPIO44/45 (ALT1), the Pi 3
+  camera/display connector bus, used to read an OV5647 camera sensor's
+  chip ID (see `examples/camera_probe.rs`); `init_id` takes GPIO0/1
+  (ALT0), `ID_SD`/`ID_SC` on header pins 27/28 — the HAT ID EEPROM bus,
+  where a board's identity and per-unit calibration live (see
+  `examples/i2c_hat_eeprom.rs`). Only one of the two can be live at a
+  time, which is why the choice is a constructor rather than an argument.
+
+  Despite the "reserved for HAT ID EEPROM detection" warning those pins
+  carry in Raspberry Pi's own documentation, a bare-metal program is free
+  to take them: the firmware reads the EEPROM early in boot, before the
+  kernel image runs, and then leaves the pins alone, and the board fits
+  1.8k pull-ups on both lines. What the warning still means is that a
+  fitted HAT may expect to be the only thing on that bus.
+
+  Both buses take a raw divider rather than a frequency, because the
+  core clock they divide is not a constant: it moves with `config.txt`
+  and with the firmware's own scaling. The reset default of 1500 is
+  called 100kHz on the strength of the datasheet's nominal 150MHz core,
+  and is 166kHz on a board running 250MHz. `i2c::divider_for(core_hz,
+  target_hz)` and `spi::divider_for` do the conversion, including the
+  rounding these registers need — always upwards, so the bus never
+  clocks faster than asked, since what a device states is a maximum:
+
+  ```rust
+  let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+  let i2c = I2c::init(&gpio, bsc1, i2c::divider_for(core_hz, 100_000), &timer);
+  ```
+
+  The mailbox query stays in the caller's hands rather than being folded
+  into `init`: it can fail, it costs a round trip to the GPU, and an
+  application that brings up several buses wants to ask once.
+
+  With the `async` feature the same type also implements
+  `embedded_hal_async::i2c::I2c`, parking on the controller's
+  `DONE`/`TXW`/`RXR` interrupts instead of spinning — the millisecond a
+  six-byte read at 100kHz costs goes to the executor rather than to a
+  polling loop. It needs the usual wiring: `Lic::enable_i2c_irq`, the CPU
+  mask, and `i2c::on_irq` called from `__irq_handler`. Timeouts work
+  differently there and deliberately: wrap the future in your executor's
+  own (`embassy_time::with_timeout`), which puts the number where the
+  application's judgement is. Dropping a transfer part-way is safe —
+  the controller is left masked, cleared and ready for the next one.
+
+  `init` takes a `&Timer` because every blocking transfer is bounded
+  against the System Timer. I2C is the one bus here where a *foreign* device decides
+  whether a transfer finishes: a slave that acknowledges its address and
+  then stops driving sets neither `S.ERR` nor `S.DONE`, so an unbounded
+  poll never returns and, this being a blocking driver, takes the rest of
+  the program (an executor, a network stack) with it. On expiry the
+  caller gets `Error::Timeout`, or `Error::Incomplete { received,
+  requested }` when the transfer did finish but the slave delivered fewer
+  bytes than were asked for — how many arrived is what distinguishes a
+  mute device from a truncating one. The controller is then returned to a
+  usable baseline on a best-effort basis (FIFOs and status cleared);
+  nothing can make a slave that is holding SDA let go, so a genuinely
+  stuck bus simply times out again, which is survivable where a hang
+  isn't.
+
+  One thing a bus scan can't tell you: `examples/i2c_scan.rs` probes with
+  a 1-byte read (`DLEN=0` isn't a real transaction on this hardware — see
+  `i2c::Error::ZeroLengthUnsupported`), so it enumerates what answers
+  *reads*, which is not the same as what is on the bus. A device that
+  only answers a read while it has a result pending — every Sensirion
+  SHT4x, among others — is reported absent while happily acknowledging
+  commands. `i2cdetect` finds those because it probes with a zero-length
+  write, which the BSC cannot issue at all.
 - **System Timer** (`src/timer.rs`): free-running microsecond counter,
   `delay_us`/`delay_ms`, `embedded_hal::delay::DelayNs`.
 - **ARM generic timer** (`src/generic_timer.rs`): the per-core architected
@@ -189,9 +258,19 @@ implementations where applicable, and all verified on real hardware:
   below for how to supply your own table instead.
 - **Mailbox / 2D framebuffer** (`src/mailbox.rs`): the VideoCore
   property-interface RPC channel — clock rates, board/firmware info,
-  ARM/VC memory split, power-domain control, and a mailbox-allocated
+  ARM/VC memory split, power-domain control, die temperature and
+  throttling status, and a mailbox-allocated
   scanout framebuffer (`Framebuffer::flush()` writes back cache lines
-  before VideoCore reads them). Tear-free output is available too:
+  before VideoCore reads them).
+
+  `temperature_millicelsius` is the SoC's own thermometer (`58_000` is
+  58°C), and it is worth reading with `throttled` beside it: the
+  firmware caps the ARM clock as the die heats, so thermal throttling
+  reaches a bare-metal program as its code inexplicably getting slower
+  rather than as any kind of event. `throttled`'s word has two halves —
+  bits 0-3 for what is happening now, bits 16-19 sticky since boot,
+  which is the only way to see an under-voltage dip that has already
+  passed. `examples/soc_temperature.rs` prints all three once a second. Tear-free output is available too:
   `allocate_framebuffer_paged` asks for a buffer several screens tall and
   `set_virtual_offset` brings a finished page on screen in one step, so
   nothing is ever written to the page being scanned out (there is also
@@ -227,14 +306,46 @@ implementations where applicable, and all verified on real hardware:
   sector and checking its `0x55AA` signature (`examples/sd_read.rs`), and
   by cross-checking the polled and DMA multi-block read paths against each
   other (`examples/sd_multi_block.rs`). Files on the boot FAT partition
-  can be read on top of this through the `embedded-sdmmc` crate: the
-  `embedded-sdmmc` feature adds `sd::SdCard`, a `BlockDevice` adapter over
-  the driver (`examples/sd_fat_read.rs` mounts the boot partition and
-  reads files); both `read` and `write` are wired to the driver's polled
-  multi-block paths (`examples/sd_fat_write.rs` writes a random value to a
-  scratch `TEST.TXT` and reads it back to verify the round-trip).
-  Card-detect (GPIO47) is not implemented yet
-  ([issue #14](https://github.com/joeferner/rpi-hal/issues/14)).
+  can be read on top of this through either of two FAT crates, each behind
+  a feature adding its own `BlockDevice` adapter over the driver: the
+  `embedded-sdmmc` feature adds `sd::SdCard` (`examples/sd_fat_read.rs`
+  mounts the boot partition and reads files; `examples/sd_fat_write.rs`
+  writes a random value to a scratch `TEST.TXT` and reads it back to verify
+  the round-trip), and the `resident-fat` feature adds `sd::SdBlockDevice`
+  (`examples/sd_resident_fat_read.rs`). Both wire `read` and `write` to the
+  driver's polled multi-block paths; the difference is that `resident-fat`
+  transfers byte slices spanning a whole run, which reach the driver with no
+  staging buffer and no copy in between.
+
+  Card presence is discovered rather than sensed, because no Pi wires a
+  card-detect line anywhere a driver could read it — GPIO47, the pin
+  usually named for the job, is the ACT LED on a Pi 1/2, the PMIC's I²C
+  data line on a Pi 3 and part of the Ethernet PHY's RGMII interface on a
+  Pi 4, and the controller doesn't implement the SDHCI present-state bits
+  either. So an empty slot is what `Sd::init` reports (`Error::NoCard`)
+  after `CMD8` goes unanswered and a following `CMD55` does too, the
+  second command being what keeps an SD v1.x card — which predates `CMD8`
+  and doesn't answer it — from being called absent. About 40ms, nearly
+  all of it the controller's power-and-clock bring-up rather than the
+  wait itself. `examples/sd_presence.rs` shows it both ways, card in and
+  card out.
+
+  With the `async` feature every one of those transfer methods gains a
+  `_async` twin (`read_blocks_async`, `write_blocks_dma_async`, …) that
+  parks on the controller's interrupt where the blocking one spins. The
+  wait that pays for it is the `DATA_DONE` closing a write: it only
+  arrives once the card has programmed a whole internal erase block, so a
+  blocking write hands the CPU nothing back for milliseconds at a time. It
+  needs the usual wiring — `Lic::enable_emmc_irq`, the CPU mask, and
+  `sd::on_irq` called from `__irq_handler` — and takes `&mut Sd` where the
+  blocking methods take `&self`, since one waker slot cannot serve two
+  transfers at once. Timeouts belong to the caller
+  (`embassy_time::with_timeout`); dropping a transfer part-way stops the
+  card and resets the controller's data circuit before the drop returns,
+  so the next transfer starts clean rather than reading the abandoned
+  one's leftovers. `examples/sd_async.rs` runs both paths against each
+  other and reports how much of each transfer the core spent idle.
+  BCM2836/7 only: routing the line needs the legacy interrupt controller.
 
   On BCM2711 (Pi 4), the physical SD slot is wired to a different
   controller entirely — `EMMC2`, not the classic `EMMC` — so `bcm2711`
@@ -609,8 +720,25 @@ has what's left.
   implementing `embedded-sdmmc`'s `BlockDevice` trait over the SD
   driver, so a FAT filesystem can be layered on the card (see
   `examples/sd_fat_read.rs`). Both `read` and `write` are wired to the
-  driver's single-block paths; the `TimeSource` a filesystem also needs
-  is left to the caller, since a real clock is application policy.
+  driver's polled multi-block paths, so a run of consecutive blocks costs
+  one command; the `TimeSource` a filesystem also needs is left to the
+  caller, since a real clock is application policy.
+- **`resident-fat`** (off by default): adds `sd::SdBlockDevice`, an
+  adapter implementing `resident-fat`'s `BlockDevice` trait over the same
+  driver (see `examples/sd_resident_fat_read.rs`). Alongside the
+  `embedded-sdmmc` adapter rather than instead of it — the two traits
+  differ in their unit of transfer, and which suits depends on the
+  filesystem above. `resident-fat` hands a device a plain `&[u8]`
+  spanning a whole run of consecutive blocks, which is already the shape
+  the driver's multi-block path wants, so the adapter splits it and hands
+  the pieces straight over: no staging buffer, no copy, and a transfer
+  limit of the controller's real 65535 blocks. Reaching `resident-fat`
+  through its own `embedded-sdmmc` bridge and `sd::SdCard` also works and
+  is the right route for a consumer already invested in that trait, but
+  it pays for the block newtype in both memory and copying. Note that
+  `resident-fat` uses `alloc`, so a binary enabling this feature must
+  register a `#[global_allocator]` — this crate neither has nor needs
+  one, and cannot supply it (see `examples/heap_alloc.rs`).
 - **`smoltcp`** (off by default): adds `usb::lan9514::Lan9514Phy`, an
   adapter implementing `smoltcp`'s `phy::Device` trait over the LAN9514
   Ethernet driver, so a TCP/IP stack can run over the on-board Ethernet
@@ -789,6 +917,67 @@ and invalidating it discards this core's own. `vchiq` is the caller; it is
 the same trade Linux makes by allocating the same region with
 `dma_alloc_coherent`.
 
+## The stack
+
+The linker script reserves the stack as a named region and the boot code
+points `sp` at it, so its size is a number you can read and change:
+
+| Symbol | Default | What it is |
+| --- | --- | --- |
+| `__stack_size` | 1 MiB | The main stack (SVC mode on AArch32, `SP_EL1` on AArch64). |
+| `__stack_slack` | 2 MiB | Reserved margin *below* the stack. An overflow walks into this before it can reach `.data`/`.rodata`/`.text`. |
+| `__irq_stack_size` | 64 KiB | AArch32 IRQ mode's banked stack. |
+| `__abt_stack_size` / `__und_stack_size` / `__fiq_stack_size` | 32 KiB each | AArch32 abort/undefined/FIQ modes, so a fault handler can be ordinary Rust. |
+
+Change any of them without editing the script, from the consumer's own
+`.cargo/config.toml`:
+
+```toml
+rustflags = ["-C", "link-arg=-Trpi-link.x",
+             "-C", "link-arg=--defsym=__stack_size=0x400000"]
+```
+
+None of this costs image bytes (the region is `NOLOAD`), and on a board
+with at least 1 GiB — every Pi this crate supports — a few MiB of
+address space is noise.
+
+It used to work the other way round: `sp` started at the load address
+and the stack was whatever sat below it, which meant 32 KiB on a 32-bit
+kernel at `0x8000` and 512 KiB on a 64-bit one at `0x80000` — a number
+nobody chose, differing 16-fold between the two architectures, and
+documented nowhere. A program that outgrew it took a data abort and
+parked silently.
+
+Which is the other half of this: **an overflow should be loud**.
+`__unhandled_exception` is weak (like `__irq_handler`), so an
+application can define its own and report the fault rather than go
+quiet:
+
+```rust
+#[no_mangle]
+pub extern "C" fn __unhandled_exception() {
+    // AArch64: ESR_EL1 (class) / FAR_EL1 (address) / ELR_EL1 (instruction).
+    // AArch32: CPSR mode says which exception; DFAR/DFSR or IFAR/IFSR say
+    // where and why.
+}
+```
+
+On AArch32 that handler runs in the exception's own mode on its own
+banked `sp`, which is why the boot code initializes all of them. On
+AArch64 it runs on the same `SP_EL1` the faulting code was using — so a
+handler that has to survive a stack overflow specifically should switch
+`sp` before doing real work.
+
+And to answer "how close am I?" from inside a running program,
+`stack::headroom()` reports the bytes left below `sp` (with
+`stack::bottom`/`top`/`size`/`pointer` alongside it). One line at
+startup is usually enough:
+
+```rust
+writeln!(uart, "sp {:#x}, {} KiB free", stack::pointer(),
+         stack::headroom().unwrap_or(0) / 1024)?;
+```
+
 ## Dynamic memory allocation (`alloc`)
 
 This crate is `#![no_std]` and defines **no** global allocator, by
@@ -811,10 +1000,9 @@ using the `alloc` crate (`Box`, `Vec`, `String`, `BTreeMap`, ...).
    sizes its heap correctly regardless of the board's RAM size or
    `gpu_mem` setting. The whole ARM region below the peripheral base is
    identity-mapped as cacheable Normal memory by the `mmu` feature (see
-   "Virtual memory" above), so it's all safe to hand out. The main stack
-   grows down from the load address (`_start`) — `0x8000` for a 32-bit
-   kernel7.img, `0x80000` for a 64-bit kernel8.img — below all of this, so
-   the two never collide.
+   "Virtual memory" above), so it's all safe to hand out. The stack is
+   reserved below `.bss` (see "The stack" above), so it sits outside this
+   region and the two never collide.
 3. Add `extern crate alloc;` to your binary. Nothing else is needed —
    `rustup`'s precompiled target libraries include `alloc`, so a stable
    build links it as soon as a `#[global_allocator]` exists. (This crate's

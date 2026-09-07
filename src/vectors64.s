@@ -57,7 +57,23 @@ __vectors:
     .align 7
     b       __unhandled_exception       // SError
 
-.global __unhandled_exception
+// Weak, for the same reason `__irq_handler` below is: a fault that
+// parks silently is indistinguishable from a hang in a driver, a
+// deadlock, or a wedged peripheral. A stack overflow is the common way
+// to get here -- it runs off the end of the region linker64.ld reserves
+// and takes a synchronous exception. An application that defines its
+// own `#[no_mangle] extern "C" fn __unhandled_exception()` overrides
+// this and can print what happened: `ESR_EL1` gives the exception class
+// and `FAR_EL1` the faulting address, with `ELR_EL1` the instruction.
+//
+// Every slot in the table above shares this one symbol, so an override
+// reads `ESR_EL1` to tell which exception it is. Unlike AArch32 there
+// are no banked stacks to prepare -- an override runs on the same
+// `SP_EL1` the faulting code was using, which is worth knowing if the
+// fault was a stack overflow: the report needs the room the overflow
+// just ran out of, so a handler that must survive that case should
+// switch `sp` itself before doing real work.
+.weak __unhandled_exception
 __unhandled_exception:
     wfe
     b       __unhandled_exception

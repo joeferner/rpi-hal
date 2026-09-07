@@ -99,7 +99,7 @@ pub extern "C" fn kmain() -> ! {
     // BSC0 on GPIO44/45 at ~100kHz (0x5dc = 1500 divider at the typical
     // core clock), the same conservative default the header-bus examples
     // use.
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc);
+    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
 
     let mut found = false;
     for sensor in &SENSORS {

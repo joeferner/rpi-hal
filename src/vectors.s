@@ -25,7 +25,23 @@ __vectors:
     ldr     pc, =__unhandled_exception    // FIQ (never unmasked)
 .ltorg
 
-.global __unhandled_exception
+// Weak, for the same reason `__irq_handler` below is: a fault that
+// parks silently is indistinguishable from a hang in a driver, a
+// deadlock, or a wedged peripheral. A stack overflow is the common way
+// to get here -- it runs off the end of the reserved region and takes a
+// data abort -- and finding that out has cost this project a debugging
+// session that ruled out three peripherals first. An application that
+// defines its own `#[no_mangle] extern "C" fn __unhandled_exception()`
+// overrides this and can print what happened: `lr` is the faulting
+// address (biased by the exception type), and `DFAR`/`DFSR` (data
+// abort) or `IFAR`/`IFSR` (prefetch abort) say where and why.
+//
+// Every slot in the table above shares this one symbol, so an override
+// has to read the current mode from `CPSR` to tell which exception it
+// is. `boot.s` gives ABT/UND/FIQ real stacks so that an override can be
+// an ordinary Rust function rather than something that has to avoid
+// pushing.
+.weak __unhandled_exception
 __unhandled_exception:
     wfe
     b       __unhandled_exception

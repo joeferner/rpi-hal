@@ -447,6 +447,101 @@ impl Channel {
         self.wait_blocking()
     }
 
+    /// Starts the transfer [`copy_from_peripheral`](Self::copy_from_peripheral)
+    /// performs, but returns a [`Transfer`] guard immediately instead of
+    /// blocking until the engine is done — so the caller can wait on
+    /// something better than a polling loop, which for a block device means
+    /// the peripheral's own transfer-complete interrupt.
+    ///
+    /// Everything about the transfer itself is the same, including the
+    /// cache handling and the alignment it asks for; what changes is
+    /// *when* the invalidate happens. It is deferred to the guard's
+    /// [`Drop`], because until the engine has finished, this core's cached
+    /// copy of `dest` is the only thing standing between the caller and a
+    /// half-written buffer. `dest` stays borrowed by the guard until then,
+    /// so there is no way to read it early.
+    ///
+    /// Returns [`Error::TooLong`] if `dest` exceeds the channel's length
+    /// limit; an empty `dest` returns an already-complete guard. Poll
+    /// [`Transfer::is_complete`] for the end of the transfer and
+    /// [`Transfer::is_error`] for whether it got there cleanly — the
+    /// guard reports nothing by itself, and dropping it early halts the
+    /// engine mid-transfer.
+    pub fn start_from_peripheral<'a>(
+        &'a mut self,
+        dest: &'a mut [u8],
+        dreq: u8,
+        src_bus: u32,
+    ) -> Result<Transfer<'a>, Error> {
+        let len = dest.len();
+        if len == 0 {
+            return Ok(Transfer {
+                channel: self,
+                invalidate: None,
+            });
+        }
+        if len > self.max_len() {
+            return Err(Error::TooLong);
+        }
+
+        let dest_phys = dest.as_mut_ptr() as usize as u32;
+        cache::clean_range(dest_phys, len);
+
+        self.cb[0] = peripheral_read_cb(src_bus, len as u32, dreq, to_bus(dest_phys));
+        let cb_phys = (&self.cb[0] as *const ControlBlock) as usize as u32;
+        cache::clean_range(cb_phys, core::mem::size_of::<ControlBlock>());
+
+        self.start(to_bus(cb_phys));
+        Ok(Transfer {
+            channel: self,
+            invalidate: Some((dest_phys, len)),
+        })
+    }
+
+    /// Starts the transfer [`copy_to_peripheral`](Self::copy_to_peripheral)
+    /// performs, but returns a [`Transfer`] guard immediately instead of
+    /// blocking until the engine is done — the write-side mirror of
+    /// [`start_from_peripheral`](Self::start_from_peripheral), and the
+    /// byte-slice, one-shot counterpart of
+    /// [`write_peripheral`](Self::write_peripheral) (which takes words and
+    /// can loop, for audio).
+    ///
+    /// `src` is cleaned before the engine starts and stays borrowed by the
+    /// guard, so it cannot be modified or freed while the engine may still
+    /// be reading it. Returns [`Error::TooLong`] if `src` exceeds the
+    /// channel's length limit; an empty `src` returns an already-complete
+    /// guard.
+    pub fn start_to_peripheral<'a>(
+        &'a mut self,
+        src: &'a [u8],
+        dreq: u8,
+        dest_bus: u32,
+    ) -> Result<Transfer<'a>, Error> {
+        let len = src.len();
+        if len == 0 {
+            return Ok(Transfer {
+                channel: self,
+                invalidate: None,
+            });
+        }
+        if len > self.max_len() {
+            return Err(Error::TooLong);
+        }
+
+        let src_phys = src.as_ptr() as usize as u32;
+        cache::clean_range(src_phys, len);
+
+        self.cb[0] = peripheral_write_cb(to_bus(src_phys), len as u32, dreq, dest_bus, 0);
+        let cb_phys = (&self.cb[0] as *const ControlBlock) as usize as u32;
+        cache::clean_range(cb_phys, core::mem::size_of::<ControlBlock>());
+
+        self.start(to_bus(cb_phys));
+        Ok(Transfer {
+            channel: self,
+            invalidate: None,
+        })
+    }
+
     /// Blocks until the channel drops `CS.ACTIVE` (the control-block chain
     /// completed), returning [`Error::Transfer`] if it finished with
     /// `CS.ERROR` or a debug-register error flag set. Shared by the blocking
@@ -505,7 +600,10 @@ impl Channel {
     ) -> Result<Transfer<'a>, Error> {
         let len = core::mem::size_of_val(src);
         if len == 0 {
-            return Ok(Transfer { channel: self });
+            return Ok(Transfer {
+                channel: self,
+                invalidate: None,
+            });
         }
         if len > self.max_len() {
             return Err(Error::TooLong);
@@ -532,7 +630,10 @@ impl Channel {
         cache::clean_range(cb_phys, core::mem::size_of::<ControlBlock>());
         self.start(cb_bus);
 
-        Ok(Transfer { channel: self })
+        Ok(Transfer {
+            channel: self,
+            invalidate: None,
+        })
     }
 
     /// Starts a double-buffered ("ping-pong") memory-to-peripheral stream
@@ -654,17 +755,27 @@ impl Channel {
 }
 
 /// A running background transfer started by
-/// [`Channel::write_peripheral`], holding the channel and the source
-/// buffer borrowed for as long as the engine may still be reading them.
+/// [`Channel::write_peripheral`], [`Channel::start_to_peripheral`] or
+/// [`Channel::start_from_peripheral`], holding the channel and the buffer
+/// borrowed for as long as the engine may still be touching them.
 ///
 /// Dropping the guard stops the transfer (see [`Drop`]), so a cyclic
 /// transfer keeps playing exactly as long as the guard is kept alive —
 /// binding it to `_` (or letting it drop at the end of a statement)
-/// would halt the transfer immediately. Both the channel and the source
-/// slice stay borrowed here, so neither can be reused or freed while the
+/// would halt the transfer immediately. Both the channel and the buffer
+/// stay borrowed here, so neither can be reused or freed while the
 /// bus-master engine might still touch them.
 pub struct Transfer<'a> {
     channel: &'a mut Channel,
+    /// Physical address and length of a destination buffer the engine
+    /// wrote, to invalidate when the guard is dropped — `None` for a
+    /// transfer that only *read* memory, which needs no invalidate.
+    ///
+    /// Deferred to the drop rather than done at the start, because the
+    /// engine writes behind this core's cache: invalidating any earlier
+    /// would leave lines to be re-fetched (or, if dirty, written back
+    /// over the engine's result) while the transfer is still running.
+    invalidate: Option<(u32, usize)>,
 }
 
 impl Transfer<'_> {
@@ -691,10 +802,17 @@ impl Transfer<'_> {
 }
 
 impl Drop for Transfer<'_> {
-    /// Halts the transfer so the engine stops reading the source buffer
-    /// before the borrow ends and the buffer can be reused or freed.
+    /// Halts the transfer so the engine stops touching the buffer before
+    /// the borrow ends and the buffer can be reused or freed, then drops
+    /// this core's cached copy of a destination the engine wrote — the
+    /// deferred half of [`Channel::start_from_peripheral`]'s cache
+    /// handling, which has to happen after the engine has stopped and
+    /// before the caller can read what it left.
     fn drop(&mut self) {
         self.channel.halt();
+        if let Some((phys, len)) = self.invalidate {
+            cache::invalidate_range(phys, len);
+        }
     }
 }
 

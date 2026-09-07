@@ -27,6 +27,53 @@ pub enum ChipSelect {
     None = 0b11,
 }
 
+/// The `CLK.CDIV` value that clocks SCLK at or below `target_hz`, given
+/// the SoC core clock `core_hz` — the arithmetic behind `init`'s
+/// `clock_divider`, in one place rather than in every application.
+///
+/// SCLK is `core_hz / CDIV`, so this is that division rounded *up*, and
+/// then up again to an even value: the hardware rounds an odd `CDIV`
+/// down, and this register's datasheet text has said both "multiple of
+/// 2" and "power of 2" across revisions, so this computes what Linux's
+/// `spi-bcm2835` computes — round up, then add the odd bit back — which
+/// is the closest thing to a reference for what the silicon does with
+/// the values in between. Rounding up means the result never clocks
+/// faster than asked, which is the direction that matters when the
+/// device on the other end states a maximum SCLK. The rate actually
+/// produced is `core_hz / returned`.
+///
+/// `core_hz` has to come from the firmware rather than a constant, which
+/// is the whole reason `init` does not take a frequency itself:
+///
+/// ```ignore
+/// let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+/// let spi = Spi::init(gpio, spi0, MODE_0, ChipSelect::Cs0, spi::divider_for(core_hz, 4_000_000));
+/// ```
+///
+/// The core clock moves with `config.txt` and with the firmware's own
+/// scaling, so a divider computed against an assumed 150MHz is wrong by
+/// two thirds on a board running 250MHz — in the unsafe direction, since
+/// assuming a slower clock than the real one asks for a *faster* SCLK
+/// than intended.
+///
+/// The result is clamped to what the field can usefully express, 2 to
+/// 65534. `CDIV = 0` would mean 65536, one step slower, but a zero
+/// handed back from a function like this reads as an error or a
+/// divide-by-zero everywhere it is subsequently used, and the difference
+/// is 0.003% of a clock already down at a few kHz.
+pub fn divider_for(core_hz: u32, target_hz: u32) -> u16 {
+    // `target_hz.max(1)` rather than a `Result` or a panic: zero is not a
+    // frequency, and the useful reading of "as slow as possible" is the
+    // largest divider, which is exactly what the clamp below produces.
+    let exact = core_hz.div_ceil(target_hz.max(1));
+    // Round up to even by adding the odd bit back -- `cdiv += cdiv % 2`,
+    // as `spi-bcm2835` writes it -- rather than `next_multiple_of(2)`,
+    // which overflows on an odd `u32::MAX`. A nonsense argument, but a
+    // public function should clamp it rather than panic in a debug build
+    // and wrap in a release one.
+    exact.saturating_add(exact % 2).clamp(2, 65534) as u16
+}
+
 /// Blocking driver for SPI0 (GPIO9-11 always; GPIO7/8 only when using
 /// a hardware-driven `ChipSelect`).
 ///
@@ -59,9 +106,11 @@ impl Spi {
     /// comparison) — a divider computed against an assumed core clock
     /// would silently be wrong on a board configured differently. Must
     /// be even (0 means divide by 65536); the hardware rounds odd
-    /// values down. If an exact frequency is needed, query the real
-    /// core clock via the VideoCore mailbox and compute the divider
-    /// from that instead of guessing here.
+    /// values down.
+    ///
+    /// To pick one from a frequency instead, ask the mailbox for the
+    /// real core clock and hand it to [`divider_for`], which does the
+    /// rounding this register needs.
     pub fn init(
         gpio: &GPIO,
         spi0: SPI0,

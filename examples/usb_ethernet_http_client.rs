@@ -27,6 +27,12 @@
 // editing the `SERVER_HOST` / `SERVER_PORT` / `REQUEST_PATH` constants; a
 // local `python3 -m http.server 80` works too (its hostname must resolve,
 // or use its dotted-quad address as `SERVER_HOST`).
+//
+// Pi 2/3 only. Both the USB hub and the Ethernet are one soldered-on
+// LAN9514 there, behind the DWC2 controller. A Pi 4 has neither half: its
+// USB host is a VL805 xHCI behind PCIe and its Ethernet is a native GENET
+// MAC on RGMII pins, neither of which this crate drives yet -- so this
+// builds for `bcm2711` and then finds an empty root port.
 
 use core::fmt::Write;
 use core::ops::ControlFlow;
@@ -126,8 +132,16 @@ pub extern "C" fn kmain() -> ! {
         &timer,
     );
 
+    // Bounded, because the hub is soldered on: a root port that hasn't
+    // reported in five seconds has nothing behind it at all, which is
+    // what a Pi 4 looks like (see the header). Falling through rather
+    // than halting here -- `usb::enumerate` reports that as
+    // `EnumerationError::NotConnected` through the same error path
+    // everything else goes through, where an unbounded wait would sit
+    // here silently and look like a lock-up.
     let _ = writeln!(uart, "waiting for the on-board hub...");
-    while !dwc2.port_connected() {
+    let deadline_us = timer.now_micros() + 5_000_000;
+    while !dwc2.port_connected() && timer.now_micros() < deadline_us {
         timer.delay_ms(100);
     }
 

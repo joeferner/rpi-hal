@@ -119,7 +119,7 @@ pub extern "C" fn kmain() -> ! {
         framebuffer.width, framebuffer.height, framebuffer.pitch_bytes, framebuffer.address
     );
 
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc);
+    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
 
     // Gamma ~2.0 lookup (linear → display): out = sqrt(in × 255). Brightens
     // midtones without clipping highlights, the main fix for the dark
