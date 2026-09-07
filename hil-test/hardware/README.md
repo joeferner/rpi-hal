@@ -37,8 +37,11 @@ The software either side of this split:
 | --- | --- | --- | --- |
 | Olimex PICO2-XXL (RP2350B) | €9 | fixture | the fixture MCU |
 | HAT rev A PCB + passives | $25–40 | fixture | wiring, power switching, real devices |
-| High-side load switch | ~$2 | fixture | Pi power control |
-| INA226 or shunt | ~$2 | fixture | rail current sense |
+| P100A cup-tip probes + R100 receptacles | ~$40 | fixture | the 40-contact interface to the Pi's pin tails |
+| Guide plate (second PCB) + standoffs | ~$15 | fixture | aligns the probe tips and carries the Pi |
+| M2.5 hold-down hardware | ~$5 | fixture | clamps the Pi against 3–8 kgf of spring force |
+| TPS22958DGN load switch | ~$2 | fixture | Pi power control — 14 mΩ, 6 A, HVSSOP-8 |
+| INA226 + 10 mΩ shunt | ~$2 | fixture | rail current sense, and the overcurrent alert |
 | USB-serial adapter | ~$5 | orchestrator | smoke tier, and recovery — the bench-tier console is tunnelled through the fixture |
 | USB VBUS switch board | ~$5 | fixture | USB attach/detach stimulus |
 | USB flash drive, keyboard, small hub | ~$15 | — | the real USB devices under test |
@@ -48,12 +51,12 @@ The software either side of this split:
 | Wi-Fi AP or dongle | ~$20 | orchestrator | isolated wireless network |
 | Bluetooth dongle | ~$10 | orchestrator | scripted BLE peer |
 
-Excluding the Pis, which the test matrix requires anyway. Around $120 for
-a single-board rig with every witness present; a useful subset is far
-cheaper, since tests skip on absent capabilities rather than failing.
-Scaling to the four-board rack lands around $350–450 — see
-[Multi-board rack](#multi-board-rack) — but that spend is staged behind
-driver support rather than paid up front.
+Excluding the Pis, which the test matrix requires anyway. Around $165 for
+the whole bench with every witness present; a useful subset is far
+cheaper, since tests skip on absent capabilities rather than failing. That
+is a total, not a per-board figure: there is **one** harness, and the board
+under test is swapped into it. See [One harness, boards swapped through
+it](#one-harness-boards-swapped-through-it).
 
 ## Fixture MCU: Olimex PICO2-XXL
 
@@ -102,9 +105,12 @@ which covers every burst measurement worth making.
 - **All 48 GPIO** on two 2×20 0.1" header positions, nothing lost to
   board housekeeping. This is the entire reason to leave the Pico form
   factor, and what makes the 1:1 header shadow below possible.
-- **8 ADC channels** rather than 4. Analog audio L and R, the 3V3-rail
-  sense and the current shunt each want their own; that set does not fit
-  in the 3 a Pico leaves free.
+- **8 ADC channels** rather than 4. Analog audio L and R and the 3V3-rail
+  sense each want their own, and a USB VBUS rail sense per port is the
+  obvious next claim on them; that set does not fit in the 3 a Pico leaves
+  free. Rail *current* is not among them — that goes to the INA226 over
+  I2C rather than a shunt into an ADC channel, for the resolution reasons
+  in [Power control](#power-control-the-harness-supplies-the-pis-5v).
 - **Open-source hardware.** KiCad sources, schematic and Gerbers are
   published, so the footprint drops into the HAT layout, and if a later
   revision absorbs the fixture instead of socketing it, the reference
@@ -196,10 +202,10 @@ Nothing else may claim this controller (see
 [USB strategy](#usb-strategy)).
 
 Tunneling the console rather than wiring a separate USB-serial adapter to
-GPIO14/15 buys three things. It halves the cables per board in a rack, and
-makes board identity self-describing over the control interface instead of
-depending on udev rules to tell apart adapters that often share a USB
-serial number. It lets the fixture timestamp console bytes against the
+GPIO14/15 buys three things. It removes a cable and a second USB device
+from the bench, and takes the console with the harness rather than leaving
+an adapter to be re-attached to whichever board is mated. It lets the
+fixture timestamp console bytes against the
 *same* clock as the marker-pin edges and the logic capture, so "the Pi
 printed this 4.2 ms after the marker edge" becomes a measurement rather
 than a guess — host-side timestamps carry milliseconds of USB scheduling
@@ -230,16 +236,128 @@ runs, so it contends with nothing. The smoke tier also uses a plain
 adapter directly on GPIO14/15 with no HAT at all — "a Pi and a USB-serial
 cable gets you real signal" has to stay true.
 
-## Power control: the HAT supplies the Pi's 5V
+## Mechanical: the Pi sits on the harness board
+
+The harness board is **not** a HAT mechanically. The Pi sits on top of it,
+component side up, and the board extends below and to the side. The 40
+header connections are made by **cup-tip spring test probes pressing up
+onto the tails of the Pi's through-hole header pins**. Nothing sits above
+the Pi.
+
+The Pi's header is a through-hole part, so its pin tails protrude through
+the underside — a defined metal stub rather than a bare pad, which is what
+makes this work. Contacting them is the same problem an in-circuit test
+fixture solves every day, which is why the parts come from that industry
+rather than from a connector catalogue.
+
+Two reasons, and the second is the one that decided it:
+
+- **Cycle life.** A swap is now the routine act rather than a rare one, so
+  the mating interface is a consumable. A stamped 0.1" socket is good for
+  a few hundred cycles and even a machined receptacle for around a
+  thousand; spring-loaded pins are rated to a million. That is three
+  orders of magnitude, and it removes swap count as a design worry
+  entirely.
+- **The HAT outline was the binding mechanical constraint.** A 65 ×
+  56.5 mm board with the fixture module eating a third of it, and stack
+  height over the Pi's header to respect, is a squeeze that has nothing to
+  do with the problem being solved. A base board has as much area as it
+  wants. And with nothing above the Pi, HDMI, USB, Ethernet, the SD card,
+  USB-C power and both FPC connectors all stay reachable, and the Pi's own
+  header stays free if a test ever wants to plug something into it.
+
+What it costs:
+
+- **The probes must be clamped, not rested.** Spring probes of this class
+  run somewhere between 80 gf and 200 gf each, so 40 of them stand at
+  3–8 kgf depending on which spring is fitted. A Pi weighs about 45 g,
+  under 2% of that, so gravity is not a fastening method. The Pi's four
+  M2.5 mounting holes are the datums and the compression points, and the
+  compression wants to act near the header rather than only at the corners
+  — 1 mm FR4 will bow across a 100 mm span otherwise. Spring force is
+  worth choosing deliberately rather than accepting: it is the single
+  number that sets how much hold-down hardware the design needs.
+- **The 5V pair is the current ceiling.** The Pi brings 5V in on exactly
+  two pins, so whatever one contact carries, double it. A 3 A contact gives
+  6 A, which clears the ~3 A the cable allows; a 1 A contact would give 2 A
+  and fail. Ground is a non-issue at eight pins. This is the spec to
+  confirm on any candidate before anything else.
+- **The contact surface is solder-coated.** The tails are square and wave
+  soldered, so they are neither round nor clean gold. That is exactly what
+  cup and crown tips exist for, and the in-circuit test industry's own
+  guidance is that cup, crown and serrated tips suit "posts, pins or
+  screws" while flat and radius tips belong on pads. Contact resistance is
+  still the term least worth trusting on paper here.
+
+Three things to check against real hardware rather than datasheets:
+whether the **Pi 4's underside is clear** beneath the header pads, since
+unlike the 3B it carries bottom-side components; what **contact resistance**
+the probes actually achieve on solder-coated tails; and whether a cup tip
+or a crown tip does better on a square tail, which is a two-dollar
+experiment and not worth reasoning about further.
+
+### The probes, and the two boards that hold them
+
+The contacts are **`P100A`** cup-tip spring test probes — 0.100" family,
+Ø1.5 mm concave head — seated in **`R100`** receptacles. The `A` suffix is
+the cup tip across every vendor in this family; `H` and `Q2` are crowns,
+`B` a spear, `E2` a convex radius. Cheap and stocked, which is why they are
+the choice: the question that decides this interface is a measurement, and
+a part that arrives in two days answers it sooner than a better-specified
+part that takes three weeks.
+
+**The receptacle is the mounted part, not the probe.** Receptacles solder
+into the harness board and the probes push in from above, so a worn or
+bent probe pulls out with pliers instead of needing rework. Soldering
+probes directly would give that up and risks wicking flux into the
+plunger.
+
+That takes **two boards**, off the same drill coordinates with different
+hole sizes:
+
+| | Harness board | Guide plate |
+| --- | --- | --- |
+| Hole | ~1.75 mm, plated | ~1.6 mm, unplated, no copper |
+| Sized for | receptacle OD (1.67 mm) | sliding fit on the Ø1.5 mm probe head |
+| Job | solder joint and connection | lateral alignment of the tips |
+
+The guide plate is just a second PCB on the same fab order — a few
+dollars, hole position held to about ±0.08 mm, which beats hand
+machining, and **FR4 is an insulator**, which a machined aluminium plate
+is not: bare metal would short all 40 probe barrels together. Order it
+2.0–2.4 mm thick, because it also carries the spring load and the Pi
+rather than merely guiding tips. Generate its drill file from the same
+footprint positions so no coordinate is ever transcribed by hand.
+
+Two mechanical consequences. The receptacles are ~30 mm long and hang
+**below** the harness board, so the board needs that much clearance
+underneath and cannot sit flat on the bench. And the assembly order is
+receptacles → probes → guide plate → standoffs, so replacing a probe later
+means lifting the plate off: four screws rather than a rework station, but
+not nothing.
+
+Inverting the Pi onto targets was considered and does not work: the GPIO
+pin tips stand ~8.5 mm above the Pi's PCB while the USB-A stack is
+~15.5 mm and the RJ45 ~13.5 mm on that same face, so the ports would hit
+the board 5–7 mm early and be pointing into it. A rigid concave target on
+the harness does not work either — the Pi's pin is rigid too, so nothing
+in the joint would have any compliance, and across 40 contacts some would
+bottom out while others floated.
+
+## Power control: the harness supplies the Pi's 5V
 
 The HAT switches 5V into header pins 2 and 4. This is the primary reset
 mechanism, in preference to the `RUN` pad.
 
 Why: the HAT plugs onto the header and that is the *entire* physical
-connection per board — no solder step, no flying leads, and nothing
+connection to the board — no solder step, no flying leads, and nothing
 board-revision-specific, since 5V is pins 2/4 on every model whereas
 `RUN` is a 2-pin pad on Pi 2/3 and `GLOBAL_EN` on Pi 4, neither of them on
-the 40-pin header. Back-powering the 5V rail through the header is
+the 40-pin header. That matters more here than it would on a rack of
+permanently-mated HATs: this one HAT gets unmated and re-mated every time
+the board under test changes, so anything model-specific would be a
+soldering job per swap rather than a one-off. Back-powering the 5V rail
+through the header is
 permitted by the HAT specification and is what UPS and PoE HATs do. It
 also resets the LAN9514, the Wi-Fi chip and attached USB devices, which a
 `RUN` reset leaves in whatever state they wedged in.
@@ -251,12 +369,12 @@ Five things this has to get right.
    cannot be powered from the Pi's 3V3 pins. A dedicated 5V inlet →
    always-on 5V rail, which feeds the fixture's VSYS directly and, through
    the load switch, header pins 2 **and** 4 in parallel with several GND
-   pins. Budget 4A: a Pi 4 under load with peripherals draws upwards of
-   1.5A, and the rig's own supply must not be a variable. That budget rules
-   out a passive USB-C breakout with 5.1k CC resistors, which without PD
-   negotiation is entitled to 500–900mA and can reach 3A only if the source
-   happens to advertise it. See [Where the 5V comes
-   from](#where-the-5v-comes-from).
+   pins. Budget 6A: a Pi 4 under load with peripherals draws upwards of
+   1.5A, the switch is specified to pass 6A, and the rig's own supply must
+   not be a variable. That budget rules out a passive USB-C breakout with
+   5.1k CC resistors, which without PD negotiation is entitled to
+   500–900mA and can reach 3A only if the source happens to advertise it.
+   See [Where the 5V comes from](#where-the-5v-comes-from).
 2. **Switch the high side, never the ground.** Low-side switching floats
    the Pi's ground against the fixture's, and then every shadowed GPIO
    finds a path through the SoC's ESD diodes. Common ground always.
@@ -294,10 +412,18 @@ Five things this has to get right.
    than tidy, and why the interlock there is worth having in the first
    revision.
 
-   A switched bleeder is the cheap insurance: an N-FET and ~150–330 Ω from a
-   3V3 header pin to ground on a fixture GPIO, enabled only while the switch
-   is off. Ten or twenty milliamps swamps any plausible clamp injection and
-   collapses the rail in tens of milliseconds. Two things it does not buy:
+   The switched 5V rail takes care of itself: the TPS22958 ties a 135 Ω
+   discharge resistor from VOUT to ground whenever it is disabled, so the
+   rail it feeds is pulled down rather than left to leak away. That is the
+   *upstream* rail, though. It removes what supplies 3V3 without draining
+   3V3, whose own capacitance still discharges through whatever load
+   happens to remain.
+
+   So a switched bleeder on 3V3 is still the cheap insurance: an N-FET and
+   ~150–330 Ω from a 3V3 header pin to ground on a fixture GPIO, enabled
+   only while the switch is off. Ten or twenty milliamps swamps any
+   plausible clamp injection and collapses the rail in tens of
+   milliseconds. Two things it does not buy:
    3V3 is a *proxy*, since the SoC's core rails come off their own switchers
    and draining 3V3 does not prove those fell, so any shortened wait has to
    be validated against actual cold boots rather than against the sense
@@ -309,11 +435,15 @@ Five things this has to get right.
 A bench brick into a barrel jack is the obvious answer and it works. The
 better one, when the orchestrator is a PC, is **the orchestrator's own ATX
 supply** — a 4-pin Molex peripheral tail gives red +5V and two grounds on
-18 AWG, and a 350W unit's 5V column covers a four-board rack (four HATs at
-4A is 80W, inside the combined +3.3V/+5V cap those labels usually carry;
-read the column rather than the wattage). Avoid SATA power for this — three
-+5V pins, but contacts rated around 1.5A each — and avoid +5VSB, which is
-always live but only good for 2–3A.
+18 AWG, and one harness drawing at most 6A is a load any ATX unit's 5V
+column carries without arithmetic. Avoid SATA power for this — three
++5V pins, but contacts rated around 1.5A each, which 6A exceeds — and
+avoid +5VSB, which is always live but only good for 2–3A.
+
+Take care with the yellow wire on that Molex tail: it is +12V, and the
+inlet has a 6V absolute maximum behind it. That is the strongest argument
+for the clamp being fitted rather than optional, and for the inlet
+connector being something that resists being wired wrong.
 
 The reason to prefer it is not the cable count. **It collapses the rig onto
 one ground reference.** With a separate brick, HAT ground is bonded to the
@@ -328,26 +458,48 @@ earth removes the whole class of problem, which is the same argument as
 
 Four things it changes:
 
-- **Fuse the inlet, per HAT.** A 4A brick self-limits into a fault; a 5V
-  rail rated 15–20A does not. The load switch protects the Pi's branch, but
-  the always-on rail feeding the fixture and the HAT's own devices is
-  upstream of it. A 5A polyfuse or blade fuse.
-- **The load switch's `EN` must default off.** At PC power-on the rail comes
-  up hard across every HAT at once; if `EN` floats or pulls high, every Pi
-  gets hard-switched with no soft-start before any fixture firmware is
-  running, which is the uncontrolled cold start item 5 is about. Pull `EN`
-  down so the rail arrives with the Pi off and the fixture turns it on
-  deliberately.
-- **Budget the cable drop.** 18 AWG is roughly 21 mΩ/m, so a metre out and
-  back at 4A is about 170mV, landing a nominal 5.0V rail near 4.83V at the
-  header against the 4.75V the Pi wants — before the switch's own drop. Short
-  runs, and one short 5V bus for a rack rather than four long tails. It is
-  worth measuring at the header under load rather than assuming.
+- **Fuse the inlet, and fuse the Pi branch too.** A 4A brick self-limits
+  into a fault; a 5V rail rated 15–20A does not. The inlet wants a fuse
+  because the always-on rail feeds the fixture and the HAT's own devices —
+  a low-resistance 6A blade fuse rather than a polyfuse, whose 25 mΩ or so
+  would cost more of the drop budget than the switch does. The Pi's branch
+  needs its own, because the switch has no current limit of its own to
+  interrupt a fault; size it just above the design current so a short opens
+  it rather than cooking the part.
+- **The load switch's `ON` must default off.** At PC power-on the rail
+  comes up hard across every HAT at once; if `ON` floats or pulls high,
+  every Pi gets hard-switched with no soft-start before any fixture
+  firmware is running, which is the uncontrolled cold start item 5 is
+  about. The datasheet says not to leave `ON` floating in any case, so pull
+  it down: the rail then arrives with the Pi off and the fixture turns it
+  on deliberately.
+- **Budget the whole path, including the contacts.** Every term, at 5A
+  with the naive choices: 18 AWG is roughly 21 mΩ/m, so a metre out and
+  back is 42 mΩ (**210mV**); the switch is 14 mΩ (70mV); a 10 mΩ shunt is
+  50mV; a low-resistance fuse about 25mV; and the two probes feeding the
+  5V pair, at 30 mΩ each and 15 mΩ in parallel, are 75mV. That totals
+  430mV and lands a nominal 5.0V rail at **4.57V**, well under the 4.75V
+  the Pi wants. Worse, at **3A the same path costs 258mV and lands at
+  4.74V — it fails the floor too.**
+
+  So the naive wiring does not work at any current, and the fix is the
+  wiring rather than the parts. 16 AWG over half a metre each way is
+  13 mΩ instead of 42, and a 5 mΩ shunt halves that term: 3A then costs
+  156mV and lands at **4.84V**, with 5A at 4.74V — still only a peak.
+
+  Two things worth carrying forward. **The contacts belong in this budget**
+  and were missing from it — any 40-way interface, probes or socket,
+  contributes something on the parallel 5V pair. And at 30 mΩ they are the
+  **second-largest term after the cable**, which is why measured contact
+  resistance on real pin tails is the number the whole power path waits
+  on. This is a measurement to take at the header under load, not a figure
+  to trust on paper.
 - **The rail dies when the PC does.** +5V is only live in S0, so shutting
-  down or rebooting the orchestrator power-cycles every board under test and
-  every fixture. Almost certainly what you want, since a fixture is no use
-  without its orchestrator — but "always-on" now means "always on while the
-  PC is up", which is better known in advance than diagnosed as a fault.
+  down or rebooting the orchestrator power-cycles the board under test and
+  the fixture with it. Almost certainly what you want, since a fixture is
+  no use without its orchestrator — but "always-on" now means "always on
+  while the PC is up", which is better known in advance than diagnosed as
+  a fault.
 
 Noise is not the concern it looks like: ATX specifies +5V at ±5% with 50mV
 ripple, inside what a Pi tolerates, and the inlet wants local bulk anyway.
@@ -356,31 +508,82 @@ legitimately at 5.25V, so anything on it with a 6V absolute maximum, an
 ideal diode passing VSYS included, has well under a volt of headroom and
 wants a clamp at the inlet alongside the fuse.
 
-**Part choice**: a high-side load switch IC (TPS22965 / TPS2557 / AP2281
-class) rather than a discrete FET or a relay. One package gives a low
-R<sub>DS(on)</sub> 3A+ pass element, **soft-start** (hard-switching into
-the Pi's discharged bulk capacitance is an inrush spike that can brown out
-the shared supply), a **programmable current limit** around 3–3.5A — which
-also replaces the input polyfuse being bypassed by powering through the
-header — and a **FAULT output** the fixture can read, so an overcurrent
-during something like camera LDO bring-up becomes an assertion instead of
-a mystery brownout. Relays work and the cycle count is a non-issue, but
-they are bulkier, slower, need a coil driver and flyback diode, and offer
-no soft-start or current limit.
+**Part choice**: **TPS22958DGN**, a high-side load switch IC rather than a
+discrete FET or a relay. One package gives a 14 mΩ pass element good for
+6A continuous, an active-high `ON` input a 3V3 GPIO drives directly
+(V<sub>IH</sub> 1.2V), a **capacitor-programmed rise time** on the `CT`
+pin — hard-switching into the Pi's discharged bulk capacitance is an
+inrush spike that can brown out the shared supply — and **quick output
+discharge**, a 135 Ω resistor tied across the output whenever the switch
+is off, which is exactly the rail-collapse behaviour the cold-boot recipe
+needs. Relays work and the cycle count is a non-issue, but they are
+bulkier, slower, need a coil driver and flyback diode, and offer no
+soft-start.
+
+The pinout is 1 `VIN`, 2 `ON`, 3 `VBIAS`, 4 `VIN`, 5 `VOUT`, 6 `GND`,
+7 `CT`, 8 `VOUT`, plus the thermal pad. `VBIAS` is the device's own supply
+and wants to sit at or above `VIN`, so it ties to the same always-on rail
+with its own 100nF. Two ordering notes, both of which produce a board that
+looks right and behaves wrong:
+
+- **`DGN`, not `DGK`.** Same pinout, same 0.65mm-pitch leads; `DGK` has no
+  thermal pad and is rated 4A rather than 6A. The pad is what earns the
+  difference — R<sub>θJA</sub> is 67 °C/W with it against 185.7 °C/W
+  without, so the 350mW the part dissipates at 5A is a 23 °C rise on `DGN`
+  and a 65 °C rise on `DGK`. At 5A the pad is load-bearing, not
+  decorative, and it has to be soldered down to copper with vias.
+- **`TPS22958`, not `TPS22958N`.** The `N` variant drops the quick output
+  discharge and nothing else. The rail-collapse help disappears silently.
+
+What this part does **not** have is a current limit or a fault output, and
+that is a deliberate trade for a leaded package and 14 mΩ. Two
+consequences:
+
+- **Overcurrent detection moves to the INA226**, which is already on this
+  rail. Its alert output and limit registers give a threshold settable in
+  firmware and an actual current reading, rather than a resistor and a
+  binary flag — better for a bench, where the useful artifact is the
+  number.
+- **Overcurrent *limiting* is gone**, and nothing gives it back. An
+  overloaded board no longer holds its rail up in constant-current mode,
+  so a fault is bounded only by a fuse and by firmware reacting to the
+  alert. The switched branch therefore needs its own fast fuse rather than
+  leaning on the inlet fuse, and a hard short becomes a consumable instead
+  of a self-recovering limit. The part is 6A continuous and 8A pulsed for
+  under 300µs, which a short exceeds.
+
+The 6V absolute maximum on every pin is the other cost. A rail that can
+legitimately sit at 5.25V leaves 0.75V of headroom, so the inlet clamp
+stops being advisable and becomes required — though the fixture's own buck
+already put it in the bill of materials, so the switch joins that
+constraint rather than adding one.
 
 ### Committing it to the board rather than to a prototype
 
-Neither of the switch's two settings is waiting on a bench measurement.
-The current limit sits above the published PSU ratings — 2.5A for a Pi 3,
-3A for a Pi 4 — and below what two 5V header pins will carry, which
-brackets it at 3–3.5A. The soft-start window is wide at both ends: a
-500mA-limited supply boots the board, so a slow ramp is safe, and any ramp
-at all beats hard-switching into discharged bulk capacitance. So the board
-carries the adjustment rather than a prototype deriving it — a swappable
-current-limit resistor, a populated-or-not slew-rate capacitor, test points
-either side of the shunt and on 3V3, `EN` and `FAULT` — and every pin gets
-checked against the datasheet before it becomes a footprint. A wrong value
-is a tweezer; a wrong pinout is a respin.
+The switch has one setting, and it is not waiting on a bench measurement.
+The rise time follows from the `CT` capacitor as
+SR = 0.146·C<sub>T</sub> + 14.78 µs/V with C<sub>T</sub> in pF, so **4.7nF
+gives 700 µs/V — about a 3.5ms ramp at 5V**, which draws roughly 310mA of
+inrush into the ~220µF the Pi's bulk capacitance and a modest output cap
+come to. 2.2nF is the faster alternative at 1.7ms and 650mA. Both are
+inside a window that is wide at both ends: a 500mA-limited supply boots the
+board, so a slow ramp is safe, and any ramp at all beats hard-switching
+into discharged bulk capacitance.
+
+What the datasheet does change is the framing. `CT` **is not optional** —
+left floating the ramp is 79µs, which into the same capacitance asks for
+about 14A, so the pad is always populated and the *value* is what is
+adjustable. The bulk also belongs on the input rather than the output: the
+switch's body diode conducts `VOUT` to `VIN`, and TI asks for
+C<sub>IN</sub> above C<sub>L</sub> — ideally 10:1 — to keep charge from
+running back through it, so the electrolytic sits at `VIN` and the
+switched side carries only what it needs.
+
+So the board carries the adjustment rather than a prototype deriving it —
+a swappable `CT` capacitor, test points either side of the shunt and on
+3V3, `ON`, and the INA226's alert line — and every pin gets checked
+against the datasheet before it becomes a footprint. A wrong value is a
+tweezer; a wrong pinout is a respin.
 
 Measuring the inrush is worth doing when there is a symptom to aim it at:
 if the rail sags on restore enough to reset the fixture or drop a USB port,
@@ -408,22 +611,50 @@ turn *off*, so it takes 10k from gate to source and a small N-FET pulling
 the gate down through a 1k. Gate drive is then only −5V, so the part must
 be specified at V<sub>GS</sub> = −4.5V — which rules out most through-hole
 parts, IRF9540 and FQP27P06 class devices being −10V parts that run hot
-here — leaving a 20V, 4A-class SOT-23 around 30mΩ, or a SOIC-8 in the low
-tens of milliohms for the full 3A. At 2A the budget is roughly 30mΩ to stay
-inside the Pi's 5V tolerance.
+here — leaving a 20V, 4A-class SOT-23 around 30mΩ for a bench build at a
+couple of amps, or a SOIC-8 or DPAK in the low tens of milliohms to reach
+the 5A the finished design allows. Note that 30mΩ discrete against the
+switch's 14 mΩ costs another 80mV at 5A, which the drop budget above does
+not have spare — a discrete is a way to get a bench running early, not a
+way to match the part.
 
 Whichever switches it, the pass element's body diode conducts
-load-to-supply, exactly as the non-reverse-blocking load switches do —
-which is what makes "the user's own PSU is still plugged in" a runtime
-check rather than a documented warning.
+load-to-supply — the TPS22958's datasheet says so directly, warning about
+current flowing from `VOUT` back to `VIN` through it — which is what makes
+"the user's own PSU is still plugged in" a runtime check rather than a
+documented warning.
 
 **Current sense** is nearly free once the whole Pi rail passes through one
-point: an INA226 on I2C, or a shunt into a fixture ADC channel. It buys
-assertions that are otherwise impossible — idle versus `wfe`-parked versus
-four-cores-spinning current, i.e. *did the code actually park the cores*;
-power-domain control taking effect rather than the mailbox call merely
-returning success; and a regression guard on the boot path's power
-behaviour.
+point, and it buys assertions that are otherwise impossible — idle versus
+`wfe`-parked versus four-cores-spinning current, i.e. *did the code
+actually park the cores*; power-domain control taking effect rather than
+the mailbox call merely returning success; and a regression guard on the
+boot path's power behaviour.
+
+The part is an **INA226** (`INA226AIDGSR`, VSSOP-10, no thermal pad)
+across a **10 mΩ** shunt in the switched leg, not a shunt into a fixture
+ADC channel. Three reasons it is worth the I2C traffic over the simpler
+option:
+
+- **The resolution is in a different class.** Shunt full scale is 81.92mV
+  with a 2.5µV LSB, so 10 mΩ gives a range to 8.19A — above the switch's
+  6A ceiling — at a 250µA step. Distinguishing parked cores from spinning
+  ones is a tens-of-milliamps question on a rail carrying hundreds, which
+  a fixture ADC reading a 50mV shunt drop does not resolve.
+- **It measures a 5V rail while running from the fixture's 3V3.** The
+  common-mode input range is 0–36V independent of the supply pin, which
+  takes 2.7–5.5V. Powering `VS` from the *fixture's* 3V3 rather than the
+  Pi's is what keeps the monitor alive while the board under test is dead
+  — the whole point of it being the overcurrent watchdog.
+- **The Alert pin replaces the fault output the switch does not have.** It
+  is an open-drain output driven by programmable limit registers, so
+  Shunt Voltage Over-Limit becomes a hardware interrupt into a fixture
+  GPIO with a threshold set in firmware, latching or transparent as
+  configured.
+
+`A0` and `A1` both to ground put it at address 0x40. The shunt dissipates
+250mW at 5A, so a 2512 part; and 50mV of the drop budget, which the 5 mΩ
+alternative halves at half the resolution.
 
 **`RUN` stays as a test stimulus, not as infrastructure.** A warm reset
 that does *not* reset the peripherals is a distinct and useful stimulus,
@@ -438,9 +669,9 @@ boards worth soldering also get warm-reset coverage.
 
 The Pi's 40-pin header carries 28 GPIO (GPIO0–27). At 48 fixture pins, a
 **1:1 shadow of the whole header** fits with room left for housekeeping:
-load-switch enable and FAULT, the 3V3-rail sense, INA226 I2C, the `RUN`
-open-drain, analog audio in, marker pins, and an enable/fault pair per
-USB VBUS switch.
+load-switch `ON` and the INA226's alert line, the 3V3-rail sense, INA226
+I2C, the `RUN` open-drain, analog audio in, marker pins, and an
+enable/fault pair per USB VBUS switch.
 
 Six of the 48 are spoken for by the board itself, and they are all
 brought out to the headers, so nothing stops a design from using them —
@@ -721,16 +952,49 @@ device.
 - **Bluetooth**: a dedicated USB BT dongle claimed raw by Bumble, so the
   peer is a script rather than the host OS's stack.
 
-## Multi-board rack
+## One harness, boards swapped through it
 
-Switching the device under test by hand means unmating the HAT and
-unplugging Ethernet, HDMI, USB, audio and the camera ribbon — six
-connections, two of them fragile, and a human standing at the bench for
-every cell of the matrix. That defeats unattended running for exactly the
-runs that take longest. So: **one HAT per board, permanently mated, never
-touched again.**
+There is one harness, and the board under test is swapped into it. That is
+a deliberate trade, and it is worth being honest about which way it cuts.
 
-### The four boards
+What it costs: a swap means unmating the HAT and moving Ethernet, HDMI,
+USB and audio across — five connections and a human at the bench. So
+**unattended running is bounded to whichever board is currently mated**. A
+full sweep of the matrix is a sequence of sessions with a swap between
+them, not one overnight run. The camera is worse than that and is dealt
+with separately below.
+
+What it buys, beyond not building four of everything: every witness in the
+bill of materials is bought once, so the bench can have *all* of them
+rather than the subset four boards could afford. Nothing is shared through
+a multiplexer, so there is no HDMI auto-switch to characterize, no
+per-board addressing in the runner, and no question of which fixture a
+command reached. The whole class of "which board did that come from" bugs
+does not exist.
+
+Two things follow for the design, and both are already true of it:
+
+- **The HAT must be model-agnostic**, because it is the one HAT and it
+  meets every board in turn. That is what
+  [Power control](#power-control-the-harness-supplies-the-pis-5v) is about:
+  5V on pins 2/4 works on every model, and nothing needs soldering per
+  swap.
+- **The runner should not be told which board is mated — it should ask.**
+  `Mailbox::board_revision` returns the same packed revision code
+  `/proc/cpuinfo` reports, so the board identifies itself on every run.
+  A fixed DHCP lease keyed to the MAC is the same fact arriving by a
+  second route. Neither needs a config file describing the bench, and
+  neither can go stale after a swap the way a config file can.
+
+Connector wear would be the obvious consumable, and it is the reason the
+Pi interface is spring probes rather than a socket — see
+[Mechanical](#mechanical-the-pi-sits-on-the-harness-board). The probes far
+outlast a socket, and when one does wear it pulls out of its receptacle
+without touching the board, which
+leaves the **CSI ribbon** as the part that will fail first, and it is
+addressed below.
+
+### The boards it is swapped between
 
 | Board | SoC / core | Arches | Ethernet | 3.5 mm | USB | HDMI | CSI |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -756,81 +1020,86 @@ What each one uniquely exercises:
 
 Pi 2 is omitted: BCM2836's peripheral map is effectively BCM2837's, so it
 would only add the Cortex-A7 and a no-radio configuration. Zero 2 W is
-omitted as a *full* rig for the same reason — BCM2710A1 is the same die as
-BCM2837 — but it is the cheapest board in the set to support, since it
-needs no HAL work at all and shares the Zero's no-hub USB topology. It
-earns a smoke rig (a load switch and a serial adapter, no HAT) whenever
-widening the matrix is worth ten dollars.
+omitted for the same reason — BCM2710A1 is the same die as BCM2837 — but
+it is the cheapest board in the set to support, since it needs no HAL work
+at all and shares the Zero's no-hub USB topology. With one harness the
+marginal cost of adding it to the matrix is the board and a swap, not a
+second rig, so it is worth having on the shelf.
 
 Note that the Zero's unique USB coverage is gated behind the ARMv6 port,
 which is the most expensive port in the set. If that coverage is wanted
 before ARMv6 lands, a Zero 2 W provides it with existing drivers.
 
-### Only one board is ever live
+### What a swap actually touches
 
-The HAT owns each board's 5V, so exactly one board is powered at a time.
-That is what makes a rack affordable: shared infrastructure needs no
-active multiplexing, only simultaneous connection.
+Most of the bench does not move. Worth knowing which parts do, because
+that list is the swap procedure.
 
-**Per board, permanently mated (~$60):** HAT, PICO2-XXL, VBUS switch board,
-USB device set, an Ethernet cable to the shared switch, HDMI cable to the
-shared switch. The analog audio path needs no sharing at all, since it
-terminates at that board's own fixture ADC — and on Zero W and Pi 5 it does
-not apply, as neither has a 3.5 mm jack.
+**Stays put:** the harness board and the PICO2-XXL mated to it, the spring
+pins, the 5V inlet, the VBUS switch board, the USB device set, the
+Ethernet switch, the Wi-Fi AP, the Bluetooth dongle, the HDMI capture
+stick and the audio dongle. All of it belongs to the harness, not to a
+board.
 
-**Shared, no switching needed:** the Ethernet switch, the Wi-Fi AP and the
-Bluetooth dongle. Only the powered board talks.
+**Changes with the board:** the clamp is released, the Pi lifted off the
+probe tips, and the next one set down and clamped — the only mating action
+in the swap, and the one that used to be an insertion. Then Ethernet, USB, the
+3.5 mm audio lead where the board has a jack, and the HDMI cable, which is
+a different connector per board so it is the cable that changes rather
+than being re-plugged. Nothing needs re-configuring afterwards, since the
+board announces its own revision.
 
-**Shared through an auto-switch:** HDMI. A 5-input auto-switching HDMI
-switch follows whichever input carries an active signal, so with one board
-live the selection needs no control channel.
+**Does not travel at all:** the camera. The CSI ribbon will not survive
+repeated insertion, so the camera stays a declared capability on whichever
+board is left wired for it and skips everywhere else. That is the one
+place where "swap the board" is the wrong answer, and it is the reason the
+camera tests are tier-gated rather than part of a sweep.
 
-**Tier-gated rather than duplicated:** the camera. One 15-pin and one
-22-pin CSI ribbon, and the ribbons will not survive repeated insertion, so
-the camera is a declared capability on whichever board holds it and skips
-elsewhere.
+One benefit of the single harness is that HDMI needs no multiplexing. With
+a rack, a 5-input auto-switch would have to be characterized and trusted;
+here the capture stick is wired straight to whichever board is mated, and
+there is no switch in the path to have an opinion about EDID.
 
-### HDMI: three things to get right
+### HDMI: two things to get right
 
 - **Four cable types** — mini for the Zero, full-size for Pi 3, micro for
-  Pi 4 and Pi 5. Plugged once each, but they have to be bought
-  deliberately.
-- **Characterize the switch's EDID once and treat it as the golden
-  value.** Auto-switches differ: some pass the sink's EDID through, some
-  present their own. Either is acceptable *if it is stable* — a switch
-  presenting its own EDID is arguably better, being independent of which
-  capture stick is fitted — but it has to be recorded, because the display
-  tests assert against it.
-- **Allow settling, then verify before asserting.** Switch lock takes a
-  moment, and a board that is powered but has not brought up HDMI presents
-  no signal at all. Confirm the capture device reports the expected mode
-  before making any claim about pixels. Power the switch from the
-  **always-on** rail, never a switched one.
+  Pi 4 and Pi 5. Only one is in use at a time, but all four have to be
+  bought deliberately, and the right one is part of the swap.
+- **Allow settling, then verify before asserting.** A board that is
+  powered but has not brought up HDMI presents no signal at all, so
+  confirm the capture device reports the expected mode before making any
+  claim about pixels. With no switch in the path the capture stick's own
+  EDID is the only one in play, which is one fewer thing to characterize
+  and one fewer thing to drift.
 
-### USB devices are per board, unavoidably
+### USB devices
 
-VBUS comes from the Pi's own port, so a device dies with its board and
-cannot be shared without a high-speed mux — which is exactly the signal
-integrity risk avoided by keeping USB off the HAT. Three switched ports
-each on Pi 3, Pi 4 and Pi 5 (keyboard, flash drive, small hub), around
-nine VBUS switch modules in total.
+VBUS comes from the Pi's own port, so a device cannot be shared between
+boards without a high-speed mux — which is exactly the signal integrity
+risk avoided by keeping USB off the HAT. With one board mated at a time
+that never comes up: three switched ports (keyboard, flash drive, small
+hub) belong to the harness, and whichever board is in the socket is the
+one they attach to.
 
 **The Zero is the exception**: one micro-USB OTG port, so it gets one
 device *or* a hub, not both. Putting a hub on it would destroy the
-direct-path coverage that is the reason to have a Zero at all, so it gets
-a single switched device.
+direct-path coverage that is the reason to have a Zero at all, so on that
+board only a single switched device is connected.
 
 ### Two consequences worth planning for
 
-**The orchestrator's USB port budget binds before money does.** Four
-fixtures present eight CDC interfaces between them, plus the capture stick,
-audio dongle, Bluetooth dongle and Wi-Fi AP — around nine devices. Budget
-a powered hub, and prefer smoke rigs (one plain serial adapter each) for
-boards that do not need a fixture.
+**The orchestrator's USB port budget is comfortable.** One fixture
+presents two CDC interfaces, plus the capture stick, audio dongle,
+Bluetooth dongle and Wi-Fi AP — six devices rather than the nine a rack
+would have needed. A powered hub is still worth having for the current
+budget, but the port count is no longer a constraint on the design.
 
-**Pi 5 needs its power budget checked.** It draws more than the 4A this
-design budgets, and its PMIC and power button introduce soft-off states
-that a plain load switch does not model.
+**Pi 5 needs its power budget checked.** The switch itself is no longer
+the obstacle — 6A covers a Pi 5's 5A official supply — but the wiring to
+the header is, since 5A over a metre of 18 AWG lands under the voltage the
+board wants, and 5A through two header pins is close to their contact
+rating. Its PMIC and power button also introduce soft-off states that a
+plain load switch does not model.
 
 ## Phases
 
@@ -851,12 +1120,12 @@ driver support rather than leading it.
 - **Phase 2** — respin: the hardware backfeed interlock, whatever rev A
   gets wrong, and possibly absorbing the QFN-80 onto the HAT using
   Olimex's published design.
-- **Phase 3** — rack build-out: the HDMI auto-switch, the Ethernet switch,
-  a powered hub, and a HAT per board. Build the **Pi 3 and Pi 4 HATs
-  first**, since those are the only boards whose peripheral drivers exist
-  today; the Pi 5 and Zero W HATs wait on the RP1 and ARMv6 ports
-  respectively. Rev A therefore gets validated on two boards before the
-  design is committed to four.
+- **Phase 3** — bench build-out: the Ethernet switch, the Wi-Fi AP, a
+  powered hub and the capture hardware, so the harness has every witness
+  rather than a subset. Validate rev A by swapping between **Pi 3 and
+  Pi 4 first**, since those are the only boards whose peripheral drivers
+  exist today; Pi 5 and Zero W wait on the RP1 and ARMv6 ports
+  respectively and cost only a swap once they land.
 
 ## Cross-checks worth keeping
 
