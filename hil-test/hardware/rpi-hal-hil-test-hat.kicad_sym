@@ -39,7 +39,7 @@
 				)
 			)
 		)
-		(property "Datasheet" ""
+		(property "Datasheet" "https://github.com/OLIMEX/RP2350-PICO2-XXL"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -50,7 +50,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "Rev C or later"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1100,7 +1100,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at -5.08 -54.61 0)
+				(at -5.08 -53.34 0)
 				(length 5.08)
 				(name "RUN"
 					(effects
@@ -1136,7 +1136,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at -5.08 -57.15 0)
+				(at -5.08 -55.88 0)
 				(length 5.08)
 				(name "BOOTSEL#"
 					(effects

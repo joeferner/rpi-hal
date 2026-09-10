@@ -2440,7 +2440,7 @@
 					)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Datasheet" "https://github.com/OLIMEX/RP2350-PICO2-XXL"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2451,7 +2451,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "Rev C or later"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3501,7 +3501,7 @@
 					)
 				)
 				(pin bidirectional line
-					(at -5.08 -54.61 0)
+					(at -5.08 -53.34 0)
 					(length 5.08)
 					(name "RUN"
 						(effects
@@ -3537,7 +3537,7 @@
 					)
 				)
 				(pin bidirectional line
-					(at -5.08 -57.15 0)
+					(at -5.08 -55.88 0)
 					(length 5.08)
 					(name "BOOTSEL#"
 						(effects
@@ -3983,6 +3983,18 @@
 		(uuid "3cd1bda0-18db-417d-b581-a0c50623df68")
 	)
 	(junction
+		(at 90.17 187.96)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4635a1ce-7c2b-43d5-8526-9c38965459a0")
+	)
+	(junction
+		(at 92.71 76.2)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4d369a82-4a66-45fc-b7a8-014b4cad62a0")
+	)
+	(junction
 		(at 222.25 143.51)
 		(diameter 1.016)
 		(color 0 0 0 0)
@@ -4031,6 +4043,12 @@
 		(uuid "adc123b7-e016-4949-bc55-0c075b1820d0")
 	)
 	(junction
+		(at 95.25 78.74)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b53d5d7d-24f5-4dfc-9344-3e575993e6f0")
+	)
+	(junction
 		(at 29.21 152.4)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4065,6 +4083,18 @@
 		(diameter 1.016)
 		(color 0 0 0 0)
 		(uuid "d57dcfee-5058-4fc2-a68b-05f9a48f685b")
+	)
+	(junction
+		(at 90.17 73.66)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "eaab1279-3e05-49e2-967f-eddfdf332a29")
+	)
+	(junction
+		(at 92.71 187.96)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "fcf9f18e-f2c0-4907-9675-0f092bebf616")
 	)
 	(junction
 		(at 219.71 95.25)
@@ -4107,7 +4137,7 @@
 		(uuid "3c0e31a1-193a-40e0-b005-330d007f40c7")
 	)
 	(no_connect
-		(at 31.75 80.01)
+		(at 31.75 78.74)
 		(uuid "5cd7f9c9-01a1-42d0-91d7-e1e8937558e4")
 	)
 	(no_connect
@@ -4115,7 +4145,7 @@
 		(uuid "65fecdb5-6548-45d5-bbff-0c99456951ba")
 	)
 	(no_connect
-		(at 31.75 82.55)
+		(at 31.75 81.28)
 		(uuid "69a859c9-6c12-490c-b7e0-ac8fa2b9b42a")
 	)
 	(no_connect
@@ -4154,6 +4184,16 @@
 	)
 	(wire
 		(pts
+			(xy 85.09 63.5) (xy 143.51 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "02b31ad9-cc17-4822-a5e5-c258bcc56e64")
+	)
+	(wire
+		(pts
 			(xy 29.21 157.48) (xy 31.75 157.48)
 		)
 		(stroke
@@ -4161,6 +4201,16 @@
 			(type default)
 		)
 		(uuid "0400388f-f1d4-40fe-8603-e47ae6c2b27b")
+	)
+	(wire
+		(pts
+			(xy 148.59 68.58) (xy 163.83 68.58)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "04cec9bf-ade6-4e02-a27d-71fd235acb1d")
 	)
 	(wire
 		(pts
@@ -4201,6 +4251,26 @@
 			(type solid)
 		)
 		(uuid "070d8c6a-2ebf-42c1-8318-37fabbee6ffc")
+	)
+	(wire
+		(pts
+			(xy 92.71 181.61) (xy 92.71 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "09c0d4d9-f8df-4ad0-b6cc-5d743dd3007d")
+	)
+	(wire
+		(pts
+			(xy 148.59 78.74) (xy 163.83 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0b69a64a-33e5-441b-a898-737391dae2fd")
 	)
 	(wire
 		(pts
@@ -4264,6 +4334,16 @@
 	)
 	(wire
 		(pts
+			(xy 92.71 76.2) (xy 92.71 176.53)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "250bfefa-5020-4ea4-9e6e-fe4301a9f7eb")
+	)
+	(wire
+		(pts
 			(xy 240.03 118.11) (xy 240.03 130.81)
 		)
 		(stroke
@@ -4291,6 +4371,16 @@
 			(type solid)
 		)
 		(uuid "29651976-85fe-45df-9d6a-4d640774cbbc")
+	)
+	(wire
+		(pts
+			(xy 148.59 73.66) (xy 163.83 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "29f6c389-8623-453c-88a6-8a835d7bc76e")
 	)
 	(wire
 		(pts
@@ -4404,6 +4494,16 @@
 	)
 	(wire
 		(pts
+			(xy 85.09 73.66) (xy 90.17 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4b9f286d-e20d-4764-a2ca-6fa45b633377")
+	)
+	(wire
+		(pts
 			(xy 237.49 113.03) (xy 264.16 113.03)
 		)
 		(stroke
@@ -4411,6 +4511,16 @@
 			(type solid)
 		)
 		(uuid "4c544204-3530-479b-b097-35aa046ba896")
+	)
+	(wire
+		(pts
+			(xy 85.09 68.58) (xy 143.51 68.58)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4c736ab5-f34e-4f01-a35f-5cdd5d6ad865")
 	)
 	(wire
 		(pts
@@ -4484,6 +4594,16 @@
 	)
 	(wire
 		(pts
+			(xy 92.71 187.96) (xy 90.17 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5fba4407-0982-4e71-ad15-15e75eb4784b")
+	)
+	(wire
+		(pts
 			(xy 240.03 135.89) (xy 237.49 135.89)
 		)
 		(stroke
@@ -4501,6 +4621,16 @@
 			(type solid)
 		)
 		(uuid "67559638-167e-4f06-9757-aeeebf7e8930")
+	)
+	(wire
+		(pts
+			(xy 90.17 181.61) (xy 90.17 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6bed08a4-7a0c-47ba-a74f-ef7d556fdb8d")
 	)
 	(wire
 		(pts
@@ -4554,6 +4684,16 @@
 	)
 	(wire
 		(pts
+			(xy 148.59 71.12) (xy 163.83 71.12)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7a9e53c4-fed5-4b40-aa9d-b43a215cb81b")
+	)
+	(wire
+		(pts
 			(xy 240.03 110.49) (xy 240.03 118.11)
 		)
 		(stroke
@@ -4591,6 +4731,26 @@
 			(type solid)
 		)
 		(uuid "825ec672-c6b3-4524-894f-bfac8191e641")
+	)
+	(wire
+		(pts
+			(xy 148.59 76.2) (xy 163.83 76.2)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "836be223-2166-4371-a455-8000e1dff4cb")
+	)
+	(wire
+		(pts
+			(xy 85.09 71.12) (xy 143.51 71.12)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8560f2a6-6b51-4f25-a7ff-685ca60ad9df")
 	)
 	(wire
 		(pts
@@ -4654,6 +4814,26 @@
 	)
 	(wire
 		(pts
+			(xy 90.17 73.66) (xy 143.51 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8c2c90b5-5ae8-45a1-b2aa-7559e300530e")
+	)
+	(wire
+		(pts
+			(xy 85.09 76.2) (xy 92.71 76.2)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8c625ced-9437-4e2c-a591-cd63401ef049")
+	)
+	(wire
+		(pts
 			(xy 237.49 105.41) (xy 264.16 105.41)
 		)
 		(stroke
@@ -4671,6 +4851,16 @@
 			(type solid)
 		)
 		(uuid "8fcb2962-2812-4d94-b7ba-a3af9613255a")
+	)
+	(wire
+		(pts
+			(xy 95.25 78.74) (xy 143.51 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8fdff820-b26d-4555-b930-0e33b0057cb2")
 	)
 	(wire
 		(pts
@@ -4724,6 +4914,26 @@
 	)
 	(wire
 		(pts
+			(xy 95.25 181.61) (xy 95.25 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "99688c37-2c9e-480a-83a9-ad5ace90cf53")
+	)
+	(wire
+		(pts
+			(xy 85.09 66.04) (xy 143.51 66.04)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "99f0311b-8df0-49e6-94a6-4f36a1c7dd9c")
+	)
+	(wire
+		(pts
 			(xy 29.21 157.48) (xy 29.21 160.02)
 		)
 		(stroke
@@ -4731,6 +4941,16 @@
 			(type default)
 		)
 		(uuid "9d0bf594-9278-47d6-96e8-1fc4184cce2e")
+	)
+	(wire
+		(pts
+			(xy 92.71 76.2) (xy 143.51 76.2)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9ed65db7-e0d1-4ad1-a7aa-0d5fe74af4de")
 	)
 	(wire
 		(pts
@@ -4774,6 +4994,16 @@
 	)
 	(wire
 		(pts
+			(xy 148.59 63.5) (xy 163.83 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ad50ad21-f57e-442e-9832-96b2ad5b54f7")
+	)
+	(wire
+		(pts
 			(xy 195.58 138.43) (xy 224.79 138.43)
 		)
 		(stroke
@@ -4791,6 +5021,16 @@
 			(type solid)
 		)
 		(uuid "b36591f4-a77c-49fb-84e3-ce0d65ee7c7c")
+	)
+	(wire
+		(pts
+			(xy 148.59 66.04) (xy 163.83 66.04)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b5566eb2-7030-45c6-be85-fca24ea3f50b")
 	)
 	(wire
 		(pts
@@ -4821,6 +5061,16 @@
 			(type solid)
 		)
 		(uuid "bc7a73bf-d271-462c-8196-ea5c7867515d")
+	)
+	(wire
+		(pts
+			(xy 85.09 78.74) (xy 95.25 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bf87702d-bbea-46f4-aff0-b17ad58a3d10")
 	)
 	(wire
 		(pts
@@ -4861,6 +5111,26 @@
 			(type default)
 		)
 		(uuid "cbb15fba-166c-4526-b091-05f37f32be33")
+	)
+	(wire
+		(pts
+			(xy 90.17 73.66) (xy 90.17 176.53)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cc821432-68ab-42b2-92ae-57543f8a37cb")
+	)
+	(wire
+		(pts
+			(xy 95.25 187.96) (xy 92.71 187.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cd2c28df-2351-4f8f-9852-7440b7cf1fdc")
 	)
 	(wire
 		(pts
@@ -4954,6 +5224,26 @@
 	)
 	(wire
 		(pts
+			(xy 95.25 78.74) (xy 95.25 176.53)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "dfafc946-0272-4596-9d5f-882d6b7e2378")
+	)
+	(wire
+		(pts
+			(xy 90.17 187.96) (xy 90.17 189.23)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e13959c5-a671-44d4-9e89-0ba05563a0d8")
+	)
+	(wire
+		(pts
 			(xy 240.03 130.81) (xy 237.49 130.81)
 		)
 		(stroke
@@ -5042,6 +5332,16 @@
 		)
 		(uuid "fbe6a2c2-a025-4368-a8e0-bbb50d350b73")
 	)
+	(label "GPIO10{slash}SPI0.MOSI"
+		(at 189.23 82.55 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "085e0bbf-7a2a-4b04-b331-203627780d66")
+	)
 	(label "ID_SDA"
 		(at 195.58 128.27 0)
 		(effects
@@ -5062,6 +5362,16 @@
 		)
 		(uuid "0bec16b3-1718-4967-abb5-89274b1e4c31")
 	)
+	(label "GPIO16"
+		(at 189.23 147.32 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "0fe64af4-d99e-4ac1-9cdb-b41f4476c177")
+	)
 	(label "ID_SDA"
 		(at 280.67 33.02 180)
 		(effects
@@ -5071,6 +5381,26 @@
 			(justify right bottom)
 		)
 		(uuid "1a04dd3c-a998-471b-a6ad-d738b9730bca")
+	)
+	(label "GPIO18{slash}PCM.CLK"
+		(at 189.23 116.84 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "1c61ab8b-320a-4469-996d-2ed6424dc1a8")
+	)
+	(label "GPIO6"
+		(at 163.83 78.74 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "21f6d6e6-6d7d-4016-b6b5-f4761308299e")
 	)
 	(label "ID_SCL"
 		(at 264.16 128.27 180)
@@ -5091,6 +5421,26 @@
 			(justify left bottom)
 		)
 		(uuid "29d046c2-f681-4254-89b3-1ec3aa495433")
+	)
+	(label "GPIO7{slash}SPI0.CE1"
+		(at 189.23 134.62 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "2e1cb09d-f870-4885-be1f-dd11d6535fb4")
+	)
+	(label "GPIO4{slash}GPCLK0"
+		(at 163.83 73.66 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "3158f047-5000-421f-8459-0e3f6d91b20a")
 	)
 	(label "GPIO21{slash}PCM.DOUT"
 		(at 264.16 143.51 180)
@@ -5132,6 +5482,16 @@
 		)
 		(uuid "3911220d-b117-4874-8479-50c0285caa70")
 	)
+	(label "GPIO27"
+		(at 189.23 74.93 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "3f4a8125-b0ff-46cf-ae0e-39226278fe1e")
+	)
 	(label "GPIO23"
 		(at 264.16 113.03 180)
 		(effects
@@ -5142,6 +5502,26 @@
 		)
 		(uuid "45550f58-81b3-4113-a98b-8910341c00d8")
 	)
+	(label "GPIO25"
+		(at 189.23 129.54 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "4ce81510-68c9-4a23-ad16-00a5fb35ec74")
+	)
+	(label "GPIO12{slash}PWM0"
+		(at 189.23 142.24 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "4d129c82-6efd-41b0-8d86-a30870ab6fd1")
+	)
 	(label "GPIO4{slash}GPCLK0"
 		(at 195.58 102.87 0)
 		(effects
@@ -5151,6 +5531,26 @@
 			(justify left bottom)
 		)
 		(uuid "5069ddbc-357e-4355-aaa5-a8f551963b7a")
+	)
+	(label "GPIO5"
+		(at 163.83 76.2 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "516081a8-4637-4228-9e9d-cc5e5d0de6b0")
+	)
+	(label "GPIO8{slash}SPI0.CE0"
+		(at 189.23 132.08 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "55d3841c-30e8-49ea-936e-680ab3c8ac58")
 	)
 	(label "GPIO27"
 		(at 195.58 110.49 0)
@@ -5202,6 +5602,26 @@
 		)
 		(uuid "6638ca0d-5409-4e89-aef0-b0f245a25578")
 	)
+	(label "GPIO20{slash}PCM.DIN"
+		(at 189.23 149.86 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "67994f96-64d8-4297-893b-8d744522abbb")
+	)
+	(label "GPIO21{slash}PCM.DOUT"
+		(at 189.23 152.4 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "67f9a7a7-cc25-429d-a61d-000afd7debf4")
+	)
 	(label "GPIO16"
 		(at 264.16 138.43 180)
 		(effects
@@ -5212,6 +5632,46 @@
 		)
 		(uuid "6a63dbe8-50e2-4ffb-a55f-e0df0f695e9b")
 	)
+	(label "ID_SCL"
+		(at 163.83 71.12 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "6e0a8bdb-031c-4f32-a42a-5a45aa923897")
+	)
+	(label "GPIO26"
+		(at 189.23 105.41 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "719f7c34-a2f6-457a-9d7f-407cd2795cbd")
+	)
+	(label "GPIO13{slash}PWM1"
+		(at 189.23 100.33 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "71d36a92-820d-4b7d-8493-6e52b292d8e9")
+	)
+	(label "GPIO2{slash}SDA1"
+		(at 163.83 63.5 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "795e707f-7000-4cdb-8ec8-d0864133073c")
+	)
 	(label "GPIO22"
 		(at 195.58 113.03 0)
 		(effects
@@ -5221,6 +5681,16 @@
 			(justify left bottom)
 		)
 		(uuid "831c710c-4564-4e13-951a-b3746ba43c78")
+	)
+	(label "ID_SDA"
+		(at 163.83 68.58 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "8bf60ac4-9076-468e-805d-86e0306b1d47")
 	)
 	(label "GPIO2{slash}SDA1"
 		(at 195.58 97.79 0)
@@ -5252,6 +5722,16 @@
 		)
 		(uuid "9d507609-a820-4ac3-9e87-451a1c0e6633")
 	)
+	(label "GPIO19{slash}PCM.FS"
+		(at 189.23 102.87 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "9dda1179-e1c2-43e7-84b0-a5157859ea7b")
+	)
 	(label "GPIO3{slash}SCL1"
 		(at 195.58 100.33 0)
 		(effects
@@ -5271,6 +5751,16 @@
 			(justify right bottom)
 		)
 		(uuid "a46d6ef9-bb48-47fb-afed-157a64315177")
+	)
+	(label "GPIO24"
+		(at 189.23 124.46 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "a51ac44f-6bd5-41fb-bebe-37b80a8b251a")
 	)
 	(label "GPIO12{slash}PWM0"
 		(at 264.16 133.35 180)
@@ -5322,6 +5812,56 @@
 		)
 		(uuid "be4b9f73-f8d2-4c28-9237-5d7e964636fa")
 	)
+	(label "GPIO23"
+		(at 189.23 121.92 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "cdd6edf9-9b3d-4491-b351-e879a19673f6")
+	)
+	(label "GPIO3{slash}SCL1"
+		(at 163.83 66.04 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "cf4c669c-ce2f-4f30-9c57-84322b684a3b")
+	)
+	(label "GPIO14{slash}TXD0"
+		(at 189.23 111.76 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "d1279eb6-6cdd-4762-8b27-1136c7a1a324")
+	)
+	(label "GPIO17"
+		(at 189.23 72.39 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "d32afc1b-b864-480d-9f27-1615a534ba54")
+	)
+	(label "GPIO11{slash}SPI0.SCLK"
+		(at 189.23 87.63 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "d77eab43-e5d4-4635-b6f9-084e7671205e")
+	)
 	(label "ID_SCL"
 		(at 280.67 35.56 180)
 		(effects
@@ -5332,6 +5872,26 @@
 		)
 		(uuid "dd6c1ab1-463a-460b-93e3-6e17d4c06611")
 	)
+	(label "GPIO15{slash}RXD0"
+		(at 189.23 114.3 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "e91120a3-e4b9-4233-bfe5-97ce1ef0592f")
+	)
+	(label "GPIO22"
+		(at 189.23 77.47 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "f78acc3c-8db4-49a3-a877-f0aa6306aa75")
+	)
 	(label "GPIO11{slash}SPI0.SCLK"
 		(at 195.58 123.19 0)
 		(effects
@@ -5341,6 +5901,16 @@
 			(justify left bottom)
 		)
 		(uuid "f9b80c2b-5447-4c6b-b35d-cb6b75fa7978")
+	)
+	(label "GPIO9{slash}SPI0.MISO"
+		(at 189.23 85.09 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "fe207a56-a77e-44a1-bc11-57d58e33a521")
 	)
 	(symbol
 		(lib_id "power:+5V")
@@ -5918,6 +6488,168 @@
 	)
 	(symbol
 		(lib_id "Device:R_Small")
+		(at 92.71 179.07 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "1200a294-b717-4965-8b63-2c0ee5d80608")
+		(property "Reference" "R10"
+			(at 91.694 171.958 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10k"
+			(at 91.694 168.148 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 92.71 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 92.71 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 92.71 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "4e57a9e3-e604-4d08-86d3-a29ab2f8c033")
+		)
+		(pin "2"
+			(uuid "cd50a87a-c727-479d-a974-5afc03bcca17")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R10")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 68.58 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "21b9e2f1-3ad8-48be-9c30-9e5d08c0a15a")
+		(property "Reference" "R7"
+			(at 139.446 67.31 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 67.31 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5f62d890-dbea-44ed-bd69-47e301fb023f")
+		)
+		(pin "2"
+			(uuid "5def6186-2e92-41fc-8b2f-fb28d4af5c2e")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R7")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
 		(at 264.16 27.94 0)
 		(unit 1)
 		(body_style 1)
@@ -5998,6 +6730,87 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 71.12 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "367762b0-16d7-4931-836e-f49c52104f09")
+		(property "Reference" "R8"
+			(at 139.446 69.85 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 69.85 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "0d4cdc36-6ebf-40cd-b5a1-8a5e3ebf57ff")
+		)
+		(pin "2"
+			(uuid "ae887684-e539-486a-b7d8-e6386d0d925d")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R8")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Jumper:SolderJumper_2_Open")
 		(at 266.7 38.1 0)
 		(unit 1)
@@ -6072,6 +6885,168 @@
 			(project "rpi-hal-hil-test-hat"
 				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
 					(reference "JP1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 66.04 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "44a148f7-dc85-4672-a755-66cd707b9506")
+		(property "Reference" "R6"
+			(at 139.446 65.024 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 65.024 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "f16bef31-50e3-4118-886a-1d01cfbb8b57")
+		)
+		(pin "2"
+			(uuid "33394002-6af1-4d94-bc28-89f9772c37e6")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R6")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 95.25 179.07 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "458dca99-f5f7-4cf1-9b2a-f18827a0ea52")
+		(property "Reference" "R12"
+			(at 94.234 171.958 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10k"
+			(at 94.234 168.148 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 95.25 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 95.25 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 95.25 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "73e4209d-7864-4a9e-b444-87c1211f0371")
+		)
+		(pin "2"
+			(uuid "30fd04f1-94f0-4ce5-a12f-e097ce026822")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R12")
 					(unit 1)
 				)
 			)
@@ -6236,6 +7211,87 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 76.2 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5851df15-3da6-4a44-947d-cd0ca24709bc")
+		(property "Reference" "R9"
+			(at 139.446 75.184 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 75.184 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9300016c-53db-4f63-b095-c4890cefc651")
+		)
+		(pin "2"
+			(uuid "ed57a2d5-e147-48fb-8210-2bd5a30569c7")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R9")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "rpi-hal-hil-test-hat:RP2350-PICO2-XXL")
 		(at 36.83 25.4 0)
 		(unit 1)
@@ -6278,7 +7334,7 @@
 				)
 			)
 		)
-		(property "Datasheet" ""
+		(property "Datasheet" "https://github.com/OLIMEX/RP2350-PICO2-XXL"
 			(at 36.83 25.4 0)
 			(hide yes)
 			(show_name no)
@@ -6289,7 +7345,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "Rev C or later"
 			(at 36.83 25.4 0)
 			(hide yes)
 			(show_name no)
@@ -6647,6 +7703,168 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 63.5 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7348d37d-972e-4ff5-97a8-4ccc0746b657")
+		(property "Reference" "R5"
+			(at 139.446 62.484 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 62.484 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "f5e50b89-1037-4c82-b1d9-600a406a6f54")
+		)
+		(pin "2"
+			(uuid "970b0e96-73ad-4e7f-8244-e5bc0f26b626")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 78.74 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "76d29d0b-1315-43f0-969b-f5022b8bb905")
+		(property "Reference" "R11"
+			(at 139.446 77.724 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 77.724 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "bdec546e-c3fe-4b41-bace-6ba1b96dbc27")
+		)
+		(pin "2"
+			(uuid "1da67929-ee24-4875-8a2b-da221fb8c58b")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R11")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 251.46 48.26 0)
 		(unit 1)
@@ -6716,6 +7934,81 @@
 			(project "rpi-hal-hil-test-hat"
 				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
 					(reference "#PWR0102")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 90.17 189.23 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "bcb1dcca-54ff-4bb5-9795-d1e97562c35d")
+		(property "Reference" "#PWR06"
+			(at 90.17 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 90.2843 193.5544 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 90.17 189.23 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 90.17 189.23 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 90.17 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a3ec069c-5f0b-4fcf-aace-fd28847738e5")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "#PWR06")
 					(unit 1)
 				)
 			)
@@ -6794,6 +8087,168 @@
 			(project "rpi-hal-hil-test-hat"
 				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
 					(reference "#PWR0103")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 90.17 179.07 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "dbc60a54-61c4-4a52-be08-33bb06cdfe8b")
+		(property "Reference" "R4"
+			(at 89.154 172.974 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10k"
+			(at 89.154 168.402 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 90.17 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 90.17 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 90.17 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "862dc567-414f-4c68-9607-2a4059615026")
+		)
+		(pin "2"
+			(uuid "763a6b0f-e79b-4315-92b6-00389c35bb48")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_Small")
+		(at 146.05 73.66 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "eefbe30b-18b1-42fc-80cd-69bc2c8111e1")
+		(property "Reference" "R3"
+			(at 139.446 72.644 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1k"
+			(at 142.494 72.644 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 146.05 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, small symbol"
+			(at 146.05 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "ad598405-79b9-44b2-ad5c-c6a133c5c604")
+		)
+		(pin "2"
+			(uuid "7380e916-e6ca-4b46-b8a7-9f37aff9a38c")
+		)
+		(instances
+			(project "rpi-hal-hil-test-hat"
+				(path "/e63e39d7-6ac0-4ffd-8aa3-1841a4541b55"
+					(reference "R3")
 					(unit 1)
 				)
 			)
