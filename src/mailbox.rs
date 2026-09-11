@@ -43,6 +43,32 @@
 //! the picture, a second cache this driver has no maintenance
 //! operations for at all. Both pieces are needed: one for the ARM
 //! core's cache, one for the VideoCore's.
+//!
+//! ## Sources
+//!
+//! The raw register protocol in `Mailbox::call_raw` (channel folded
+//! into the address's low 4 bits, FULL/EMPTY status polling, and the
+//! property-tags channel's exception to the VC-bus-address rule) is
+//! documented at
+//! <https://github.com/raspberrypi/firmware/wiki/Accessing-mailboxes>.
+//!
+//! Most of the property tags this module uses — firmware/board
+//! revision, serial, MAC address, the ARM/VC memory split, clock
+//! rate get/set, temperature, the GPIO-expander state, display size,
+//! overscan, and EDID — are listed at
+//! <https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface>.
+//! A handful of newer or less common tags this driver also uses —
+//! [`throttled`](crate::mailbox::Mailbox::throttled) (`0x0003_0046`),
+//! [`set_power_domain`](crate::mailbox::Mailbox::set_power_domain)
+//! (`0x0003_8030`), the paged-framebuffer flip/vsync tags
+//! (`0x0004_8009`/`0x0004_800e`),
+//! [`vchiq_init`](crate::mailbox::Mailbox::vchiq_init) (`0x0004_8010`),
+//! and
+//! [`set_touch_buffer_address`](crate::mailbox::Mailbox::set_touch_buffer_address)
+//! (`0x0004_801f`) — aren't on that wiki page at all; those are only
+//! confirmed, name and value both, against the Linux kernel's own tag
+//! enum at
+//! <https://github.com/torvalds/linux/blob/master/include/soc/bcm2835/raspberrypi-firmware.h>.
 
 use crate::cache::{clean_range, invalidate_range};
 use crate::pac::VCMAILBOX;
