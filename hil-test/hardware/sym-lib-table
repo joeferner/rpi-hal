@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "rpi-hal-hil-test-hat") (type "KiCad") (uri "${KIPRJMOD}/rpi-hal-hil-test-hat.kicad_sym") (options "") (descr ""))
+)

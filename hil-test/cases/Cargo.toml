@@ -1,0 +1,35 @@
+# Detached from the rpi-hal workspace on purpose. These are bare-metal Pi
+# binaries built four ways -- bcm2837/bcm2711 x AArch32/AArch64 -- and
+# folding them into the parent would tie its target selection to theirs.
+[workspace]
+
+[package]
+name = "hil-cases"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Self-reporting hardware-in-the-loop test binaries for rpi-hal"
+license = "MIT OR Apache-2.0"
+
+# A path dependency rather than more `examples/`, deliberately. These build
+# against the published API surface the way an external consumer does,
+# including the `rpi-link.x` linker script the crate puts on the linker
+# search path -- so they cover the packaging as well as the drivers. It also
+# keeps test scaffolding out of `examples/`, which exists to be read.
+[dependencies]
+rpi-hal = { path = "../.." }
+embedded-hal = "1"
+# The allocator belongs to the binary, never to a HAL: a program may have
+# only one, so that choice cannot be made by a library.
+embedded-alloc = "0.6"
+
+[features]
+# Chip selection, forwarded to rpi-hal. Neither is a default there and
+# neither is here: there is no sensible default target chip.
+bcm2837 = ["rpi-hal/bcm2837"]
+bcm2711 = ["rpi-hal/bcm2711"]
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = "s"
