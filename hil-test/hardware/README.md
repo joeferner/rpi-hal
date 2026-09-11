@@ -36,10 +36,9 @@ The software either side of this split:
 | Part | Approx. | Tier | Purpose |
 | --- | --- | --- | --- |
 | Olimex PICO2-XXL (RP2350B) | €9 | fixture | the fixture MCU |
-| HAT rev A PCB + passives | $25–40 | fixture | wiring, power switching, real devices |
-| P100A cup-tip probes + R100 receptacles | ~$40 | fixture | the 40-contact interface to the Pi's pin tails |
-| Guide plate (second PCB) + standoffs | ~$15 | fixture | aligns the probe tips and carries the Pi |
-| M2.5 hold-down hardware | ~$5 | fixture | clamps the Pi against 3–8 kgf of spring force |
+| Harness board rev A + passives | $25–40 | fixture | wiring, power switching, real devices |
+| Header adapter PCB + connectors | ~$8 each | per board | keyed ribbon header and a power connector; stays on the Pi |
+| 40-way IDC ribbon, ~15 cm | ~$3 | fixture | the signal path, and the consumable |
 | TPS22958DGN load switch | ~$2 | fixture | Pi power control — 14 mΩ, 6 A, HVSSOP-8 |
 | INA226 + 10 mΩ shunt | ~$2 | fixture | rail current sense, and the overcurrent alert |
 | USB-serial adapter | ~$5 | orchestrator | smoke tier, and recovery — the bench-tier console is tunnelled through the fixture |
@@ -51,8 +50,9 @@ The software either side of this split:
 | Wi-Fi AP or dongle | ~$20 | orchestrator | isolated wireless network |
 | Bluetooth dongle | ~$10 | orchestrator | scripted BLE peer |
 
-Excluding the Pis, which the test matrix requires anyway. Around $165 for
-the whole bench with every witness present; a useful subset is far
+Excluding the Pis, which the test matrix requires anyway. Around $140 for
+the whole bench with every witness present, plus ~$8 of adapter per board;
+a useful subset is far
 cheaper, since tests skip on absent capabilities rather than failing. That
 is a total, not a per-board figure: there is **one** harness, and the board
 under test is swapped into it. See [One harness, boards swapped through
@@ -117,18 +117,33 @@ which covers every burst measurement worth making.
   design for the QFN-80 support circuitry is already in hand. Every pin
   fact in this document is read off that schematic rather than off a
   vendor pinout picture.
-- **Power topology fits.** USB VBUS reaches VSYS through an SS34
-  Schottky, and VSYS feeds a TPS62A02A buck (2 A, 3 A peak) that makes
-  the 3V3 rail. So the HAT can feed VSYS from the always-on 5 V rail with
-  no regulator of its own, and — because the diode blocks the other way —
-  doing that cannot push current back into the orchestrator's USB port.
+- **It powers itself.** USB VBUS reaches VSYS through an SS34 Schottky,
+  and VSYS feeds a TPS62A02A buck (2 A, 3 A peak) that makes the 3V3 rail.
+  The fixture's USB-C is attached to the orchestrator anyway — it carries
+  the console and the control interface — so that same cable powers the
+  module, and **the harness does not feed VSYS at all**. One less
+  connection, and the module sources 3V3 onto the header pins rather than
+  consuming it, which is where the INA226's supply comes from.
+
+  The harness *could* feed VSYS from the always-on rail instead, and the
+  two even coexist safely: a direct 5 V feed sits above what USB delivers
+  through the diode's ~0.4 V drop, so the harness would win and the diode
+  would simply reverse-bias. It is not worth the wire. The fixture draws
+  on the order of 100 mA, well inside a host port, and a fixture is no
+  use without its orchestrator regardless — so tying its life to the USB
+  cable costs nothing real.
+
+  Two consequences worth carrying. The always-on 5 V rail still has to
+  exist, because the load switch's input needs it whether or not the
+  fixture is powered from it. And the `ON` pull-down becomes
+  load-bearing rather than tidy: the inlet can be live while the host is
+  off, with no fixture powered up to hold `ON` low.
+
   Grounding `3V3_EN` (EXT2 pin 12, otherwise pulled to VSYS by 1 MΩ)
   shuts the regulator down, which is worth knowing before wiring
-  anything to that pin.
-
-  The buck's input range is 2.7–6 V, narrower than the 1.8–5.5 V a
-  Pico's VSYS accepts. Irrelevant at 5 V, but it rules out running the
-  fixture from a discharging cell.
+  anything to that pin. The buck's input range is 2.7–6 V, narrower than
+  the 1.8–5.5 V a Pico's VSYS accepts — irrelevant on USB, but it rules
+  out running the fixture from a discharging cell.
 - **16 MB flash, 8 MB PSRAM and a microSD slot.** The €5 PICO2-XL is the
   same PCB, same silkscreen and same pin map with 2 MB of flash and none
   of the three, and 2 MB is ample for the firmware — so this is bought
@@ -236,113 +251,94 @@ runs, so it contends with nothing. The smoke tier also uses a plain
 adapter directly on GPIO14/15 with no HAT at all — "a Pi and a USB-serial
 cable gets you real signal" has to stay true.
 
-## Mechanical: the Pi sits on the harness board
+## Mechanical: an adapter, a ribbon and a power lead
 
-The harness board is **not** a HAT mechanically. The Pi sits on top of it,
-component side up, and the board extends below and to the side. The 40
-header connections are made by **cup-tip spring test probes pressing up
-onto the tails of the Pi's through-hole header pins**. Nothing sits above
-the Pi.
+The harness board is **not** a HAT and does not touch the Pi. Between them
+sit two things:
 
-The Pi's header is a through-hole part, so its pin tails protrude through
-the underside — a defined metal stub rather than a bare pad, which is what
-makes this work. Contacting them is the same problem an in-circuit test
-fixture solves every day, which is why the parts come from that industry
-rather than from a connector catalogue.
+- **A small adapter PCB that stays on each Pi's header**, mated once and
+  left there. It carries a 2×20 socket underneath, a **shrouded, keyed**
+  2×20 IDC header for the signal ribbon, and a 2-pin locking power
+  connector fed from header pins 2/4 with wide copper.
+- **A 40-way IDC ribbon** to the harness board, plus a short power lead.
 
-Two reasons, and the second is the one that decided it:
+So the harness sits anywhere on the bench, and a swap is: unplug the
+ribbon, unplug the power lead, lift the board out. The adapter never
+comes off.
 
-- **Cycle life.** A swap is now the routine act rather than a rare one, so
-  the mating interface is a consumable. A stamped 0.1" socket is good for
-  a few hundred cycles and even a machined receptacle for around a
-  thousand; spring-loaded pins are rated to a million. That is three
-  orders of magnitude, and it removes swap count as a design worry
-  entirely.
-- **The HAT outline was the binding mechanical constraint.** A 65 ×
-  56.5 mm board with the fixture module eating a third of it, and stack
-  height over the Pi's header to respect, is a squeeze that has nothing to
-  do with the problem being solved. A base board has as much area as it
-  wants. And with nothing above the Pi, HDMI, USB, Ethernet, the SD card,
-  USB-C power and both FPC connectors all stay reachable, and the Pi's own
-  header stays free if a test ever wants to plug something into it.
+### Why not spring probes
 
-What it costs:
+The obvious alternative was a bed of cup-tip spring probes pressing up
+onto the tails of the Pi's through-hole header, with the Pi clamped down
+on top. It works, and the electrical numbers are fine, but the mechanics
+are most of a project on their own. Measured on the real probes: **100 gf
+at 1 mm of compression rising to 200 gf near full stroke**, with movement
+starting around 30 gf. Forty of those is **4–8 kgf**, which is not a
+clamp you improvise:
 
-- **The probes must be clamped, not rested.** Spring probes of this class
-  run somewhere between 80 gf and 200 gf each, so 40 of them stand at
-  3–8 kgf depending on which spring is fitted. A Pi weighs about 45 g,
-  under 2% of that, so gravity is not a fastening method. The Pi's four
-  M2.5 mounting holes are the datums and the compression points, and the
-  compression wants to act near the header rather than only at the corners
-  — 1 mm FR4 will bow across a 100 mm span otherwise. Spring force is
-  worth choosing deliberately rather than accepting: it is the single
-  number that sets how much hold-down hardware the design needs.
-- **The 5V pair is the current ceiling.** The Pi brings 5V in on exactly
-  two pins, so whatever one contact carries, double it. A 3 A contact gives
-  6 A, which clears the ~3 A the cable allows; a 1 A contact would give 2 A
-  and fail. Ground is a non-issue at eight pins. This is the spec to
-  confirm on any candidate before anything else.
-- **The contact surface is solder-coated.** The tails are square and wave
-  soldered, so they are neither round nor clean gold. That is exactly what
-  cup and crown tips exist for, and the in-circuit test industry's own
-  guidance is that cup, crown and serrated tips suit "posts, pins or
-  screws" while flat and radius tips belong on pads. Contact resistance is
-  still the term least worth trusting on paper here.
+- A Pi weighs about 45 g, under 2% of that, so gravity is not a fastening
+  method — it needs a screwed bar over the header line.
+- 6 kgf distributed over the 50 mm header span bends the Pi's own 1.6 mm
+  PCB by roughly 0.5–1.7 mm, against 4.3 mm of probe stroke. The probes at
+  the ends of the row compress hard while the middle barely touches, which
+  presents as flaky GPIO rather than as a mechanical fault.
+- The harness board sees the same load downward and needs standoffs
+  flanking the probe field, plus a drilled guide plate above it to locate
+  40 tips to ±0.2 mm, plus ~30 mm of clearance underneath for receptacle
+  bodies.
 
-Three things to check against real hardware rather than datasheets:
-whether the **Pi 4's underside is clear** beneath the header pads, since
-unlike the 3B it carries bottom-side components; what **contact resistance**
-the probes actually achieve on solder-coated tails; and whether a cup tip
-or a crown tip does better on a square tail, which is a two-dollar
-experiment and not worth reasoning about further.
+None of that buys anything the ribbon does not, and the ribbon deletes all
+of it. The probes remain the right answer for a genuine bed-of-nails
+fixture against bare pads; they are the wrong answer against a header that
+already has a connector on it.
 
-### The probes, and the two boards that hold them
+### What the adapter is for
 
-The contacts are **`P100A`** cup-tip spring test probes — 0.100" family,
-Ø1.5 mm concave head — seated in **`R100`** receptacles. The `A` suffix is
-the cup tip across every vendor in this family; `H` and `Q2` are crowns,
-`B` a spear, `E2` a convex radius. Cheap and stocked, which is why they are
-the choice: the question that decides this interface is a measurement, and
-a part that arrives in two days answers it sooner than a better-specified
-part that takes three weeks.
+Three jobs, and each replaces a problem rather than adding one.
 
-**The receptacle is the mounted part, not the probe.** Receptacles solder
-into the harness board and the probes push in from above, so a worn or
-bent probe pulls out with pliers instead of needing rework. Soldering
-probes directly would give that up and risks wicking flux into the
-plunger.
+**It makes misplugging impossible.** A bare 2×20 header is unkeyed, so a
+female IDC can be seated offset by a position or reversed, putting 5V and
+3V3 onto GPIOs. A shrouded header on the adapter cannot. This is the one
+place the ribbon was genuinely *less* safe than probes, and it is a
+$2 fix.
 
-That takes **two boards**, off the same drill coordinates with different
-hole sizes:
+**It keeps the power on pins 2/4.** The whole back-powering design
+survives — no per-model power cable, and the adapter is identical on every
+board, unlike the Pi's own power connector which is micro-USB on a Pi 3
+and USB-C on a Pi 4.
 
-| | Harness board | Guide plate |
+**It moves the wear off the Pi.** The adapter's socket mates once per
+board. What gets repeated is the keyed IDC and a locking power connector,
+both cheap and both replaceable without touching anything soldered. A worn
+ribbon is a few dollars, against reworking a field of receptacles.
+
+### The two power paths are in parallel, which is the good part
+
+The ribbon's conductors 2 and 4 land on the same pins the power lead
+feeds, so tying them to the switched rail at the harness end puts the two
+in parallel — same net, no conflict. For a 15 cm ribbon in 28 AWG against
+a 20 AWG pigtail:
+
+| Path | Resistance | Share of 3 A |
 | --- | --- | --- |
-| Hole | ~1.75 mm, plated | ~1.6 mm, unplated, no copper |
-| Sized for | receptacle OD (1.67 mm) | sliding fit on the Ø1.5 mm probe head |
-| Job | solder joint and connection | lateral alignment of the tips |
+| Power pigtail | ~5 mΩ | ~86% |
+| Ribbon pair + 4 IDC contacts | ~31 mΩ | ~14% |
+| **Parallel** | **~4.3 mΩ** | |
 
-The guide plate is just a second PCB on the same fab order — a few
-dollars, hole position held to about ±0.08 mm, which beats hand
-machining, and **FR4 is an insulator**, which a machined aluminium plate
-is not: bare metal would short all 40 probe barrels together. Order it
-2.0–2.4 mm thick, because it also carries the spring load and the Pi
-rather than merely guiding tips. Generate its drill file from the same
-footprint positions so no coordinate is ever transcribed by hand.
+That leaves the ribbon carrying about 0.42 A across two conductors,
+**0.21 A each against a ~1 A rating**. Ribbon current was the objection
+that ruled out a ribbon-only design; splitting the load removes it, and
+the parallel path is lower resistance than either wire alone.
 
-Two mechanical consequences. The receptacles are ~30 mm long and hang
-**below** the harness board, so the board needs that much clearance
-underneath and cannot sit flat on the bench. And the assembly order is
-receptacles → probes → guide plate → standoffs, so replacing a probe later
-means lifting the plate off: four screws rather than a rework station, but
-not nothing.
+End to end from the harness to the Pi at 3 A: the adapter's socket on
+pins 2/4 (~21 mV), its copper (~6 mV), the parallel feed (~13 mV) and the
+ground return (~15 mV) — about **55 mV**, against ~45 mV for two spring
+probes. Electrically a wash, mechanically a different world.
 
-Inverting the Pi onto targets was considered and does not work: the GPIO
-pin tips stand ~8.5 mm above the Pi's PCB while the USB-A stack is
-~15.5 mm and the RJ45 ~13.5 mm on that same face, so the ports would hit
-the board 5–7 mm early and be pointing into it. A rigid concave target on
-the harness does not work either — the Pi's pin is rigid too, so nothing
-in the joint would have any compliance, and across 40 contacts some would
-bottom out while others floated.
+**A standard 45 cm IDE cable will not do**, for the avoidance of doubt:
+its 5V pair alone is ~150 mV at 3 A. This is a short cable, and since IDC
+is the one connector system that assembles in a vice, making one to length
+is easier than sourcing one.
 
 ## Power control: the harness supplies the Pi's 5V
 
@@ -364,16 +360,18 @@ also resets the LAN9514, the Wi-Fi chip and attached USB devices, which a
 
 Five things this has to get right.
 
-1. **The HAT needs its own upstream supply.** This inverts the usual HAT
-   relationship: the fixture must stay alive while the Pi is dead, so it
-   cannot be powered from the Pi's 3V3 pins. A dedicated 5V inlet →
-   always-on 5V rail, which feeds the fixture's VSYS directly and, through
-   the load switch, header pins 2 **and** 4 in parallel with several GND
-   pins. Budget 6A: a Pi 4 under load with peripherals draws upwards of
-   1.5A, the switch is specified to pass 6A, and the rig's own supply must
-   not be a variable. That budget rules out a passive USB-C breakout with
-   5.1k CC resistors, which without PD negotiation is entitled to
-   500–900mA and can reach 3A only if the source happens to advertise it.
+1. **The harness needs its own upstream supply.** This inverts the usual
+   HAT relationship: the fixture must stay alive while the Pi is dead, so
+   nothing here can be powered from the Pi's 3V3 pins. A dedicated 5V
+   inlet → always-on 5V rail → the load switch → header pins 2 **and** 4
+   in parallel with several GND pins. The fixture itself is not on this
+   rail; it takes its power from the USB-C cable that already carries its
+   console, so the inlet exists purely to supply the board under test and
+   the harness's own devices. Budget 6A: a Pi 4 under load with peripherals
+   draws upwards of 1.5A, the switch is specified to pass 6A, and the rig's
+   own supply must not be a variable. That budget rules out a passive USB-C
+   breakout with 5.1k CC resistors, which without PD negotiation is
+   entitled to 500–900mA and reaches 3A only if the source advertises it.
    See [Where the 5V comes from](#where-the-5v-comes-from).
 2. **Switch the high side, never the ground.** Low-side switching floats
    the Pi's ground against the fixture's, and then every shadowed GPIO
@@ -473,30 +471,36 @@ Four things it changes:
   about. The datasheet says not to leave `ON` floating in any case, so pull
   it down: the rail then arrives with the Pi off and the fixture turns it
   on deliberately.
-- **Budget the whole path, including the contacts.** Every term, at 5A
+- **Budget the whole path, including the connectors.** Every term, at 5A
   with the naive choices: 18 AWG is roughly 21 mΩ/m, so a metre out and
   back is 42 mΩ (**210mV**); the switch is 14 mΩ (70mV); a 10 mΩ shunt is
-  50mV; a low-resistance fuse about 25mV; and the two probes feeding the
-  5V pair, at 30 mΩ each and 15 mΩ in parallel, are 75mV. That totals
-  430mV and lands a nominal 5.0V rail at **4.57V**, well under the 4.75V
-  the Pi wants. Worse, at **3A the same path costs 258mV and lands at
-  4.74V — it fails the floor too.**
+  50mV; a low-resistance fuse about 25mV; and the adapter path — its
+  socket on pins 2/4, its copper, the parallel ribbon-and-pigtail feed and
+  the ground return, ~18 mΩ together — is 92mV. That totals 447mV and
+  lands a nominal 5.0V rail at **4.55V**, well under the 4.75V the Pi
+  wants. At **3A the same path costs 268mV and lands at 4.73V**, which
+  also fails.
 
   So the naive wiring does not work at any current, and the fix is the
   wiring rather than the parts. 16 AWG over half a metre each way is
-  13 mΩ instead of 42, and a 5 mΩ shunt halves that term: 3A then costs
-  156mV and lands at **4.84V**, with 5A at 4.74V — still only a peak.
+  13 mΩ instead of 42, and a 5 mΩ shunt halves that term:
 
-  Two things worth carrying forward. **The contacts belong in this budget**
-  and were missing from it — any 40-way interface, probes or socket,
-  contributes something on the parallel 5V pair. And at 30 mΩ they are the
-  **second-largest term after the cable**, which is why measured contact
-  resistance on real pin tails is the number the whole power path waits
-  on. This is a measurement to take at the header under load, not a figure
-  to trust on paper.
+  | | 16 AWG + 5 mΩ shunt | lands at |
+  | --- | --- | --- |
+  | 3A | 39 + 42 + 15 + 15 + 55 = **166mV** | **4.83V** ✓ |
+  | 5A | 65 + 70 + 25 + 25 + 92 = **277mV** | 4.72V — peak only |
+
+  Two things worth carrying forward. **The connectors belong in this
+  budget** and were missing from it: any 40-way interface contributes
+  something on the parallel 5V pair, and it is the second-largest term
+  after the cable. And the reason 3A now clears comfortably rather than
+  scraping is the parallel feed — a single path, ribbon or pigtail alone,
+  would put it back near the floor. This is still a measurement to take at
+  the header under load rather than a figure to trust on paper.
 - **The rail dies when the PC does.** +5V is only live in S0, so shutting
-  down or rebooting the orchestrator power-cycles the board under test and
-  the fixture with it. Almost certainly what you want, since a fixture is
+  down or rebooting the orchestrator drops the board under test — and the
+  fixture goes with it anyway, since its USB host is the same machine.
+  Almost certainly what you want, since a fixture is
   no use without its orchestrator — but "always-on" now means "always on
   while the PC is up", which is better known in advance than diagnosed as
   a fault.
@@ -504,9 +508,10 @@ Four things it changes:
 Noise is not the concern it looks like: ATX specifies +5V at ±5% with 50mV
 ripple, inside what a Pi tolerates, and the inlet wants local bulk anyway.
 The ±5% is worth carrying downstream, though — it means the rail can sit
-legitimately at 5.25V, so anything on it with a 6V absolute maximum, an
-ideal diode passing VSYS included, has well under a volt of headroom and
-wants a clamp at the inlet alongside the fuse.
+legitimately at 5.25V, and the load switch on it has a 6V absolute
+maximum on every pin. That is well under a volt of headroom, so the rail
+wants a clamp at the inlet alongside the fuse. The fixture is not exposed
+to this, since it powers itself from USB rather than from this rail.
 
 **Part choice**: **TPS22958DGN**, a high-side load switch IC rather than a
 discrete FET or a relay. One package gives a 14 mΩ pass element good for
@@ -697,6 +702,99 @@ driver across the whole header, which would have to split into halves.
 Shadowing everything at once also means adding a pin to a future test is a
 firmware change rather than a respin.
 
+### The pin map
+
+Read off the Olimex schematic's own netlist and the RP2350 function mux, not
+off a pinout picture. Four constraints shape it, and only the first two are
+obvious:
+
+- **The 28 shadow lines avoid all six committed pins.** GP8–11 and GP24 are
+  PSRAM and SD, GP25 is the LED; none can do high-impedance observation.
+- **The console pair must be a real UART0 TX/RX pair**, because the fixture
+  is the Pi's console peer. GP12/GP13 are one, so board GPIO15 (the Pi's
+  RXD0, our transmit) lands on GP12 and GPIO14 on GP13.
+- **The I2C slave role must sit on real I2C pins** — that role is hardware,
+  unlike the SPI, I2S and UART peer roles, which all come from PIO and so
+  place no constraint on their pins at all. Board GPIO2/3 therefore land on
+  GP14/GP15, an I2C1 SDA/SCL pair. The INA226, where the fixture is master
+  instead, goes on the *other* instance.
+- **Analog needs the ADC pins**, which on the RP2350B are only GP26–29 and
+  GP40–47. The shadow claims nine of those twelve, which is why the audio
+  and rail sense sit at the top of EXT2.
+
+No 28-pin contiguous run of free GPIO exists — GP24/25 sit in the middle of
+every candidate window — so the shadow is two blocks, GP12–23 and GP26–41.
+That matters only for PIO logic capture, which reads a contiguous base plus
+count: the larger block covers sixteen header lines in one pass and the rest
+needs a second.
+
+| Pi GPIO | Pi pin | Pi alt | Fixture GP | PICO2-XXL | Mux used |
+| --- | --- | --- | --- | --- | --- |
+| GPIO0 | 27 | ID_SD | GP16 | EXT1.3 | PIO / SIO |
+| GPIO1 | 28 | ID_SC | GP17 | EXT1.5 | PIO / SIO |
+| GPIO2 | 3 | SDA1 | GP14 | EXT1.36 | I2C1.Sda |
+| GPIO3 | 5 | SCL1 | GP15 | EXT1.38 | I2C1.Scl |
+| GPIO4 | 7 | — | GP18 | EXT1.7 | PIO / SIO |
+| GPIO5 | 29 | — | GP19 | EXT1.9 | PIO / SIO |
+| GPIO6 | 31 | — | GP20 | EXT1.11 | PIO / SIO |
+| GPIO7 | 26 | SPI0 CE1 | GP21 | EXT1.13 | PIO / SIO |
+| GPIO8 | 24 | SPI0 CE0 | GP22 | EXT1.15 | PIO / SIO |
+| GPIO9 | 21 | SPI0 MISO | GP23 | EXT1.17 | PIO / SIO |
+| GPIO10 | 19 | SPI0 MOSI | GP26 | EXT1.27 | PIO / SIO |
+| GPIO11 | 23 | SPI0 SCLK | GP27 | EXT1.29 | PIO / SIO |
+| GPIO12 | 32 | PWM0 | GP28 | EXT1.31 | PIO / SIO |
+| GPIO13 | 33 | PWM1 | GP29 | EXT1.33 | PIO / SIO |
+| GPIO14 | 8 | TXD0 | GP13 | EXT1.34 | UART0.Rx |
+| GPIO15 | 10 | RXD0 | GP12 | EXT1.32 | UART0.Tx |
+| GPIO16 | 36 | SPI1 CE2 | GP30 | EXT1.35 | PIO / SIO |
+| GPIO17 | 11 | SPI1 CE1 | GP31 | EXT1.37 | PIO / SIO |
+| GPIO18 | 12 | PCM_CLK/PWM0 | GP32 | EXT2.3 | PIO / SIO |
+| GPIO19 | 35 | PCM_FS/PWM1 | GP33 | EXT2.5 | PIO / SIO |
+| GPIO20 | 38 | PCM_DIN | GP34 | EXT2.7 | PIO / SIO |
+| GPIO21 | 40 | PCM_DOUT | GP35 | EXT2.9 | PIO / SIO |
+| GPIO22 | 15 | — | GP36 | EXT2.11 | PIO / SIO |
+| GPIO23 | 16 | — | GP37 | EXT2.13 | PIO / SIO |
+| GPIO24 | 18 | — | GP38 | EXT2.15 | PIO / SIO |
+| GPIO25 | 22 | — | GP39 | EXT2.17 | PIO / SIO |
+| GPIO26 | 37 | — | GP40 | EXT2.23 | PIO / SIO |
+| GPIO27 | 13 | — | GP41 | EXT2.25 | PIO / SIO |
+
+Housekeeping takes the rest. The Pi's 3V3, 5V and ground pins tie to the
+harness rails rather than to a fixture pin.
+
+| Fixture GP | PICO2-XXL | Signal | Mux |
+| --- | --- | --- | --- |
+| GP0 | EXT1.4 | PWR_EN — load switch `ON` | SIO |
+| GP1 | EXT1.6 | PWR_ALERT — INA226 alert | SIO |
+| GP2 | EXT1.8 | RUN_DRV — open-drain `RUN` | SIO |
+| GP3 | EXT1.10 | BLEED_EN — 3V3 bleeder gate | SIO |
+| GP4 | EXT1.12 | INA226 SDA | I2C0.Sda |
+| GP5 | EXT1.14 | INA226 SCL | I2C0.Scl |
+| GP6 | EXT1.16 | VBUS1_EN | SIO |
+| GP7 | EXT1.18 | VBUS2_EN | SIO |
+| GP25 | EXT1.25 | VBUS3_EN — also lights the user LED | SIO |
+| GP42 | EXT2.27 | AUDIO_L | ADC |
+| GP43 | EXT2.29 | AUDIO_R | ADC |
+| GP44 | EXT2.31 | PI_3V3_SENSE | ADC |
+| GP45 | EXT2.33 | VBUS1_FAULT | ADC-capable |
+| GP46 | EXT2.35 | VBUS2_FAULT | ADC-capable |
+| GP47 | EXT2.37 | VBUS3_FAULT | ADC-capable |
+
+That is 28 plus 15 against 43 usable, so it fits with nothing spare. Two
+notes on the margins. `VBUS3_EN` deliberately uses GP25, the LED pin: a
+2.2 kΩ load is harmless on an output, and the LED then indicates that a USB
+port is powered, which is a feature rather than a compromise. And GP8–11
+and GP24 come back — five pins — for any build that fits neither PSRAM nor
+the SD card, which is the reserve if the housekeeping list grows.
+
+**The module must be hardware revision C or later.** Rev C was the first to
+place EXT1 and EXT2 exactly 900 mil apart centre to centre; on Rev A and B
+they sit 0.34 mm closer, and the mounting holes moved 0.5 mm between B and
+C. A socket footprint drawn to 900 mil will fight an earlier board. Rev B
+is also where SD_DAT0 moved from GPIO12 to GPIO24, which is what makes
+GP12 free for the console pair above — on a Rev A board this pin map does
+not hold.
+
 ### The GPIO14/15 handoff
 
 GPIO14/15 are both the console and a device under test, and that conflict
@@ -782,11 +880,44 @@ a wrong bit period.
   against a 2.31 V V<sub>IH</sub>. Restoring it takes the capture from 55
   edges back to all 1640, and removing it loses them again.
 
-  Note the asymmetry with the console lines above, which need no such thing:
-  those are *driven* from one end or the other at all times, and a driven
-  pad has no floating state for the erratum to latch. It is only the
-  high-impedance observation case — the fixture's entire job on a shadowed
-  line — that is exposed.
+  What the erratum actually needs is a *defined level*, not specifically a
+  pull-down — a pad that is driven, or held by a pull in either direction,
+  has no floating state to latch. That is why the two-wire breadboard's
+  console lines never needed one: GPIO14/15 are driven from one end or the
+  other at all times. On a 1:1 shadow that exemption disappears, because
+  every line including 14/15 is observed high-impedance during a header
+  sweep, so on the harness they carry both resistors like any other.
+
+  **The four I2C lines are the real exception, and a pull-down breaks
+  them.** GPIO0/1 (ID_SD/ID_SC) and GPIO2/3 (SDA1/SCL1) are open-drain
+  buses that idle high through a pull-up, and a pull-down to ground fights
+  it. Against the 3.9 kΩ the ID bus already carries, 1 kΩ plus 8.2 kΩ to
+  ground puts the bus high at 3.3 × 9.2/13.1 = **2.32 V** against a 2.31 V
+  V<sub>IH</sub> — on the threshold, which fails intermittently rather than
+  cleanly, and takes the ID EEPROM and the `I2C_SLAVE` role with it. So
+  those four lines keep the series resistor and **omit the pull-down**,
+  letting the bus pull-up hold the pad instead.
+
+  The series resistor then sizes the pull-up, because the fixture has to
+  assert a low *through* its 1 kΩ and the divider has to land under a
+  0.99 V V<sub>IL</sub>:
+
+  | Bus pull-up | Fixture's asserted low | |
+  | --- | --- | --- |
+  | 1.8 kΩ | 1.18 V | fails |
+  | 2.2 kΩ | 1.03 V | fails |
+  | 3.9 kΩ | 0.67 V | works — the ID bus as built |
+  | 4.7 kΩ | 0.58 V | works |
+
+  So **I2C1 wants 3.9–4.7 kΩ, not the common 1.8 kΩ.** Fit 1.8 kΩ and the
+  fixture can never assert a valid low, so the slave role simply does not
+  work with nothing on the schematic to suggest why. The 1 kΩ still earns
+  its place on these lines, because GPIO2/3 are also ordinary GPIO that a
+  header sweep drives push-pull, where contention is real.
+
+  That leaves **28 series resistors and 24 pull-downs**, plus bus pull-ups
+  on the four I2C lines and on the open-drain `PWR_ALERT` and `VBUS_FAULT`
+  inputs. Worth fitting as 4-element arrays rather than 52 discretes.
 
   What the pull-down costs is the top of the resolution range. With 1 kΩ and
   a 10 kΩ pull-down the bench still resolves every deliberate edge — a 100
@@ -796,6 +927,23 @@ a wrong bit period.
   direct wiring resolves 336. Those runts are not a controlled stimulus and
   no case can ask for one, so this is the right trade; it is also the
   measurement behind "a marker has to be held wide enough to see."
+
+  The other thing it costs is the board's **internal pull-ups**. Those are
+  around 50 kΩ on BCM283x, so against 1 kΩ plus 8.2 kΩ to ground a line
+  with the board's pull-up enabled sits at 3.3 × 8.2/59.2 ≈ **0.46 V** —
+  below V<sub>IL</sub> at both ends. A case that enables a pull-up and
+  expects to read high cannot pass, and the fixture cannot see pull-up
+  configuration digitally at all. Internal pull-*downs* are unaffected,
+  since they pull the same way the external one does.
+
+  Six lines have a way out that costs nothing. The shadow puts Pi GPIO10,
+  11, 12, 13, 26 and 27 on GP26–29 and GP40–41, all of which are
+  ADC-capable, so on those the fixture can *measure* the divider instead
+  of reading a level: an enabled pull-up shows ≈0.46 V, about 570 counts at
+  12 bits, against 0 V for a driven low or a float. Pull-up configuration
+  is therefore testable on six of the twenty-eight without any extra
+  hardware — the case just has to reach for the ADC rather than a digital
+  read.
 
   What the resistor does **not** do is let the fixture override a pin the
   board is actively driving, and it is worth being unambiguous about that
@@ -986,13 +1134,13 @@ Two things follow for the design, and both are already true of it:
   second route. Neither needs a config file describing the bench, and
   neither can go stale after a swap the way a config file can.
 
-Connector wear would be the obvious consumable, and it is the reason the
-Pi interface is spring probes rather than a socket — see
-[Mechanical](#mechanical-the-pi-sits-on-the-harness-board). The probes far
-outlast a socket, and when one does wear it pulls out of its receptacle
-without touching the board, which
-leaves the **CSI ribbon** as the part that will fail first, and it is
-addressed below.
+Connector wear would be the obvious consumable, and it is why the Pi
+interface is an adapter and a ribbon rather than a socket on the harness —
+see [Mechanical](#mechanical-an-adapter-a-ribbon-and-a-power-lead). The
+repeated mating happens at a $3 cable and a locking power connector,
+neither of which is soldered to anything that matters, so wearing one out
+is a purchase rather than a rework. That leaves the **CSI ribbon** as the
+part that will fail first, and it is addressed below.
 
 ### The boards it is swapped between
 
@@ -1035,15 +1183,17 @@ before ARMv6 lands, a Zero 2 W provides it with existing drivers.
 Most of the bench does not move. Worth knowing which parts do, because
 that list is the swap procedure.
 
-**Stays put:** the harness board and the PICO2-XXL mated to it, the spring
-pins, the 5V inlet, the VBUS switch board, the USB device set, the
-Ethernet switch, the Wi-Fi AP, the Bluetooth dongle, the HDMI capture
-stick and the audio dongle. All of it belongs to the harness, not to a
-board.
+**Stays put:** the harness board and the PICO2-XXL mated to it, the 5V
+inlet, the VBUS switch board, the USB device set, the Ethernet switch, the
+Wi-Fi AP, the Bluetooth dongle, the HDMI capture stick and the audio
+dongle. All of it belongs to the harness, not to a board.
 
-**Changes with the board:** the clamp is released, the Pi lifted off the
-probe tips, and the next one set down and clamped — the only mating action
-in the swap, and the one that used to be an insertion. Then Ethernet, USB, the
+**Stays on the board:** its header adapter. That is the point of it — the
+Pi's own 40-pin header is mated once, when the adapter goes on, and never
+again.
+
+**Changes with the board:** the signal ribbon and the power lead unplug
+from the adapter, and plug into the next board's. Then Ethernet, USB, the
 3.5 mm audio lead where the board has a jack, and the HDMI cable, which is
 a different connector per board so it is the cable that changes rather
 than being re-plugged. Nothing needs re-configuring afterwards, since the

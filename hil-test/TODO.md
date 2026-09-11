@@ -13,54 +13,49 @@ Ordered by what a wrong answer would cost. The board commits to numbers and
 structure that nothing has measured yet, and the expensive mistakes are the
 structural ones — a wrong passive is rework, a wrong topology is a respin.
 
-### The Pi interface, with probes in hand
+### The Pi interface
 
-Four measurements, none needing more than a drilled scrap of FR4, a bench
-supply and calipers. The first two can invalidate the approach; the second
-two only set values.
+Settled: a header adapter on each Pi, a keyed 40-way IDC ribbon and a
+parallel power lead. What is left is one board to draw and one number to
+confirm.
 
-- [ ] **Is the Pi 4's underside clear beneath the header pads?** Unlike the
-      3B it carries bottom-side components, and a probe field needs ~30 mm of
-      clearance below the tails. If anything sits in that footprint the whole
-      sit-on-top topology fails on Pi 4 specifically, which is the board the
-      matrix most needs filled. Nothing on paper answers this; it wants a
-      board and a straight edge.
-- [ ] **How far do the pin tails protrude, on each model?** A cup tip needs a
-      stub to capture. If a board's tails are trimmed near flush and domed
-      over with solder there is nothing to seat on, and the fix is a different
-      tip suffix — crown or flat — from the same shelf. Cheap to know before
-      40 receptacles are committed, expensive after. Measure with calipers on
-      every model the bench will hold, since assembly varies.
-- [ ] **Contact resistance at working stroke, on a solder-coated tail.** The
-      whole power path waits on this number. Folding 30 mΩ per contact into
-      the drop budget already puts 3 A *under* the 4.75 V floor on 1 m of
-      18 AWG, so the measured value decides whether 16 AWG and a 5 mΩ shunt
-      are sufficient or whether the topology needs rethinking. Four-wire:
-      force a known current through the joint, measure the drop separately,
-      subtract the probe's own body resistance. Take it at working stroke
-      rather than barely touching or fully bottomed, and again after a few
-      cycles, since first touch on oxide reads differently.
-- [ ] **Spring force at working compression**, one probe onto a kitchen
-      scale. Multiply by 40: that is the clamp. Candidates ranged 80–200 gf,
-      so the answer is somewhere between 3 and 8 kgf, and it decides whether
-      the hold-down is a screwed plate with support along the header line or
-      something lighter. Also worth settling **cup versus crown on a square
-      tail** while the parts are out — the tails are square and the cup is
-      round, so whether it skates under slight lateral offset is worth seeing
-      rather than reasoning about.
+- [ ] **Draw the header adapter.** A 2×20 socket underneath, a shrouded
+      2×20 IDC header for the ribbon, and a 2-pin locking power connector
+      fed from pins 2/4 with wide copper. It wants to overhang past the
+      board edge rather than sit over the Pi, clear of the tall connectors
+      and both FPC sockets — roughly 50 × 20 mm. Two choices to make while
+      drawing it: whether the socket underneath is plain or **stacking**,
+      which decides whether a scope probe can still reach the Pi's own pins
+      during a run; and the ribbon length, since drop scales with it and
+      15 cm is what the budget assumes.
+- [ ] **Confirm the assembled 5V drop at the header, under load.** The
+      budget says 166 mV at 3A and 4.83 V at the header, which depends on
+      the ribbon and pigtail actually sharing current as calculated —
+      roughly 86/14 — and on IDC contact resistance being the ~10-20 mΩ
+      assumed. Both are estimates. Measure at the header with a real board
+      drawing real current, because everything downstream of the switch was
+      sized against this figure.
 
 ### Structure the board commits to
 
-- [ ] **The pin map does not exist yet.** The pin budget argues the *count*
-      works; nothing assigns fixture GPIO to Pi GPIO. And the shadow cannot be
-      an arbitrary permutation: for the fixture to act as an I2C slave on the
-      Pi's GPIO2/3, the pins shadowing them must themselves be I2C-capable,
-      and likewise SPI0 (Pi 7–11), PCM/I2S (Pi 18–21) and the ADC channels
-      the audio and rail sense need, which on the RP2350B live only on
-      GPIO40–47. That is a constraint-satisfaction problem across 28 lines
-      plus housekeeping, avoiding the six pins already committed to PSRAM, SD
-      and the LED — and getting it wrong is a respin, not a rework. It is the
-      largest single input the schematic is missing.
+- [ ] **Buy a revision C or later PICO2-XXL, and check the socket footprint
+      against the board in hand.** Rev C was the first to place EXT1 and EXT2
+      exactly 900 mil apart; Rev A and B are 0.34 mm closer and their
+      mounting holes sit 0.5 mm differently. The pin map also assumes Rev B's
+      move of SD_DAT0 from GPIO12 to GPIO24, without which the console pair
+      has nowhere to go. A footprint drawn to the published 900 mil against
+      an earlier board is a respin, and the board does not report its own
+      revision.
+- [ ] **The PICO2-XXL footprint, and its pad names.** The symbol numbers its
+      pins `1-1`…`1-40` and `2-1`…`2-40`, one range per connector, so the
+      footprint's pads have to carry exactly those names — KiCad's stock
+      `PinSocket_2x20_*` numbers pads plainly and will not match. Draw
+      **one** footprint holding both sockets, which a single symbol wants
+      anyway and which makes the 900 mil spacing structural rather than
+      something set by eye. The symbol's `Footprint`, `Datasheet` and
+      `Description` fields are still empty; the revision requirement belongs
+      in `Description` so it travels with the part rather than living only in
+      `hardware/README.md`.
 - [ ] **Inlet overvoltage is unresolved.** The recommended supply is an ATX
       Molex tail, whose yellow wire is +12 V, and everything behind the inlet
       has a 6 V absolute maximum. A TVS cannot cover this: one that stays off
@@ -126,10 +121,19 @@ claimed. Cases needing them skip with a reason until they are.
       `LOGIC_CAPTURE`, `I2S_CAPTURE`, `AUDIO_ADC`, `RUN_RESET`.
 - [ ] **A pull-down per observed line on the harness board.** RP2350 erratum
       E9 means 1 kΩ in series in front of a watched pad is not enough on its
-      own, and the board plans 28 such lines. The breadboard uses 10 kΩ
+      own, and the board plans 24 such lines. The breadboard uses 10 kΩ
       because that is what was to hand; the errata sheet's bound is 8.2 kΩ,
       so the board should carry 8.2 kΩ or lower rather than inheriting the
       value that happened to work on one board at one temperature.
+- [ ] **Does E9 accept a pull-*up*?** The four I2C lines — GPIO0/1 and
+      GPIO2/3 — cannot take a pull-down without holding the bus low, so the
+      schematic leans on their bus pull-up to keep those pads from floating
+      instead. That rests on the erratum needing a defined level rather than
+      a pull-down specifically, which is a reading of it and not a quotation
+      from it. Check the errata sheet. If a pull-down is genuinely required,
+      those lines need a different answer — a switchable pull-down, or an
+      accepted limit on observing them — and it is far cheaper to know
+      before the board is laid out than after.
 - [ ] **No test covers the marker wire itself.** `marker_arm()` plus
       `captured` is a level probe, and "the first edge arrives at the
       announced grace and not before" is a continuity check — both were used
