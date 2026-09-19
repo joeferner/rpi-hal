@@ -8,8 +8,13 @@
 //! mediated by the VideoCore the same way: there's no ARM-side HDMI or
 //! DSI PHY to program directly, only this mailbox request for a buffer
 //! to write pixels into. Which physical output that buffer appears on
-//! is decided by firmware/`config.txt` configuration, not by anything
-//! this driver chooses.
+//! is chosen with
+//! [`set_display_num`](crate::mailbox::Mailbox::set_display_num), out
+//! of the displays the firmware enumerated. How many there are to
+//! choose between is still firmware/`config.txt` configuration — a
+//! board whose `max_framebuffers` leaves room for one display offers a
+//! choice of one, whatever is plugged into it — but which of them the
+//! framebuffer lands on is this driver's to decide.
 //!
 //! ## Wire format
 //!
@@ -65,7 +70,13 @@
 //! [`vchiq_init`](crate::mailbox::Mailbox::vchiq_init) (`0x0004_8010`),
 //! and
 //! [`set_touch_buffer_address`](crate::mailbox::Mailbox::set_touch_buffer_address)
-//! (`0x0004_801f`) — aren't on that wiki page at all; those are only
+//! (`0x0004_801f`), and the display enumeration tags
+//! [`num_displays`](crate::mailbox::Mailbox::num_displays)
+//! (`0x0004_0013`),
+//! [`set_display_num`](crate::mailbox::Mailbox::set_display_num)
+//! (`0x0004_8013`) and
+//! [`display_id`](crate::mailbox::Mailbox::display_id)
+//! (`0x0004_0016`) — aren't on that wiki page at all; those are only
 //! confirmed, name and value both, against the Linux kernel's own tag
 //! enum at
 //! <https://github.com/torvalds/linux/blob/master/include/soc/bcm2835/raspberrypi-firmware.h>.
