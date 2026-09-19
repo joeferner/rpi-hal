@@ -288,6 +288,51 @@ pub enum PixelOrder {
     Rgb = 1,
 }
 
+/// Which physical output one of the firmware's displays drives, as
+/// answered by [`Mailbox::display_id`] (tag `0x0004_0016`, "Get Display
+/// ID").
+///
+/// These are the VideoCore's own display identifiers, and they are not
+/// the same numbering as the *display number* that
+/// [`Mailbox::set_display_num`] takes: the id says what a display is,
+/// the number says where it sits in the firmware's enumeration of the
+/// displays actually present. A board with only HDMI attached has one
+/// display, whose number is 0 and whose id is [`DisplayId::Hdmi0`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayId {
+    /// The MIPI DSI panel — the official touchscreen and the displays
+    /// wired like it.
+    MainLcd,
+    /// A second LCD, on boards that have one.
+    AuxLcd,
+    /// The first (or only) HDMI connector.
+    Hdmi0,
+    /// Composite video out.
+    Sdtv,
+    /// The second HDMI connector, on boards that have two.
+    Hdmi1,
+    /// Something this crate has no name for, carrying the raw value the
+    /// firmware answered with. Forward compatibility rather than an
+    /// error: a caller looking for a display it does recognize can pass
+    /// over this one, and a caller logging what it found can still say
+    /// what the firmware said.
+    Other(u32),
+}
+
+impl DisplayId {
+    /// Decodes the firmware's raw display id.
+    fn from_raw(raw: u32) -> Self {
+        match raw {
+            0 => Self::MainLcd,
+            1 => Self::AuxLcd,
+            2 => Self::Hdmi0,
+            3 => Self::Sdtv,
+            7 => Self::Hdmi1,
+            other => Self::Other(other),
+        }
+    }
+}
+
 /// A framebuffer allocated by [`Mailbox::allocate_framebuffer`]: where
 /// it lives in memory and how its pixels are laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -812,6 +857,66 @@ impl Mailbox {
         Ok(Some(bytes))
     }
 
+    /// How many displays the firmware has enumerated (tag
+    /// `0x0004_0013`, "Get Number of Displays") — the count the display
+    /// numbers [`set_display_num`](Self::set_display_num) takes run
+    /// below.
+    ///
+    /// Firmware old enough not to know this tag answers with an error
+    /// or with zero; both mean the one display that firmware can
+    /// describe, so a caller that only wants to know whether there is a
+    /// choice to make should treat anything it can't get as `1`.
+    pub fn num_displays(&mut self) -> Result<u32, Error> {
+        let response = self.property_call(0x0004_0013, &[], 1)?;
+        Ok(response[0])
+    }
+
+    /// Selects which display the framebuffer tags act on (tag
+    /// `0x0004_8013`, "Set Display Num"), where `number` is below
+    /// [`num_displays`](Self::num_displays).
+    ///
+    /// The selection is firmware state, not state of this handle: it
+    /// persists across calls and across mailbox users until something
+    /// sets it again, and it starts at 0. Everything framebuffer-related
+    /// follows it — [`allocate_framebuffer`](Self::allocate_framebuffer),
+    /// [`allocate_framebuffer_paged`](Self::allocate_framebuffer_paged),
+    /// [`set_virtual_offset`](Self::set_virtual_offset) — so a program
+    /// that flips pages on one display must not leave another selected
+    /// in between.
+    ///
+    /// Selecting a display is only meaningful with more than one
+    /// attached, and which one is number 0 is the firmware's decision,
+    /// taken at boot from what it found: a board with both a DSI panel
+    /// and HDMI connected can enumerate them either way round. A caller
+    /// that wants a *particular* output has to look the numbers up with
+    /// [`display_id`](Self::display_id) rather than assume one.
+    pub fn set_display_num(&mut self, number: u32) -> Result<(), Error> {
+        self.property_call(0x0004_8013, &[number], 1)?;
+        Ok(())
+    }
+
+    /// What display `number` actually is (tag `0x0004_0016`, "Get
+    /// Display ID") — where `number` is below
+    /// [`num_displays`](Self::num_displays).
+    ///
+    /// Walking those numbers and calling this for each is how a caller
+    /// finds the display it wants, since the numbering itself carries no
+    /// meaning.
+    ///
+    /// The number goes in the request word and the id comes back in its
+    /// place. This tag therefore answers about the display it is *asked*
+    /// about rather than the one
+    /// [`set_display_num`](Self::set_display_num) selected, which is
+    /// what lets a caller enumerate every display without disturbing
+    /// where the framebuffer tags point. Passing a fixed word here
+    /// instead of the number — reading it as a no-argument "what is
+    /// selected?" tag — gets display 0's id every time, and an
+    /// enumeration in which every display looks like the first one.
+    pub fn display_id(&mut self, number: u32) -> Result<DisplayId, Error> {
+        let response = self.property_call(0x0004_0016, &[number], 1)?;
+        Ok(DisplayId::from_raw(response[0]))
+    }
+
     /// Allocates a `width`×`height` framebuffer at `depth_bits` bits per
     /// pixel (`8`/`16`/`24`/`32` are the depths the firmware actually
     /// supports; `32` is the common choice) in `pixel_order`, and
@@ -857,10 +962,14 @@ impl Mailbox {
     /// older firmware only processes a framebuffer request correctly
     /// when every tag arrives together in one buffer.
     ///
-    /// The VideoCore, not this driver, decides which physical output
-    /// (HDMI or the MIPI DSI touchscreen) this framebuffer appears on —
-    /// that's `config.txt`/firmware configuration, not something this
-    /// call chooses.
+    /// Appears on whichever display
+    /// [`set_display_num`](Self::set_display_num) last selected, which
+    /// is display 0 until something selects another. That only matters
+    /// with more than one display attached, and there it matters a great
+    /// deal: with a DSI panel and HDMI both connected, display 0 is
+    /// whichever of them the firmware happened to enumerate first, so a
+    /// caller that has an output in mind must select it rather than let
+    /// this land wherever.
     pub fn allocate_framebuffer_paged(
         &mut self,
         width: u32,
