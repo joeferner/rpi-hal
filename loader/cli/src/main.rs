@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use serialport::{SerialPortInfo, SerialPortType};
 
 use link::{Link, BASE_BAUD, DEFAULT_BAUD};
@@ -237,6 +238,25 @@ enum Command {
     /// Passthrough serial terminal only, with no handshake.
     Terminal,
 
+    /// Write a shell completion script to stdout.
+    ///
+    /// Generated from the same command tree clap builds for `--help`, so
+    /// it lists whatever subcommands and flags this binary actually has.
+    /// Touches no serial port.
+    ///
+    /// Install it where your shell looks, e.g. on Linux:
+    ///
+    ///     rpi-loader completions bash | sudo tee /usr/share/bash-completion/completions/rpi-loader
+    ///
+    /// or, without root:
+    ///
+    ///     rpi-loader completions bash > ~/.local/share/bash-completion/completions/rpi-loader
+    Completions {
+        /// Which shell to generate for.
+        #[arg(value_enum, default_value_t = Shell::Bash)]
+        shell: Shell,
+    },
+
     /// List the serial ports on this machine, to find the one to pass to
     /// --device.
     List {
@@ -258,7 +278,10 @@ impl Command {
     fn needs_handshake(&self) -> bool {
         !matches!(
             self,
-            Command::Terminal | Command::List { .. } | Command::Bundle { .. }
+            Command::Terminal
+                | Command::List { .. }
+                | Command::Bundle { .. }
+                | Command::Completions { .. }
         )
     }
 }
@@ -319,6 +342,133 @@ fn describe(port_type: &SerialPortType) -> String {
         SerialPortType::BluetoothPort => "Bluetooth serial".into(),
         _ => "unknown".into(),
     }
+}
+
+/// Works around a clap_complete bug that breaks every subcommand's
+/// completion when the binary's name contains a hyphen.
+///
+/// Its bash generator builds the same case label twice, and mangles the
+/// binary name differently each time. The dispatcher that decides which
+/// subcommand you are in uses `bin_name.replace('-', "__")`, producing
+/// `rpi__loader__subcmd__boot`; the branch that then supplies that
+/// subcommand's options is built from the command *path* with every
+/// separator replaced by `__subcmd__`, and the hyphen goes the same way,
+/// producing `rpi__subcmd__loader__subcmd__boot`. No label ever matches.
+///
+/// The symptom is not a missing flag here and there: past the first
+/// word, the script offers nothing at all. `rpi-loader sd-read --dev<TAB>`
+/// completes to nothing, and so does every other subcommand. Only the
+/// top level works, which is why it looks like it works at a glance.
+///
+/// A binary without a hyphen is unaffected, which is presumably why this
+/// survives upstream. The repair is to spell the name the dispatcher's
+/// way everywhere: harmless if clap_complete fixes it, since the broken
+/// spelling then does not appear.
+fn repair_hyphenated_bin_name(name: &str, script: String) -> String {
+    if !name.contains('-') {
+        return script;
+    }
+    script.replace(&name.replace('-', "__subcmd__"), &name.replace('-', "__"))
+}
+
+/// Bash layered over the generated script, so that `--device` completes
+/// to the serial ports this machine has right now.
+///
+/// clap can only say that `--device` takes a string, which its bash
+/// generator turns into filename completion — workable, since a port is
+/// a path, but it offers every file on the system and makes you type
+/// `/dev/tty` first. What the ports actually are is a runtime question,
+/// and the one thing that can answer it is this binary, so the wrapper
+/// asks it: `list` with no `--all`, the same USB-only filter a user would
+/// get by running it themselves.
+///
+/// `2>/dev/null` and a bare `awk` suffice because `list` writes only port
+/// lines to stdout — the "no ports found" notice goes to stderr, so an
+/// empty list stays empty rather than becoming a candidate called "No".
+///
+/// The delegation is what makes this an addition rather than a
+/// replacement: anything that is not a `--device` value falls through to
+/// clap's own function, which keeps every other flag and subcommand
+/// exactly as generated.
+///
+/// `@FN@` is that generated function, `@PREFIX@` names the two added
+/// here, and `@BIN@` is the command being completed.
+const BASH_DEVICE_WRAPPER: &str = r#"
+# Serial ports for --device, from the binary that knows them. Everything
+# else falls through to the generated completion above.
+@PREFIX@_ports() {
+    @BIN@ list 2>/dev/null | awk 'NF {print $1}'
+}
+
+@PREFIX@_complete() {
+    case "$3" in
+        -d|--device)
+            COMPREPLY=( $(compgen -W "$(@PREFIX@_ports)" -- "$2") )
+            return 0
+            ;;
+    esac
+    @FN@ "$@"
+}
+
+complete -F @PREFIX@_complete -o bashdefault -o default @BIN@
+"#;
+
+/// Writes a shell completion script for this binary to stdout.
+///
+/// Built from the `Command` clap derives from [`Cli`] — the same one
+/// behind `--help` — so the script describes the CLI that is actually
+/// compiled rather than a copy of it that has to be kept in step.
+///
+/// The binary name is taken from the command rather than hardcoded,
+/// because it is what the completion registers against: a script naming
+/// `rpi-loader` does nothing for a binary the user renamed or reached
+/// through a symlink, and clap already knows which name it was built
+/// with.
+///
+/// Output goes to stdout rather than to a file this picks: where a
+/// completion belongs differs by shell, distribution and whether the user
+/// can write outside their home, none of which this can work out. Piping
+/// it leaves that choice where it belongs — see the subcommand's `--help`
+/// for the two usual destinations.
+///
+/// For bash, [`BASH_DEVICE_WRAPPER`] is appended. It calls clap's
+/// generated function by name, which is the one thing here that depends
+/// on how clap_complete spells its output, so the name is derived the way
+/// that generator derives it and the result is *checked* before the
+/// wrapper is added: if the function is not there to delegate to, the
+/// script is emitted unchanged rather than wrapped around nothing, since
+/// a wrapper whose fall-through is missing would break every completion
+/// rather than just this one. `tests/completions.rs` asserts the wrapper
+/// is present, so that silent degradation fails a test instead of
+/// shipping.
+fn write_completions(shell: Shell) -> Result<()> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+
+    // Into memory rather than straight to stdout, so the bash arm below
+    // can look at what came out before adding to it.
+    let mut buffer = Vec::new();
+    clap_complete::generate(shell, &mut command, &name, &mut buffer);
+    let mut script = String::from_utf8(buffer).context("completion script is not UTF-8")?;
+
+    if shell == Shell::Bash {
+        script = repair_hyphenated_bin_name(&name, script);
+
+        // clap_complete's bash generator names its function after the
+        // command, with each `-` doubled into `__`.
+        let generated = format!("_{}", name.replace('-', "__"));
+        if script.contains(&format!("{generated}()")) {
+            script.push_str(
+                &BASH_DEVICE_WRAPPER
+                    .replace("@PREFIX@", &format!("_{}_device", name.replace('-', "_")))
+                    .replace("@FN@", &generated)
+                    .replace("@BIN@", &name),
+            );
+        }
+    }
+
+    print!("{script}");
+    Ok(())
 }
 
 /// Lists the serial ports this machine can see.
@@ -427,10 +577,15 @@ fn main() -> ExitCode {
 /// runs the command.
 fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
     // Before anything opens a port: listing is how a user finds out what
-    // to pass to --device, so it cannot require one, and packing a bundle
-    // never involves the serial link at all.
+    // to pass to --device, so it cannot require one, packing a bundle
+    // never involves the serial link at all, and a completion script is
+    // printed from this binary's own argument tree with no board in the
+    // picture.
     if let Command::List { all } = &cli.command {
         return list_ports(*all);
+    }
+    if let Command::Completions { shell } = &cli.command {
+        return write_completions(*shell);
     }
     if let Command::Bundle {
         manifest,
@@ -585,11 +740,10 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
 
         Command::Terminal => link.terminal()?,
 
-        // Both returned above, before a port was ever opened.
+        // All three returned above, before a port was ever opened.
         Command::Bundle { .. } => unreachable!(),
-
-        // Handled above, before the port was opened.
         Command::List { .. } => unreachable!(),
+        Command::Completions { .. } => unreachable!(),
     }
 
     Ok(())

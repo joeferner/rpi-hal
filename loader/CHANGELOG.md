@@ -17,6 +17,51 @@ flag here is no reason to bump their dependency.
 
 ### Added
 
+- **`rpi-loader completions [shell]`**, writing a shell completion script
+  to stdout — bash unless another is named, with zsh, fish, elvish and
+  powershell also available. Each release also carries a ready-made
+  `rpi-loader-<version>.bash`, for installing it without building the CLI
+  first.
+
+  Generated from the same `Command` clap builds for `--help`, so it
+  describes the CLI that is actually compiled. That is why it is a
+  subcommand rather than a build script: a build script cannot see the
+  `Cli` type without moving it into a library, and a checked-in script
+  goes stale the first time a flag is renamed.
+
+  Printed rather than written to a path this picks, because where a
+  completion belongs differs by shell, distribution and whether the user
+  can write outside their home. The subcommand's `--help` gives the two
+  usual destinations.
+
+  The bash script completes **`--device` to the serial ports actually
+  attached**, by asking `rpi-loader list` when Tab is pressed. clap knows
+  only that the flag takes a string, which its generator turns into
+  filename completion over the whole machine; which ports exist is a
+  runtime fact that no generated script can hold. A small wrapper around
+  clap's own function does it, so everything else completes exactly as
+  generated, and it is bash-only — the other shells get clap's script
+  untouched.
+
+  The bash script also carries a workaround for a clap_complete bug that
+  makes every subcommand's completion silently empty when the binary's
+  name contains a hyphen — which this one does. Its generator writes each
+  case label twice and mangles the name differently each time: the
+  dispatcher sets `cmd="rpi__loader__subcmd__boot"` while the arm holding
+  that subcommand's options is spelled `rpi__subcmd__loader__subcmd__boot`,
+  so no arm is ever reachable and nothing past the first word completes.
+  `tests/completions.rs` checks the invariant rather than the instance —
+  every label the dispatcher can set must exist as an arm — so a future
+  desync fails a test whether or not it is this one.
+
+  Deliberately not clap_complete's dynamic engine, which would do this
+  for every argument at once: it is behind two unstable feature flags
+  (`clap_complete/unstable-dynamic` and `clap/unstable-ext`), which in a
+  crate installed with `cargo install` means someone else's install
+  breaking on a dependency bump — and the script it registers embeds the
+  absolute path of the binary that generated it, so it could not be the
+  file shipped with a release.
+
 - **Pi 1 / Pi Zero (BCM2835) support.** `src/boot6.s` is the ARMv6
   counterpart to the existing relocating boot stub: the same copy to
   `0x00200000` and jump, without the core-id check (`MPIDR` is an ARMv7

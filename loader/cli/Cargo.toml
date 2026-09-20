@@ -13,6 +13,13 @@ rust-version = "1.87"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
+# Shell completion scripts, generated from the same `Command` clap builds
+# for `--help`, so they cannot describe a different CLI than the one that
+# runs. That is the whole reason this is a subcommand rather than a build
+# script: a build script cannot see the `Cli` type without it being moved
+# into a library, and a completion file written by hand goes stale the
+# first time a flag is renamed.
+clap_complete = "4.6.11"
 crc32fast = "1.5.0"
 # Raw-mode stdin for the passthrough terminal, and only that. The default
 # features are off because `events` drags in mio + signal-hook for an

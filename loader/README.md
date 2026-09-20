@@ -90,9 +90,12 @@ with `--device`, then takes its own arguments:
 - `bundle [manifest]` — pack an over-the-air update bundle described by a
   `bundle.toml`, and with `--upload <url>` post it to a running board.
   See below.
+- `completions [shell]` — write a shell completion script to stdout
+  (`bash` unless another is named; `zsh`, `fish`, `elvish` and
+  `powershell` also work). See below.
 
-`list` and `bundle` are the two subcommands that neither open a port nor
-need one.
+`list`, `bundle` and `completions` are the subcommands that neither open
+a port nor need one.
 
 The bulk commands (`mem-write`, `sd-read`, `sd-write`, `boot`,
 `eeprom-read`, `eeprom-write`) also take
@@ -102,6 +105,41 @@ to reproduce the classic one-shot upload flow.
 
 The wire protocol is documented on the device side in
 `firmware/src/main.rs` and on the host side in `cli/src/link.rs`.
+
+## Shell completion
+
+`rpi-loader completions` writes a completion script to stdout, generated
+from the same command tree clap builds for `--help` — so it describes
+whatever subcommands and flags the binary you are running actually has,
+rather than a copy that has to be kept in step by hand.
+
+Where it belongs depends on the shell and the machine, so it is printed
+rather than installed. For bash on a typical Linux box:
+
+```sh
+# system-wide
+rpi-loader completions bash | sudo tee /usr/share/bash-completion/completions/rpi-loader
+
+# or just for you
+mkdir -p ~/.local/share/bash-completion/completions
+rpi-loader completions bash > ~/.local/share/bash-completion/completions/rpi-loader
+```
+
+Open a new shell, and `rpi-loader sd-<TAB>` completes. `zsh`, `fish`,
+`elvish` and `powershell` are the other accepted arguments.
+
+The bash script goes one step further than clap can: `--device <TAB>`
+offers the serial ports that are actually attached, by asking
+`rpi-loader list` at the moment you press Tab. clap knows only that
+`--device` takes a string, which would otherwise complete every filename
+on the machine and leave you to type `/dev/tty` first. The ports are a
+runtime fact, so nothing baked into a script could answer it — which is
+also why this part is bash-only; the other shells get clap's script
+unchanged.
+
+A ready-made bash script also ships with each release
+(`rpi-loader-<version>.bash`), for installing it without a built binary
+to hand.
 
 ## Over-the-air bundles
 
