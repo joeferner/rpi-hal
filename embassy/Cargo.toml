@@ -2,7 +2,7 @@
 name = "rpi-hal-embassy"
 version = "0.5.0"
 edition = "2024"
-description = "Embassy time driver and executor for bare-metal Raspberry Pi 2/3 (BCM2836/BCM2837), on top of rpi-hal"
+description = "Embassy time driver and executor for bare-metal Raspberry Pi 1/2/3 and Zero (BCM2835/BCM2836/BCM2837), on top of rpi-hal"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joeferner/rpi-hal-embassy"
 documentation = "https://docs.rs/rpi-hal-embassy"
@@ -21,6 +21,11 @@ rust-version = "1.88"
 # the targets explicitly is what keeps the published page from being a
 # build failure instead of documentation. Both architectures are listed
 # because the crate supports both, even though its source is shared.
+# `armv6-none-eabi` is deliberately absent from both lines: docs.rs builds
+# on stable with rustup's precompiled targets, and that one is tier 3 with
+# no `core` to install. Naming it would turn the published page into a
+# build failure. Nothing is lost -- the only item that differs there is
+# the pender's barrier, which is private.
 [package.metadata.docs.rs]
 default-target = "armv7a-none-eabi"
 targets = ["aarch64-unknown-none-softfloat"]
@@ -34,13 +39,20 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are in practice required for anything here to work (see README.md).
 # Cargo unions in whatever the application selects.
 #
-# `bcm2837` is requested, unlike `rt`/`mmu`: this crate's own
+# A chip PAC is not optional the way `rt`/`mmu` are: this crate's own
 # `time_driver.rs` reaches `rpi_hal::pac::SYSTMR` and `rpi_hal::lic::Lic`
-# directly, so unlike `rt`/`mmu` a chip PAC isn't optional -- neither of
-# rpi-hal's chip features is on by default (see its Cargo.toml), and this
-# crate only targets BCM2836/2837 today (its time driver is IRQ-driven via
-# `Lic`, which doesn't exist under rpi-hal's `bcm2711` feature).
-rpi-hal = { version = "0.5.0", default-features = false, features = ["bcm2837"] }
+# directly, and neither of rpi-hal's chip features is on by default (see
+# its Cargo.toml). But it is not named here either, because naming it here
+# makes it unconditional, and rpi-hal's PAC selection has a precedence
+# order: `bcm2837` wins over `bcm2835`, so a Pi Zero build that could not
+# turn `bcm2837` off would silently compile the Pi 3's peripheral base
+# into a Pi Zero binary. The chip is a feature of this crate instead (see
+# [features] below), defaulting to `bcm2837` so that every existing
+# invocation means what it did before.
+#
+# `bcm2711` is not among them: this crate's time driver is IRQ-driven via
+# `Lic`, which does not exist under rpi-hal's `bcm2711` feature.
+rpi-hal = { version = "0.6.0", default-features = false }
 # Deliberately no `platform-*` feature: those select an upstream executor
 # backend, and this crate supplies its own `__pender` and idle loop instead
 # so that AArch32 and AArch64 behave identically. `platform-cortex-ar`
@@ -89,7 +101,7 @@ embassy-futures = { version = "0.1.2", optional = true }
 # canonical source per dependency across all build targets, and rejects
 # the manifest outright ("different source paths depending on the build
 # target") if a normal and a dev edge disagree.
-rpi-hal = { version = "0.5.0", features = ["rt", "async"] }
+rpi-hal = { version = "0.6.0", features = ["rt", "async"] }
 # The application-facing time API (`Instant`, `Duration`, `Timer::after`),
 # used by the examples to exercise the driver in this crate. A library
 # dependency here would be wrong: an application picks its own
@@ -135,6 +147,28 @@ picoserve = { version = "0.19.0", default-features = false, features = [
 ] }
 
 [features]
+# The chip, forwarded to rpi-hal's feature of the same name, and a default
+# so that a plain build is the Pi 2/3 one it has always been. See the
+# `rpi-hal` dependency above for why it lives here rather than there.
+default = ["bcm2837"]
+bcm2837 = ["rpi-hal/bcm2837"]
+# The Pi 1 / Pi Zero counterpart, and the reason the line above exists.
+#
+# Nothing in this crate is conditional on it beyond what rpi-hal's own
+# feature moves. The time driver is the System Timer and the legacy
+# interrupt controller, both of which the BCM2835 has; the executor's one
+# architecture-specific line (`src/executor.rs`'s pender) is selected by
+# the *target* rather than by this feature, since the barrier it needs is
+# an instruction-set difference and not a chip one. `multicore` below is
+# unavailable there, the BCM2835 having one core -- rpi-hal rejects the
+# combination outright rather than quietly dropping the module.
+#
+# Needs the `armv6-none-eabi` target, which is tier 3: no precompiled
+# `core`, so `-Z build-std` and a nightly toolchain. That is confined to
+# the ARMv6 `make` recipes rather than pinned in `rust-toolchain.toml`,
+# so everything else still builds on stable.
+bcm2835 = ["rpi-hal/bcm2835"]
+
 # Cross-core support: running an executor on cores 1-3 as well as core 0
 # (see `examples/embassy_multicore.rs`).
 #

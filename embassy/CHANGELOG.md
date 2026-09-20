@@ -4,6 +4,36 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Pi 1 / Pi Zero support (BCM2835, ARMv6)**, behind a `bcm2835`
+  feature forwarded to `rpi-hal`'s. The time driver needed nothing: it is
+  the System Timer and the legacy interrupt controller, both of which
+  that chip has at a different base. The executor needed one line — the
+  pender's `dsb ish`, which has no ARMv6 spelling, there being no
+  domain-qualified barriers, and becomes the full-system CP15 operation.
+
+  `make build-armv6` / `examples-armv6` / `clippy-armv6` and
+  `scripts/build-example-armv6.sh` cover the target, which is the only
+  thing here that needs nightly: `armv6-none-eabi` is tier 3, so
+  `-Z build-std` has to compile `core` for it.
+
+### Changed
+
+- **Requires `rpi-hal` 0.6.0**, for the `bcm2835` feature.
+
+- **The chip is now a feature of this crate** (`bcm2837` by default,
+  forwarding to `rpi-hal`'s) rather than a hardcoded entry on the
+  `rpi-hal` dependency line. It has to be: `rpi-hal` prefers `bcm2837`
+  over `bcm2835` when both are enabled, so a Pi Zero build that could not
+  turn `bcm2837` off would silently compile the Pi 3's peripheral base
+  into a Pi Zero binary. Existing users are unaffected — a plain build is
+  still the Pi 2/3 one — unless they were passing `default-features =
+  false`, which now also turns the chip off and needs `features =
+  ["bcm2837"]` adding back.
+
 ## [0.5.0] - 2026-09-04
 
 ### Changed

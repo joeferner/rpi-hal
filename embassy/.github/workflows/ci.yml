@@ -41,6 +41,29 @@ jobs:
       - run: make examples
       - run: make doc
 
+      # The ARMv6 (BCM2835) build, which is the one thing here that is not
+      # on the pinned stable toolchain: `armv6-none-eabi` is tier 3, so
+      # rustup publishes no `core` for it and `-Z build-std` has to compile
+      # one, which needs nightly and `rust-src`. Installed here rather than
+      # pinned in `rust-toolchain.toml`, so that everything above keeps
+      # proving what it proves -- that this crate builds on stable.
+      # `rust-src` is what `-Z build-std` compiles `core` from. `clippy` is
+      # named because `--profile minimal` installs exactly what is listed
+      # and nothing else: on a workstation the default profile happens to
+      # include it, so `make clippy-armv6` passes locally and fails here
+      # with "'cargo-clippy' is not installed for the toolchain 'nightly'".
+      # Components are per-toolchain, so the pinned stable having clippy
+      # says nothing about nightly.
+      - name: Install nightly for the tier-3 ARMv6 target
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src \
+            --component clippy
+
+      - run: make clippy-armv6
+      - run: make build-armv6
+      - run: make examples-armv6
+
       # The examples are the only thing that links, and linking is where a
       # missing `rpi-link.x` or a stray RUSTFLAGS shows up. AArch64 is not
       # covered by the steps above, whose target comes from

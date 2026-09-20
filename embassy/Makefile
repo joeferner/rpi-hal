@@ -4,10 +4,37 @@
 # repeating flags here. Build the other architecture with
 # `--target aarch64-unknown-none-softfloat`.
 
-.PHONY: build examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build build-armv6 examples examples-armv6 fmt fmt-check clippy \
+	clippy-armv6 doc package pre-commit clean
+
+# The ARMv6 (BCM2835) invocation, shared by the three recipes below so the
+# flags cannot drift apart between building and linting. Four things it
+# does that the default does not, all of them consequences of the Pi Zero
+# being a different instruction set rather than a different chip:
+#
+#   `+nightly -Z build-std=core`: `armv6-none-eabi` is tier 3, so rustup
+#   publishes no `core` for it and one has to be compiled. This is the
+#   only part of this repository that is not on the pinned stable
+#   toolchain; it needs `rustup toolchain install nightly --component
+#   rust-src` once.
+#
+#   `--no-default-features --features bcm2835`: the chip is this crate's
+#   own default feature (see Cargo.toml) and `rpi-hal` prefers `bcm2837`
+#   when both are on, so leaving the default in place would compile the
+#   Pi 3's peripheral base into a Pi Zero binary.
+#
+# `multicore` never appears here: the BCM2835 has one core, and `rpi-hal`
+# rejects that combination with a `compile_error!` rather than quietly
+# dropping the module -- so there is no `--all-features` pass for this
+# target the way there is above.
+ARMV6 := --release --target armv6-none-eabi -Z build-std=core \
+	--no-default-features --features bcm2835
 
 build:
 	cargo build --release
+
+build-armv6:
+	cargo +nightly build $(ARMV6)
 
 # Twice over, because the feature set changes which examples exist: the
 # default build is what a consumer taking this crate plainly would get, and
@@ -18,6 +45,9 @@ examples:
 	cargo build --release --examples
 	cargo build --release --examples --all-features
 
+examples-armv6:
+	cargo +nightly build $(ARMV6) --examples
+
 fmt:
 	cargo fmt
 
@@ -27,6 +57,9 @@ fmt-check:
 clippy:
 	cargo clippy --release --examples -- -D warnings
 	cargo clippy --release --examples --all-features -- -D warnings
+
+clippy-armv6:
+	cargo +nightly clippy $(ARMV6) --examples -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails, so
 # without it this catches nothing. What it does catch is broken intra-doc
@@ -50,7 +83,7 @@ doc:
 package:
 	CARGO_TARGET_DIR=target/verify cargo package
 
-pre-commit: fmt clippy build examples doc
+pre-commit: fmt clippy clippy-armv6 build build-armv6 examples examples-armv6 doc
 
 clean:
 	cargo clean

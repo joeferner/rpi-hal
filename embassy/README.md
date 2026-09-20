@@ -4,15 +4,16 @@
 [![crates.io](https://img.shields.io/crates/v/rpi-hal-embassy.svg)](https://crates.io/crates/rpi-hal-embassy)
 [![docs.rs](https://img.shields.io/docsrs/rpi-hal-embassy)](https://docs.rs/rpi-hal-embassy)
 
-[Embassy](https://embassy.dev) support for Raspberry Pi boards using the
-BCM2836/BCM2837 SoC (Pi 2, Pi 3), on top of the `rpi-hal` crate.
+[Embassy](https://embassy.dev) support for bare-metal Raspberry Pi — the
+BCM2836/BCM2837 (Pi 2, Pi 3) and the BCM2835 (Pi 1, Pi Zero) — on top of
+the `rpi-hal` crate.
 
 Embassy's executor is portable; what it needs per platform is a time
 driver and an architecture-specific idle/wake path. This crate supplies
 both:
 
 - an `embassy-time` driver over the BCM System Timer, and
-- a thread-mode executor that behaves identically on AArch32 and
+- a thread-mode executor that behaves identically on ARMv6, ARMv7-A and
   AArch64.
 
 ## Status
@@ -21,10 +22,39 @@ Both halves are in place: the `embassy-time` driver (`time_driver`) and
 the thread-mode executor (`Executor`). `examples/embassy_blink.rs` spawns
 two tasks and drives both from `embassy-time` deadlines.
 
-`embassy-executor` compiles for both `armv7a-none-eabi` and
+`embassy-executor` compiles for `armv7a-none-eabi`, `armv6-none-eabi` and
 `aarch64-unknown-none-softfloat` with no `platform-*` backend feature,
-which is what lets a single executor implementation serve both
+which is what lets a single executor implementation serve all three
 architectures.
+
+## Chips
+
+The chip is a feature of this crate, forwarded to `rpi-hal`'s feature of
+the same name, with `bcm2837` the default:
+
+| Feature | Board | Target |
+| --- | --- | --- |
+| `bcm2837` (default) | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
+| `bcm2835` | Pi 1, Pi Zero | `armv6-none-eabi` |
+
+It is a feature here rather than a hardcoded entry on the `rpi-hal`
+dependency line because `rpi-hal`'s chip features have a precedence order
+(`bcm2711` > `bcm2837` > `bcm2835`). A crate that names one on its own
+`rpi-hal` line leaves consumers no way to turn it off, and adding a
+lower-precedence chip alongside it selects the wrong peripheral base
+silently rather than failing. So a Pi Zero build is
+`--no-default-features --features bcm2835`.
+
+The Pi Zero is the one board that needs a **nightly** toolchain, because
+`armv6-none-eabi` is tier 3 and has no precompiled `core`. That belongs
+to the target rather than to this crate — see `rpi-hal`'s README — and
+the `make` recipes for it (`build-armv6`, `examples-armv6`,
+`clippy-armv6`) and `scripts/build-example-armv6.sh` carry the
+`+nightly -Z build-std=core` it needs. Everything else stays on stable.
+
+`multicore` is unavailable on `bcm2835`: the BCM2835 has one core, and
+`rpi-hal` rejects the combination with a `compile_error!` rather than
+quietly dropping the module.
 
 ## Why this isn't a feature of `rpi-hal`
 

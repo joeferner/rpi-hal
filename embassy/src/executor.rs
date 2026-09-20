@@ -50,7 +50,7 @@ use embassy_executor::{Spawner, raw};
 #[unsafe(export_name = "__pender")]
 fn __pender(_context: *mut ()) {
     // SAFETY: `dsb`/`sev` touch no memory and have no operands; both are
-    // unprivileged and valid on ARMv7-A and ARMv8-A alike.
+    // unprivileged and valid on ARMv6K, ARMv7-A and ARMv8-A alike.
     //
     // `dsb ish` before `sev` is ARM's prescribed order for signalling
     // another core: the run-queue stores this event is announcing have to
@@ -59,7 +59,29 @@ fn __pender(_context: *mut ()) {
     // order already covers a core waking itself — but this is the
     // sequence that stays correct when a second one does, and it is
     // cheap next to the queue's own atomics.
-    unsafe { core::arch::asm!("dsb ish", "sev", options(nomem, nostack)) };
+    #[cfg(not(armv6))]
+    unsafe {
+        core::arch::asm!("dsb ish", "sev", options(nomem, nostack))
+    };
+
+    // ARMv6 (the ARM1176 in a Pi 1 or Pi Zero) has the same barrier only
+    // as a CP15 operation, and only in the full-system flavour — there are
+    // no domain-qualified forms to narrow it to the inner-shareable
+    // domain, so this is a superset of what the line above asks for. `sev`
+    // itself is unchanged.
+    //
+    // `cfg(armv6)` comes from `build.rs`, which derives it from the
+    // target triple — see there for why the obvious `target_feature =
+    // "v7"` test cannot be used, in source or out of it.
+    #[cfg(armv6)]
+    unsafe {
+        core::arch::asm!(
+            "mcr p15, 0, {0}, c7, c10, 4",
+            "sev",
+            in(reg) 0u32,
+            options(nomem, nostack),
+        )
+    };
 }
 
 /// Thread-mode executor: runs tasks on the main context, and idles the

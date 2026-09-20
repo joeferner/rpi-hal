@@ -21,3 +21,13 @@ rustflags = ["-C", "link-arg=-Trpi-link.x"]
 [target.aarch64-unknown-none-softfloat]
 rustflags = ["-C", "link-arg=-Trpi-link.x"]
 
+# ARMv6 (Pi 1, Pi Zero) loads at the same 0x8000 as the AArch32 target
+# above and takes the same script, for the same reason -- `rpi-hal`'s
+# build script picks which one by architecture. Unlike the other two,
+# this target has no precompiled `core`, so its `make` recipes add
+# `+nightly -Z build-std=core`; `build-std` is deliberately not set here,
+# since a config-level `[unstable]` table is silently ignored on stable
+# and would make the requirement invisible at the one place it applies.
+[target.armv6-none-eabi]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
+
