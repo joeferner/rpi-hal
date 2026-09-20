@@ -13,7 +13,7 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
-## [Unreleased]
+## [0.4.0] - 2026-09-20
 
 ### Added
 
@@ -179,6 +179,7 @@ flag here is no reason to bump their dependency.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
 
+[0.4.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.1.0
