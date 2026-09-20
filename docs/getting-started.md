@@ -287,7 +287,7 @@ features (`smoltcp`, `embedded-sdmmc`, `multicore`, …) as needed:
 
 ```toml
 [dependencies]
-rpi-hal = { version = "0.5", features = ["bcm2837"] }
+rpi-hal = { version = "0.6", features = ["bcm2837"] }
 ```
 
 If you are writing a library on top of this one rather than an
@@ -305,7 +305,7 @@ bcm2837 = ["rpi-hal/bcm2837"]
 bcm2835 = ["rpi-hal/bcm2835"]
 
 [dependencies]
-rpi-hal = { version = "0.5", default-features = false }
+rpi-hal = { version = "0.6", default-features = false }
 ```
 
 ### Linker script (required)

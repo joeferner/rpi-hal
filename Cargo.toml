@@ -1,6 +1,6 @@
 [package]
 name = "rpi-hal"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Hardware abstraction layer for bare-metal Raspberry Pi: BCM2836/BCM2837 (Pi 2, Pi 3), with preliminary BCM2711 (Pi 4) and BCM2835 (Pi 1, Pi Zero) support"
 license = "MIT OR Apache-2.0"
