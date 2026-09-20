@@ -108,10 +108,22 @@ application's decision, not a library's to force.
 
 ```toml
 [dependencies]
-rpi-hal = "0.1"           # `rt` and `mmu` are on by default
-rpi-hal-embassy = "0.1"
+# `rt` and `mmu` are on by default; the chip never is, and both crates
+# need to be told the same one.
+rpi-hal = { version = "0.6", features = ["bcm2837"] }
+rpi-hal-embassy = "0.6"
 embassy-executor = "0.10"
 embassy-time = "0.5"      # no `tick-hz-*` feature: this crate pins it
+```
+
+The two crates' versions move together — a `rpi-hal-embassy` release
+carries the number of the `rpi-hal` release it is built against, so
+matching numbers are the answer to "which HAL is this for?". For a Pi 1
+or Pi Zero, name that chip on both lines instead (see "Chips" above):
+
+```toml
+rpi-hal = { version = "0.6", features = ["bcm2835"] }
+rpi-hal-embassy = { version = "0.6", default-features = false, features = ["bcm2835"] }
 ```
 
 ```rust
