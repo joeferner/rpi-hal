@@ -10,12 +10,17 @@ files on the SD card — instead of rewriting the SD card for every build.
 
 Supported boards:
 
-- Pi 2 Model B rev 1.2 and Pi 3 (BCM2836/BCM2837) — the `bcm2837` builds.
+- Pi 2 Model B rev 1.2 and Pi 3 (BCM2836/BCM2837) — the `bcm2837` builds,
+  in either execution state: AArch32 (`kernel7.img`) and AArch64
+  (`kernel8.img`).
 - Pi 4 (BCM2711) — the `bcm2711` builds, which move the peripheral memory
-  map and PAC through `rpi-hal`'s feature of the same name.
-
-Both in either execution state: AArch32 (`kernel7.img`) and AArch64
-(`kernel8.img`).
+  map and PAC through `rpi-hal`'s feature of the same name. Both execution
+  states again.
+- Pi 1 and Pi Zero (BCM2835) — the `bcm2835` build, which is also the only
+  one that is a different *instruction set* rather than a different chip:
+  ARMv6, its own boot stub (`firmware/src/boot6.s`), and a `kernel.img`
+  with no digit. AArch32 only, the ARM1176 having no 64-bit mode, and the
+  only build here that needs a nightly toolchain (see "Or build one").
 
 A green CI badge means it compiles, and nothing more. Every check that
 runs there is either a compile-time one or a protocol test against a fake
@@ -244,7 +249,7 @@ copy it to the SD card as described under "Onto the card" below.
 
 ### Download a released image
 
-Each release carries four images, one per board and execution state.
+Each release carries five images, one per board and execution state.
 Pick the one matching yours:
 
 | Asset | Board | Execution state |
@@ -253,6 +258,7 @@ Pick the one matching yours:
 | `rpi-loader-<version>-bcm2837-kernel8.img` | Pi 2 v1.2, Pi 3 | AArch64 |
 | `rpi-loader-<version>-bcm2711-kernel7.img` | Pi 4 | AArch32 |
 | `rpi-loader-<version>-bcm2711-kernel8.img` | Pi 4 | AArch64 |
+| `rpi-loader-<version>-bcm2835-kernel.img` | Pi 1, Pi Zero | ARMv6 |
 
 ```sh
 VERSION=0.1.0
@@ -263,8 +269,9 @@ sha256sum -c --ignore-missing SHA256SUMS
 ```
 
 The assets carry the version and chip in their names because a release
-page cannot hold four files all called `kernel7.img` — but the Pi's
-firmware loads *only* the bare names, so rename on the way to the card:
+page cannot hold several files all called `kernel7.img` — but the Pi's
+firmware loads *only* the bare names, and only the one its CPU selects,
+so rename on the way to the card:
 
 ```sh
 cp rpi-loader-$VERSION-bcm2837-kernel8.img /path/to/boot/kernel8.img
@@ -287,6 +294,27 @@ make build64-bcm2837   # -> firmware/target/kernel8.img
 Both have `-bcm2711` counterparts for Pi 4 boards. Run `make` from the
 repository root; it drives cargo inside `firmware/`, which is where the
 bare metal target and toolchain are pinned. Everything builds on stable.
+
+For a Pi 1 or Pi Zero:
+
+```sh
+make build-bcm2835     # -> firmware/target/kernel.img
+```
+
+`kernel.img`, with no digit: `start.elf` picks the kernel filename from
+the CPU it finds, so a board handed a `kernel7.img` looks for a file that
+is not there and stops, with nothing on the console to say so. There is
+no 64-bit counterpart — the ARM1176 has no 64-bit mode. This is also the
+one recipe here that needs nightly, because `armv6-none-eabi` is a tier-3
+target with no precompiled `core`:
+
+```sh
+rustup toolchain install nightly --component rust-src --component clippy
+```
+
+`clippy` is in there for `make clippy6`; `--profile minimal` installs
+only what is named, so a minimal nightly without it fails that recipe
+rather than the build.
 
 ### Onto the card
 

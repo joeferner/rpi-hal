@@ -13,6 +13,32 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [Unreleased]
+
+### Added
+
+- **Pi 1 / Pi Zero (BCM2835) support.** `src/boot6.s` is the ARMv6
+  counterpart to the existing relocating boot stub: the same copy to
+  `0x00200000` and jump, without the core-id check (`MPIDR` is an ARMv7
+  register, and this chip has one core) and with the two barriers as the
+  CP15 operations ARMv6 has instead of `dsb`/`isb` — the same substitution
+  `exec` now makes. `make build-bcm2835` produces `firmware/target/
+  kernel.img`, on the `armv6-none-eabi` target, and is the one recipe here
+  that needs nightly: that target is tier 3, so `-Z build-std` has to
+  compile `core` for it.
+
+  The chip is now a feature of this package (`bcm2837` by default,
+  forwarding to `rpi-hal`'s) rather than a hardcoded entry on the `rpi-hal`
+  dependency line. It has to be: `rpi-hal` prefers `bcm2837` over
+  `bcm2835` when both are enabled, so a Pi Zero build that could not turn
+  `bcm2837` off would have silently compiled the Pi 3's peripheral base
+  into a Pi Zero image. Existing invocations are unaffected — a plain
+  build is still the Pi 2/3 one, and `--features bcm2711` still the Pi 4
+  one.
+
+  The `rpi-hal` floor moves to 0.6.0, which is where the `bcm2835`
+  feature arrived.
+
 ## [0.3.0] - 2026-09-01
 
 ### Added

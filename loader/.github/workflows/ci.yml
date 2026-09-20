@@ -39,6 +39,33 @@ jobs:
           (cd ota && rustup show)
           cargo --version
 
+      # The ARMv6 (BCM2835) recipes are the one thing here not on a pinned
+      # stable toolchain: `armv6-none-eabi` is tier 3, so rustup publishes
+      # no `core` for it and `-Z build-std` has to compile one, which needs
+      # nightly and `rust-src`. Installed here rather than pinned in
+      # `firmware/rust-toolchain.toml`, so the Pi 2/3/4 images go on
+      # proving they build on stable.
+      #
+      # Every component is named because `--profile minimal` installs
+      # exactly what is listed and nothing else, and because components are
+      # per-toolchain -- what `firmware/rust-toolchain.toml` asks for on
+      # stable says nothing about nightly. A workstation's default profile
+      # happens to carry all three, which is how these recipes pass locally
+      # and fail on a runner:
+      #
+      #   `rust-src`    what `-Z build-std` compiles `core` from.
+      #   `llvm-tools`  behind `cargo objcopy`, which `build-bcm2835` runs
+      #                 to turn the linked ELF into `kernel.img`. Resolved
+      #                 from the sysroot of the toolchain in use, so the
+      #                 stable one having it is no help.
+      #   `clippy`      for `make clippy6`.
+      - name: Install nightly for the tier-3 ARMv6 target
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src \
+            --component llvm-tools \
+            --component clippy
+
       # Unlike rpi-hal, this repository's build does not stop at `cargo
       # build`: the Makefile runs `cargo objcopy` to turn each linked ELF
       # into a raw image, and that subcommand ships in cargo-binutils
@@ -64,6 +91,7 @@ jobs:
 
       - run: make fmt-check
       - run: make clippy
+      - run: make clippy6
       - run: make clippy64
       - run: make clippy-cli
       - run: make clippy-ota
@@ -71,6 +99,7 @@ jobs:
       - run: make build64-bcm2837
       - run: make build-bcm2711
       - run: make build64-bcm2711
+      - run: make build-bcm2835
       - run: make build-cli
       - run: make test-cli
       - run: make test-ota

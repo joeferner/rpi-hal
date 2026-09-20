@@ -39,13 +39,18 @@ ARCH64 := aarch64-unknown-none-softfloat
 # firmware's recipes below never mention the 32-bit target for the opposite
 # reason: `firmware/.cargo/config.toml` already makes it the default there.
 ARCH32 := armv7a-none-eabi
+# The ARMv6 target for `build-bcm2835`, named for the same reason as
+# ARCH64: `firmware/.cargo/config.toml` defaults to ARCH32, and this
+# overrides it.
+ARCH6 := armv6-none-eabi
 FIRMWARE := firmware
 CLI := cli
 OTA := ota
 
-.PHONY: build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-cli \
-	fmt fmt-check clippy clippy64 clippy-cli clippy-ota test-cli test-ota doc \
-	package package-ota pre-commit clean
+.PHONY: build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 \
+	build-bcm2835 build-cli \
+	fmt fmt-check clippy clippy6 clippy64 clippy-cli clippy-ota test-cli \
+	test-ota doc package package-ota pre-commit clean
 
 build-bcm2711:
 	cd $(FIRMWARE) && cargo build --release --features bcm2711
@@ -58,6 +63,29 @@ build64-bcm2711:
 build-bcm2837:
 	cd $(FIRMWARE) && cargo build --release
 	cd $(FIRMWARE) && cargo objcopy --release -- -O binary target/kernel7.img
+
+# Pi 1 / Pi Zero (BCM2835). The odd one out in three ways, all of them
+# consequences of the chip being ARMv6 rather than ARMv7-A:
+#
+#   - The target is named here, and it is `armv6-none-eabi`. There is no
+#     64-bit counterpart recipe: the ARM1176 has no 64-bit mode.
+#   - It is the one build in this repository that needs nightly. That
+#     target is tier 3, so rustup publishes no `core` for it and
+#     `-Z build-std` has to compile one. `+nightly` rather than a
+#     `rust-toolchain.toml` change, so everything else stays on stable;
+#     it needs `rustup toolchain install nightly --component rust-src`
+#     once.
+#   - The image is `kernel.img`, with no digit. `start.elf` picks the
+#     kernel filename from the CPU it finds, so a Pi Zero handed a
+#     `kernel7.img` looks for a file that is not there and stops, with
+#     nothing on the console to say so.
+#
+# `--no-default-features` because the chip is this package's own default
+# feature and rpi-hal prefers `bcm2837` when both are on -- see
+# firmware/Cargo.toml.
+build-bcm2835:
+	cd $(FIRMWARE) && cargo +nightly build --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835
+	cd $(FIRMWARE) && cargo +nightly objcopy --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835 -- -O binary target/kernel.img
 
 build64-bcm2837:
 	cd $(FIRMWARE) && cargo build --release --target $(ARCH64)
@@ -83,6 +111,10 @@ clippy:
 
 clippy64:
 	cd $(FIRMWARE) && cargo clippy --release --target $(ARCH64) -- -D warnings
+
+# See `build-bcm2835` for the nightly and the feature flags.
+clippy6:
+	cd $(FIRMWARE) && cargo +nightly clippy --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835 -- -D warnings
 
 clippy-cli:
 	cd $(CLI) && cargo clippy --release --all-targets -- -D warnings
@@ -168,7 +200,7 @@ package:
 package-ota:
 	cd $(OTA) && CARGO_TARGET_DIR=target/verify cargo package
 
-pre-commit: fmt clippy clippy64 clippy-cli clippy-ota build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-cli test-cli test-ota doc
+pre-commit: fmt clippy clippy6 clippy64 clippy-cli clippy-ota build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-bcm2835 build-cli test-cli test-ota doc
 
 clean:
 	cd $(FIRMWARE) && cargo clean

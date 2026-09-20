@@ -11,12 +11,15 @@ use rpi_hal::sd::{Sd, SdCard, SdCardError};
 use rpi_hal::timer::Timer;
 use rpi_hal::{pac, uart::Uart};
 
-// The boot stub is the only architecture-specific part of this loader:
-// everything below (the command protocol, CRC, chunking, SD/FAT access)
-// is shared. See each file's module doc for the AArch32/AArch64
-// differences.
-#[cfg(target_arch = "arm")]
+// The boot stub is very nearly the only architecture-specific part of
+// this loader: everything below (the command protocol, CRC, chunking,
+// SD/FAT access) is shared, and the one other place that isn't is
+// `exec`'s pair of barriers. See each file's module doc for the
+// differences between them.
+#[cfg(all(target_arch = "arm", not(armv6)))]
 core::arch::global_asm!(include_str!("boot.s"));
+#[cfg(armv6)]
+core::arch::global_asm!(include_str!("boot6.s"));
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("boot64.s"));
 
@@ -800,11 +803,21 @@ fn init_volume_mgr(timer: &Timer) -> Result<VolumeManager<SdCard<'_>, FixedTime>
 ///
 /// AArch32's bare `dsb` defaults to the full-system domain; AArch64
 /// requires the domain operand be spelled out (`dsb sy`). `isb` is
-/// identical in both.
+/// identical in both. ARMv6 has neither mnemonic and reaches the same
+/// two barriers through CP15 instead -- `c7, c10, 4` and `c7, c5, 4`,
+/// with a register operand that is ignored.
 fn exec(addr: usize) -> ! {
-    #[cfg(target_arch = "arm")]
+    #[cfg(all(target_arch = "arm", not(armv6)))]
     unsafe {
         core::arch::asm!("dsb", "isb")
+    };
+    #[cfg(armv6)]
+    unsafe {
+        core::arch::asm!(
+            "mcr p15, 0, {0}, c7, c10, 4",
+            "mcr p15, 0, {0}, c7, c5, 4",
+            in(reg) 0u32,
+        )
     };
     #[cfg(target_arch = "aarch64")]
     unsafe {

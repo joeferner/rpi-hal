@@ -45,6 +45,20 @@ jobs:
         working-directory: firmware
         run: rustup show
 
+      # And nightly for the BCM2835 image alone: `armv6-none-eabi` is tier
+      # 3, so it has no precompiled `core` and `-Z build-std` compiles one.
+      # `llvm-tools` is named alongside `rust-src` because the recipe ends
+      # in `cargo objcopy`, which resolves them from the sysroot of the
+      # toolchain in use -- the pinned stable having them does not help
+      # nightly. `--profile minimal` installs only what is listed, so
+      # anything omitted here fails the image build rather than degrading
+      # it.
+      - name: Install nightly for the tier-3 ARMv6 target
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src \
+            --component llvm-tools
+
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
 
@@ -86,9 +100,15 @@ jobs:
       - name: The packaged tarball builds
         run: make package
 
-      # Four images, not two: each execution state is built for both chips,
-      # and `make` writes them all to the same two filenames, so each one
-      # is copied out before the next build overwrites it.
+      # Five images. `make` writes each build to the same handful of
+      # filenames, so every one is copied out before the next overwrites
+      # it.
+      #
+      # The loop covers the two chips that have both execution states.
+      # BCM2835 sits outside it because it matches neither half of the
+      # pattern: one image rather than two, the ARM1176 having no 64-bit
+      # mode, and `kernel.img` rather than `kernel7.img`, because
+      # `start.elf` picks the filename from the CPU it finds.
       - name: Build the images
         run: |
           version="${{ steps.version.outputs.version }}"
@@ -99,6 +119,8 @@ jobs:
             make "build64-$chip"
             cp firmware/target/kernel8.img "dist/rpi-loader-$version-$chip-kernel8.img"
           done
+          make build-bcm2835
+          cp firmware/target/kernel.img "dist/rpi-loader-$version-bcm2835-kernel.img"
           cd dist && sha256sum ./*.img > SHA256SUMS
           cat SHA256SUMS
 
@@ -115,12 +137,17 @@ jobs:
           ## Images
 
           Copy the image matching your board to the SD card's boot
-          partition, renamed to `kernel7.img` (32-bit) or `kernel8.img`
-          (64-bit) -- the firmware loads those names and no others. Use
-          `kernel8.img` only with `arm_64bit=1` in `config.txt`.
+          partition, renamed to the filename in its own name:
+          `kernel7.img` (32-bit), `kernel8.img` (64-bit) or `kernel.img`
+          (ARMv6). The firmware loads one of those names and no others,
+          chosen by the CPU it finds, and a board handed the wrong one
+          stops without printing anything. Use `kernel8.img` only with
+          `arm_64bit=1` in `config.txt`.
 
           `bcm2837` covers the Pi 2 v1.2 and Pi 3; `bcm2711` covers the
-          Pi 4. Verify with `sha256sum -c SHA256SUMS`.
+          Pi 4; `bcm2835` covers the Pi 1 and Pi Zero, and is ARMv6, so it
+          has no 64-bit counterpart. Verify with
+          `sha256sum -c SHA256SUMS`.
 
           The host CLI is a separate install: `cargo install rpi-loader`.
           NOTE

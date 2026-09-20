@@ -32,18 +32,23 @@ publish = false
 # SD/FAT path touches none of the `rt`-gated `critical-section` impl, so
 # it links fine without `rt`/`mmu`.
 #
-# `bcm2837` picks rpi-hal's PAC for this loader's actual target chip
-# (neither of rpi-hal's chip features is on by default -- see its
-# Cargo.toml). This crate's own `bcm2711` feature below adds `bcm2711`
-# alongside it rather than replacing it, since Cargo can't express
-# "turn bcm2837 off"; harmless (rpi-hal's `pac` re-export prefers
-# `bcm2711` when both are enabled), just not a build that drops
-# `bcm2837-lpa` entirely.
+# No chip feature here. rpi-hal has no chip-neutral default, so exactly
+# one has to be chosen -- but choosing it on this line would make it
+# unconditional, and that is only survivable for a chip rpi-hal's PAC
+# selection *prefers*. It prefers `bcm2711` over `bcm2837`, which is why
+# the Pi 4 build could get away with adding a second chip feature
+# alongside a hardcoded `bcm2837`; it prefers `bcm2837` over `bcm2835`,
+# so the Pi Zero build cannot, and would silently compile the Pi 3's
+# peripheral base into a Pi Zero image. The chip is a feature of *this*
+# crate instead (see [features] below), defaulting to `bcm2837` so every
+# existing invocation means what it did before.
 #
-# 0.3.0 is a floor rather than whatever was current: the `eeprom-*`
-# commands need `I2c::<BSC0>::init_id`, BSC0 muxed to its GPIO0/1 (HAT ID
-# bus) routing, which no earlier version can reach at all.
-rpi-hal = { version = "0.3.0", default-features = false, features = ["embedded-sdmmc", "bcm2837"] }
+# 0.6.0 is a floor rather than whatever was current, and each raise has
+# had a reason: 0.3.0 for the `eeprom-*` commands, which need
+# `I2c::<BSC0>::init_id` and BSC0 muxed to its GPIO0/1 (HAT ID bus)
+# routing; 0.6.0 for the `bcm2835` feature below, which is where that
+# chip's peripheral map and ARMv6 boot code arrived.
+rpi-hal = { version = "0.6.0", default-features = false, features = ["embedded-sdmmc"] }
 # The FAT layer itself. This is a separate crate from rpi-hal (which only
 # provides the BlockDevice adapter), so the loader depends on it directly
 # for the `VolumeManager`/`Mode`/`TimeSource`/`VolumeIdx` types it drives.
@@ -55,6 +60,17 @@ embedded-sdmmc = { version = "0.9.0", default-features = false }
 embedded-hal = { version = "1.0.0", default-features = false }
 
 [features]
+# The chip, defaulting to the one most of these boards are. A plain
+# `cargo build` therefore produces the same Pi 2/3 image it always has,
+# and `--features bcm2711` the same Pi 4 one (both chip features on, and
+# rpi-hal preferring `bcm2711`, exactly as before). The Pi Zero build is
+# the one that has to say `--no-default-features --features bcm2835`,
+# because there the preference runs the other way -- see the dependency
+# comment above.
+default = ["bcm2837"]
+# Forwards to rpi-hal's `bcm2837` feature: the Pi 2 (BCM2836, whose
+# peripherals are the BCM2837's) and the Pi 3.
+bcm2837 = ["rpi-hal/bcm2837"]
 # Forwards to rpi-hal's `bcm2711` feature, so this crate's own peripheral
 # access (reached only through rpi-hal's PAC re-export and drivers, which
 # this crate never hardcodes) moves to the BCM2711 (Pi 4) memory map and
@@ -69,6 +85,23 @@ embedded-hal = { version = "1.0.0", default-features = false }
 # all. That is why it is unaffected by `lic` being unavailable under
 # `bcm2711`, where most of rpi-hal's own examples are not.
 bcm2711 = ["rpi-hal/bcm2711"]
+# The same arrangement for the BCM2835 (Pi 1, Pi Zero), with one
+# difference that `bcm2711` does not have: this chip's port is not only a
+# memory map but an instruction set. The feature moves the addresses;
+# building for `armv6-none-eabi` is what selects the ARM1176's boot stub
+# (`src/boot6.s`) and barriers, in this crate and in rpi-hal alike.
+#
+# That target is tier 3, so rustup ships no precompiled `core` for it and
+# the build needs `-Z build-std` and a nightly toolchain -- the one thing
+# in this package that does. It is confined to that one `make` recipe
+# rather than pinned in `rust-toolchain.toml`, so the Pi 2/3/4 images
+# keep building on stable exactly as before.
+#
+# The loader itself needs nothing else from the chip: it is polling-based,
+# with no interrupt controller, no MMU and no second core to release, so
+# what is missing on a BCM2835 relative to a BCM2837 is all things this
+# firmware never touches.
+bcm2835 = ["rpi-hal/bcm2835"]
 
 [profile.dev]
 panic = "abort"

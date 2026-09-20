@@ -80,8 +80,8 @@ enum Command {
     Boot {
         /// Kernel image to upload.
         image: PathBuf,
-        /// Load address: 0x8000 for a 32-bit kernel7.img, 0x80000 for a
-        /// 64-bit kernel8.img.
+        /// Load address: 0x8000 for a 32-bit kernel7.img or kernel.img,
+        /// 0x80000 for a 64-bit kernel8.img.
         #[arg(long, value_parser = parse_u32)]
         load_addr: u32,
         /// Baud to negotiate for the transfer; the link always returns to
