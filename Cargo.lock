@@ -18,6 +18,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcm2835-lpa"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8afc05ac492ed7109341e96dd9262c7106d760a202c3d1a7154b9dea5edf3074"
+dependencies = [
+ "vcell",
+]
+
+[[package]]
 name = "bcm2837-lpa"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,6 +229,7 @@ name = "rpi-hal"
 version = "0.5.0"
 dependencies = [
  "bcm2711-lpa",
+ "bcm2835-lpa",
  "bcm2837-lpa",
  "critical-section",
  "embedded-alloc",

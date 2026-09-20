@@ -18,6 +18,39 @@ fn main() {
         "linker.ld"
     };
 
+    // `cfg(armv6)`: the ARM1176JZF-S in the BCM2835 (Pi 1, Pi Zero) rather
+    // than the ARMv7-A cores of every later 32-bit Pi. It decides which
+    // boot assembly is assembled, how the barriers are spelled, and which
+    // CPU-state drivers exist at all -- none of which is a choice a
+    // consumer should be able to get wrong, so it is derived from the
+    // target rather than exposed as a Cargo feature.
+    //
+    // The test is on the target *triple*, and it has to be. The natural
+    // discriminator is `target_feature = "v7"`, which is exactly what
+    // distinguishes the two architectures -- but `v7` is not a stabilized
+    // target feature name, so *stable* rustc does not report it at all:
+    // not in `cfg` at a use site, and not in a build script's
+    // `CARGO_CFG_TARGET_FEATURE`. `nightly` does, which is the trap,
+    // because this repository pins nightly while consumers build on
+    // stable. A predicate resting on it reads as "no v7" for every target
+    // there, quietly turning every ARMv7 build into an ARMv6 one: ARMv6
+    // barriers, no `generic_timer`, `core_id` hardcoded to 0, and
+    // `boot6.s` -- which has no Hyp-mode drop -- on a Pi 3.
+    //
+    // `TARGET` is always set, on any toolchain, and its `armv6` prefix
+    // covers both the soft- and hard-float spellings without matching
+    // `thumbv6m` (Cortex-M, also `target_arch = "arm"`, and not something
+    // this crate supports).
+    //
+    // Emitted here rather than written at each use because there is a
+    // site for it in every architecture-specific file, and one that got
+    // the predicate subtly wrong would be missed.
+    println!("cargo::rustc-check-cfg=cfg(armv6)");
+    let target = env::var("TARGET").unwrap();
+    if arch == "arm" && target.starts_with("armv6") {
+        println!("cargo::rustc-cfg=armv6");
+    }
+
     // Pass the script by absolute path rather than a bare `-Tlinker.ld` +
     // link-search dir. A bare name is resolved from the linker's working
     // directory (the crate root) first, where `linker.ld` (0x8000) lives,

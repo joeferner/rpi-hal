@@ -44,6 +44,13 @@ jobs:
       - run: make clippy
       - run: make build-bcm2837
       - run: make build-bcm2711
+      # The ARMv6 (BCM2835) library build. It needs nothing this job does
+      # not already have: `armv6-none-eabi` is tier 3 and has no
+      # precompiled `core`, but the pinned toolchain is nightly with
+      # `rust-src`, and `.cargo/config.toml` already asks for
+      # `-Zbuild-std`. The ARMv6 examples ride along in `make examples`
+      # below, and `make clippy` above lints both.
+      - run: make build-bcm2835
       - run: make examples
       - run: make doc
 
@@ -81,6 +88,12 @@ jobs:
       # Every feature except `smoltcp`, whose own manifest requires 1.91 --
       # cargo would reject the build naming smoltcp, which is exactly why
       # Cargo.toml leaves that floor to smoltcp rather than folding it in.
+      #
+      # `bcm2835` is not covered here and cannot be: its target has no
+      # precompiled `core`, so it needs `-Zbuild-std` and therefore
+      # nightly, which is the opposite of what this job exists to prove.
+      # The claim being guarded -- that a consumer needs no nightly -- is
+      # simply not made for that chip (see README.md's "Toolchain").
       - name: Build for both architectures
         working-directory: ${{ runner.temp }}
         run: |
@@ -111,7 +124,7 @@ jobs:
         run: rustup show
       - run: make package
 
-  # Hardware-in-the-loop tests (`tests/hil/`) are deliberately absent: they
-  # drive a real Pi and an STM32 fixture over serial, so no hosted runner can
-  # run them. Every check above is a compile-time one, and passing CI says
-  # nothing about whether a driver works on the hardware.
+  # Hardware-in-the-loop tests are deliberately absent: they drive a real Pi
+  # and an STM32 fixture over serial, so no hosted runner can run them. Every
+  # check above is a compile-time one, and passing CI says nothing about
+  # whether a driver works on the hardware.

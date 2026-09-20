@@ -20,9 +20,10 @@
 //! two files (as `boot.s`/`boot64.s` do), selected by target
 //! architecture:
 //!
-//! - [`mmu32`](mod@self) -> `mmu32.rs`: ARMv7-A VMSA short-descriptor
+//! - [`mmu32`](mod@self) -> `mmu32.rs`: VMSA short-descriptor
 //!   first-level table (1MB sections), CP15-programmed, run at PL1.
-//!   Called from `rt`'s `boot.s` after its HYP->SVC drop.
+//!   Called from `rt`'s `boot.s` after its HYP->SVC drop, or from
+//!   `boot6.s` on ARMv6, where there is no Hyp mode to drop out of.
 //! - `mmu64.rs`: VMSAv8-64 long-descriptor tables (2MB blocks),
 //!   programmed via `MAIR_EL1`/`TCR_EL1`/`TTBR0_EL1`, run at EL1. The
 //!   caller must already be at EL1 (a consumer's boot stub drops
@@ -54,34 +55,41 @@ use crate::soc::PERIPHERAL_BASE;
 /// End of the mapped peripheral block (inclusive) -- a round,
 /// 1MB-aligned number comfortably covering every peripheral address this
 /// crate can reach.
-#[cfg(not(feature = "bcm2711"))]
-const PERIPHERAL_END: u32 = 0x3FFF_FFFF;
 #[cfg(feature = "bcm2711")]
 const PERIPHERAL_END: u32 = 0xFEFF_FFFF;
+#[cfg(all(not(feature = "bcm2711"), feature = "bcm2837"))]
+const PERIPHERAL_END: u32 = 0x3FFF_FFFF;
+/// BCM2835's peripheral block is 16MB, from `PERIPHERAL_BASE` out past
+/// USB at `0x2098_0e00`. Same "no chip selected" arm as
+/// [`PERIPHERAL_BASE`] -- see `soc.rs`.
+#[cfg(all(not(feature = "bcm2711"), not(feature = "bcm2837")))]
+const PERIPHERAL_END: u32 = 0x20FF_FFFF;
 
-/// Base of the ARM-local peripheral block (per-core timers, IRQ routing,
-/// and the inter-core mailbox registers on BCM2836/2837; the same block
-/// plus GIC-400 on BCM2711) -- a physically separate MMIO region from
-/// [`PERIPHERAL_BASE`]. Needed device-mapped so [`crate::multicore`] can
-/// reach the mailbox registers with the MMU on.
-#[cfg(not(feature = "bcm2711"))]
-const LOCAL_PERIPHERAL_BASE: u32 = 0x4000_0000;
+/// The ARM-local peripheral block (per-core timers, IRQ routing, and the
+/// inter-core mailbox registers on BCM2836/2837; the same block plus
+/// GIC-400 on BCM2711) as an inclusive `(base, end)` range -- a
+/// physically separate MMIO region from [`PERIPHERAL_BASE`]. Needed
+/// device-mapped so [`crate::multicore`] can reach the mailbox registers
+/// with the MMU on.
+///
+/// `None` on a chip that has no such block at all, in which case the
+/// identity map has no device region above the peripheral block.
+#[cfg(all(not(feature = "bcm2711"), feature = "bcm2837"))]
+const LOCAL_PERIPHERAL: Option<(u32, u32)> = Some((0x4000_0000, 0x400F_FFFF));
 /// BCM2711 low-peripheral-mode base (`bcm2711.dtsi`'s `ranges` entry
 /// mapping bus address `0x4000_0000` to this physical address; GIC-400's
 /// distributor/CPU-interface registers live at `0xFF84_1000`/`0xFF84_2000`
-/// within this block).
+/// within this block), for the 8MB that entry's size covers -- which runs
+/// to the top of the 32-bit address space.
 #[cfg(feature = "bcm2711")]
-const LOCAL_PERIPHERAL_BASE: u32 = 0xFF80_0000;
-
-/// End of the ARM-local peripheral block (inclusive) -- one section
-/// comfortably covers the whole register file (mailboxes and core control
-/// live in the first few hundred bytes).
-#[cfg(not(feature = "bcm2711"))]
-const LOCAL_PERIPHERAL_END: u32 = 0x400F_FFFF;
-/// BCM2711's ARM-local block is 8MB (`bcm2711.dtsi`'s `ranges` size for
-/// this entry), running to the top of the 32-bit address space.
-#[cfg(feature = "bcm2711")]
-const LOCAL_PERIPHERAL_END: u32 = 0xFFFF_FFFF;
+const LOCAL_PERIPHERAL: Option<(u32, u32)> = Some((0xFF80_0000, 0xFFFF_FFFF));
+/// The BCM2835 has no ARM-local peripheral block. It is a uniprocessor
+/// part: the block first appears on the BCM2836 to carry what a second
+/// core needs -- per-core timers and interrupt routing, and the mailboxes
+/// cores signal each other through -- none of which exists here. Nothing
+/// above the peripheral block is mapped at all.
+#[cfg(all(not(feature = "bcm2711"), not(feature = "bcm2837")))]
+const LOCAL_PERIPHERAL: Option<(u32, u32)> = None;
 
 #[cfg(target_arch = "arm")]
 #[path = "mmu32.rs"]

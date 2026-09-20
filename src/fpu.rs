@@ -1,9 +1,12 @@
 //! Enables the CPU's hardware floating-point / SIMD unit (VFP + NEON).
 //!
-//! Both the Cortex-A7 (BCM2836) and Cortex-A53 (BCM2837) ship with the
-//! FP/SIMD unit disabled out of reset: executing any VFP or NEON
-//! instruction before enabling coprocessor access traps -- an undefined
-//! instruction on AArch32, an EL1 FP/SIMD trap on AArch64.
+//! The Cortex-A7 (BCM2836), the Cortex-A53 (BCM2837) and the
+//! ARM1176JZF-S (BCM2835) all ship with the FP unit disabled out of
+//! reset: executing any VFP or NEON instruction before enabling
+//! coprocessor access traps -- an undefined instruction on AArch32, an
+//! EL1 FP/SIMD trap on AArch64. What the unit *is* differs (VFPv2 on the
+//! ARM1176, VFPv4 plus NEON on the later cores), but not how it is
+//! switched on.
 //!
 //! `rt`'s boot sequence calls [`enable`](crate::fpu::enable) (via the
 //! `rpi_hal_fpu_init` symbol below) on *every* core before any Rust code runs
@@ -17,7 +20,8 @@
 //! lowers to `compiler_builtins` software routines and never touches the
 //! unit regardless: enabling it costs nothing until something is built
 //! against a hard-float target (`armv7a-none-eabihf` /
-//! `aarch64-unknown-none`). See `examples/fpu_demo.rs` for such a build,
+//! `armv6-none-eabihf` / `aarch64-unknown-none`). See
+//! `examples/fpu_demo.rs` for such a build,
 //! including how to confirm hardware FP opcodes are actually emitted.
 //!
 //! One thing to keep in mind if that ever changes: with the unit enabled,
@@ -49,7 +53,7 @@ pub fn enable() {
 /// below with no compiler-inserted prologue/epilogue -- on a hard-float
 /// build that guarantees the routine that *turns FP on* cannot itself be
 /// the first thing to touch an FP register.
-#[cfg(target_arch = "arm")]
+#[cfg(all(target_arch = "arm", not(armv6)))]
 #[unsafe(naked)]
 #[no_mangle]
 unsafe extern "C" fn rpi_hal_fpu_init() {
@@ -64,6 +68,38 @@ unsafe extern "C" fn rpi_hal_fpu_init() {
         "orr r0, r0, #(0xf << 20)",
         "mcr p15, 0, r0, c1, c0, 2",
         "isb",
+        // FPEXC.EN (bit 30): the VFP extension's master enable, writable
+        // only now that CP10/11 access has been granted above.
+        "mov r0, #(1 << 30)",
+        "vmsr fpexc, r0",
+        "bx lr",
+    )
+}
+
+/// See the ARMv7-A sibling above; the sequence is the same one, in the
+/// spellings ARMv6 has.
+///
+/// Two differences, both forced by the core rather than chosen. The
+/// ARM1176JZF-S has VFPv2 and no NEON, so the `.fpu` directive names
+/// that — `vmsr fpexc` encodes identically either way, but an assembler
+/// told `neon-vfpv4` would accept instructions this core cannot run.
+/// And `isb` is an ARMv7 mnemonic: ARMv6 has the same barrier only as a
+/// CP15 operation (see [`crate::barrier`], which this cannot call — the
+/// function is `naked`, so its body is exactly this assembly).
+#[cfg(armv6)]
+#[unsafe(naked)]
+#[no_mangle]
+unsafe extern "C" fn rpi_hal_fpu_init() {
+    core::arch::naked_asm!(
+        ".fpu vfpv2",
+        // CPACR (CP15 c1,c0,2): grant CP10 and CP11 (the VFP
+        // coprocessors) full access at PL0 and PL1 -- bits [23:20] = 1111.
+        "mrc p15, 0, r0, c1, c0, 2",
+        "orr r0, r0, #(0xf << 20)",
+        "mcr p15, 0, r0, c1, c0, 2",
+        // ISB, as `mcr p15, 0, rX, c7, c5, 4` (Flush Prefetch Buffer).
+        "mov r0, #0",
+        "mcr p15, 0, r0, c7, c5, 4",
         // FPEXC.EN (bit 30): the VFP extension's master enable, writable
         // only now that CP10/11 access has been granted above.
         "mov r0, #(1 << 30)",

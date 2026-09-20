@@ -2,10 +2,10 @@
 # already pinned in .cargo/config.toml, so plain `cargo` invocations
 # pick them up without repeating flags here.
 
-.PHONY: build-bcm2837 build-bcm2711 examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build-bcm2837 build-bcm2711 build-bcm2835 examples fmt fmt-check clippy doc package pre-commit clean
 
-# `bcm2837`/`bcm2711` (see Cargo.toml) are chip selection: neither is a
-# default feature, since there's no sensible default target chip, so
+# `bcm2837`/`bcm2711`/`bcm2835` (see Cargo.toml) are chip selection: none
+# is a default feature, since there's no sensible default target chip, so
 # every invocation below picks one explicitly.
 build-bcm2837:
 	cargo build --release --features bcm2837
@@ -17,6 +17,22 @@ build-bcm2837:
 # selection itself, not full example coverage.
 build-bcm2711:
 	cargo build --release --features bcm2711
+
+# `bcm2835` (Pi 1, Pi Zero) is the only chip whose *target* differs too:
+# ARMv6 rather than ARMv7-A, so it names `--target` here instead of taking
+# the one `.cargo/config.toml` pins. `armv6-none-eabi` is a built-in rustc
+# target but tier 3, so there is no precompiled `core` for it -- the
+# `-Zbuild-std` already in `.cargo/config.toml` is what supplies one. It is
+# deliberately *not* in `rust-toolchain.toml`'s `targets`: `rustup` would
+# try to download a standard library that is not published, and fail.
+#
+# `--no-default-features` plus the two that *are* the defaults, rather
+# than letting them default: the chip feature has to be named anyway, and
+# spelling the whole set out keeps this line honest about what an ARMv6
+# build covers as the port grows. `rt` is boot6.s, the vector table and
+# the critical section; `mmu` is mmu32.rs's ARMv6 arm.
+build-bcm2835:
+	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu
 
 examples:
 	cargo build --release --examples --features bcm2837
@@ -42,6 +58,12 @@ examples:
 	# And the interrupt-driven examples, gated on `async` -- the feature is
 	# off by default, so a plain --examples build skips both.
 	cargo build --release --features bcm2837,async --example usb_irq --example sd_async
+	# And the ARMv6 examples, on their own target and feature set (see
+	# `build-bcm2835`). Named rather than `--examples`, because that would
+	# sweep in ones resting on hardware this chip doesn't have -- the ARM
+	# generic timer, a second core. The list grows as the port does; these
+	# are the ones the Pi Zero bring-up itself uses.
+	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu --example blink --example uart_hello --example uart_echo --example timer_hello --example atomics_check --example irq_timer_blink --example gpio_irq_button --example uart_rx_irq_echo
 
 fmt:
 	cargo fmt
@@ -62,6 +84,10 @@ clippy:
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
+	# And for BCM2835, on its own ARMv6 target -- see `build-bcm2835`'s
+	# comment for why this one is narrower than the others, and
+	# `examples`' for why the examples are named one by one.
+	cargo clippy --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu --example blink --example uart_hello --example uart_echo --example timer_hello --example atomics_check --example irq_timer_blink --example gpio_irq_button --example uart_rx_irq_echo -- -D warnings
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo clippy --release --features bcm2837,v3d --example v3d_probe --example gpu_cube -- -D warnings
 	# And for the video decoder, the audio renderer, and the VCHIQ/MMAL
@@ -120,7 +146,7 @@ doc:
 package:
 	cargo package --features bcm2837
 
-pre-commit: fmt clippy build-bcm2837 build-bcm2711 examples doc
+pre-commit: fmt clippy build-bcm2837 build-bcm2711 build-bcm2835 examples doc
 
 clean:
 	cargo clean

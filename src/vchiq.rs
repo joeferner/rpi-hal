@@ -74,7 +74,8 @@
 //! the "remote use" power-management handshake are all recognized on the
 //! wire and skipped — no client here uses them.
 
-use crate::cache::{barrier, clean_invalidate_range, clean_range, invalidate_range};
+use crate::barrier::dsb;
+use crate::cache::{clean_invalidate_range, clean_range, invalidate_range};
 use crate::mailbox::Mailbox;
 use crate::mmu;
 use crate::soc::PERIPHERAL_BASE;
@@ -651,7 +652,7 @@ impl Vchiq {
 
         // Everything above must be in memory before the firmware is told
         // where to look.
-        barrier();
+        dsb();
 
         let status = mailbox.vchiq_init(to_bus(base))?;
         if status != 0 {
@@ -1104,12 +1105,12 @@ impl Vchiq {
 
         // The message must be complete in memory before the position that
         // advertises it moves.
-        barrier();
+        dsb();
         self.write(
             self.local() + offset_of!(SharedState, tx_pos) as u32,
             self.local_tx_pos,
         );
-        barrier();
+        dsb();
 
         self.signal_remote(offset_of!(SharedState, trigger) as u32);
         self.stats.messages_sent += 1;
@@ -1142,7 +1143,7 @@ impl Vchiq {
                     self.local() + offset_of!(SharedState, tx_pos) as u32,
                     self.local_tx_pos,
                 );
-                barrier();
+                dsb();
                 self.signal_remote(offset_of!(SharedState, trigger) as u32);
                 return Err(Error::OutOfSlots);
             }
@@ -1177,7 +1178,7 @@ impl Vchiq {
             slot as u32,
         );
         self.write(recycle_field, recycle.wrapping_add(1));
-        barrier();
+        dsb();
         self.signal_remote(offset_of!(SharedState, recycle) as u32);
         self.stats.slots_recycled += 1;
     }
@@ -1192,7 +1193,7 @@ impl Vchiq {
     fn signal_remote(&mut self, event_offset: u32) {
         let event = self.remote() + event_offset;
         self.write(event + offset_of!(RemoteEvent, fired) as u32, 1);
-        barrier();
+        dsb();
         if self.read(event + offset_of!(RemoteEvent, armed) as u32) != 0 {
             // SAFETY: a plain MMIO store to the VideoCore's doorbell, which
             // takes any value; the address is fixed by the SoC memory map.
@@ -1301,7 +1302,7 @@ impl Vchiq {
 
         // Last, and only once everything above is in place: the flag the
         // firmware reads to decide this side is ready.
-        barrier();
+        dsb();
         self.write(local + offset_of!(SharedState, initialised) as u32, 1);
     }
 

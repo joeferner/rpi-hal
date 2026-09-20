@@ -1,4 +1,4 @@
-# Getting started: run rpi-hal examples on Pi 2/3/4
+# Getting started: run rpi-hal examples on Pi 1/2/3/4 and Pi Zero
 
 See the [`examples/`](../examples) directory for what's available. Each
 example is a single file with a module-level doc comment describing what
@@ -10,14 +10,18 @@ copy onto it differs.
 ## What you need
 
 - A Raspberry Pi 2 (BCM2836), Pi 3 (BCM2837 — the register map is
-  identical to the Pi 2's), or Pi 4 (BCM2711). Which chip you have
-  selects the `bcm2837`/`bcm2711` Cargo feature (see "Cargo setup"
+  identical to the Pi 2's), Pi 4 (BCM2711), or Pi 1 / Pi Zero
+  (BCM2835). Which chip you have selects the
+  `bcm2837`/`bcm2711`/`bcm2835` Cargo feature (see "Cargo setup"
   below) and which boot firmware files go on the SD card (see
   "Prepare the SD card" below). Not every example builds against
   `bcm2711` yet — check the example's own `required-features` in
   `Cargo.toml` against
   [issue #29](https://github.com/joeferner/rpi-hal/issues/29), which
-  tracks what is and isn't verified on that chip.
+  tracks what is and isn't verified on that chip. `bcm2835` is also
+  partial, and differs in kind: it is ARMv6, so it needs a different
+  target and a nightly toolchain, and `multicore`/`generic_timer`/`pmu`
+  do not exist on it at all.
 - A microSD card and a way to write it from your host machine.
 - An LED, a ~330Ω resistor, and two jumper wires (or a breadboard) for
   examples that drive GPIO.
@@ -164,6 +168,41 @@ Now populate it. The firmware files differ by board:
   (64-bit builds don't need this — `kernel8.img` is already the
   default kernel filename on both Pi 3 and Pi 4.)
 
+- **Pi 1 / Pi Zero:** the same three files as Pi 2/3 (`bootcode.bin`,
+  `start.elf`, `fixup.dat`; they serve every BCM2835/6/7 board). Two
+  things about this board are silent failures, so both are worth
+  getting right before wondering whether the code works:
+
+  **The image must be named `KERNEL.IMG`, with no digit.** `start.elf`
+  picks the kernel filename from the CPU it finds: `kernel.img` on
+  ARMv6, `kernel7.img` on ARMv7, `kernel7l.img` on the Pi 4's 32-bit
+  mode, `kernel8.img` on AArch64. A card carrying only `kernel7.img`
+  leaves this board looking for a file that isn't there, and it stops —
+  no ARM code ever runs, so the console is silent rather than garbled,
+  which looks exactly like a dead board. `build-example.sh <name>
+  bcm2835` emits `target/kernel.img` for this reason.
+
+  **`config.txt` should pin the UART clock:**
+
+  ```ini
+  init_uart_clock=48000000
+  disable_splash=1
+  ```
+
+  `Uart::init` programs its divisors for a 48MHz PL011 reference clock
+  and has no way to discover it was wrong, so a firmware that chose
+  otherwise scales every bit period and hands back a console that looks
+  like noise at a plausible baud rate. Don't add `enable_uart=1`: that
+  asks the firmware for a console of its own on the same GPIO14/15 pins
+  the cable is on. There is no `arm_64bit` line to set either way —
+  this core has no 64-bit mode, and a stray `arm_64bit=1` carried over
+  from a Pi 3 card sends the firmware looking for `kernel8.img`.
+
+  The on-board Bluetooth on a Zero W claims the PL011 by default,
+  leaving the mini UART on the header pins. Nothing needs to be done
+  about it: `Uart::init` remuxes GPIO14/15 to ALT0 itself, taking the
+  header back for the PL011 whatever the firmware decided.
+
 After copying the kernel image too (next section), unmount before
 removing the card:
 
@@ -176,13 +215,20 @@ sudo umount /tmp/rpiboot
 ```sh
 ./scripts/build-example.sh <example-name>            # Pi 2/3, see examples/ for the available names
 ./scripts/build-example.sh <example-name> bcm2711    # Pi 4
+./scripts/build-example.sh <example-name> bcm2835    # Pi 1, Pi Zero
 ```
 
-This produces `target/kernel7.img`. Copy it to the SD card's boot
-partition alongside the firmware files from "Prepare the SD card"
-above (`bootcode.bin`/`start.elf`/`fixup.dat` for Pi 2/3,
-`start4.elf`/`fixup4.dat` plus `config.txt` for Pi 4), eject safely,
-and boot the Pi.
+This produces `target/kernel7.img` — or `target/kernel.img` for
+`bcm2835`, which also builds for ARMv6 and so needs the nightly
+toolchain and `rust-src` described in README.md's "Toolchain". Not
+every example builds for that chip: the ones resting on hardware it
+does not have (the ARM generic timer, a second core) are excluded, and
+`make examples` lists the set that is known to build.
+
+Copy the image to the SD card's boot partition alongside the firmware
+files from "Prepare the SD card" above (`bootcode.bin`/`start.elf`/
+`fixup.dat` for Pi 1/2/3/Zero, `start4.elf`/`fixup4.dat` plus
+`config.txt` for Pi 4), eject safely, and boot the Pi.
 
 ## Building your own application against rpi-hal
 
@@ -201,6 +247,8 @@ target with a `rust-toolchain.toml`, which also installs it:
 channel = "stable"
 # 32-bit (Pi 2/3/4, kernel7.img):  "armv7a-none-eabi"
 # 64-bit (Pi 3/4, kernel8.img):    "aarch64-unknown-none-softfloat"
+# ARMv6 (Pi 1/Zero, kernel.img):   "armv6-none-eabi" -- see the note
+#   below; it goes in [build], never here.
 targets = ["aarch64-unknown-none-softfloat"]
 ```
 
@@ -219,26 +267,46 @@ and uses `alloc`. (This crate's own repository builds its examples with
 nightly and `build-std = ["core", "alloc"]`, but that's a local choice
 rather than a requirement to copy.)
 
+The Pi 1 / Pi Zero is the exception, and it is the target's doing rather
+than this crate's: `armv6-none-eabi` is tier 3, so there is no
+precompiled `core` to install and `-Zbuild-std` has to compile one,
+which needs nightly. See README.md's "Toolchain" for the three files.
+Note that the target must *not* be listed under `targets` in
+`rust-toolchain.toml` — rustup would try to download a standard library
+that is not published, and fail.
+
 Install [`cargo-binutils`](https://github.com/rust-embedded/cargo-binutils)
 (`cargo install cargo-binutils`) for the `cargo objcopy` step below.
 
-Depend on `rpi-hal` by its git remote (it isn't published to crates.io
-yet). Its default features `rt` (the `_start`/panic/IRQ boot sequence)
-and `mmu` are what a normal application wants. Neither of the chip
-features is a default, though — pick `bcm2837` (Pi 2/3) or `bcm2711`
-(Pi 4) explicitly, matching the board you're targeting; add other
-integration features (`smoltcp`, `embedded-sdmmc`, `multicore`, …) as
-needed:
+Depend on `rpi-hal` from crates.io. Its default features `rt` (the
+`_start`/panic/IRQ boot sequence) and `mmu` are what a normal
+application wants. None of the chip features is a default, though —
+pick `bcm2837` (Pi 2/3), `bcm2711` (Pi 4) or `bcm2835` (Pi 1, Pi Zero)
+explicitly, matching the board you're targeting; add other integration
+features (`smoltcp`, `embedded-sdmmc`, `multicore`, …) as needed:
 
 ```toml
 [dependencies]
-rpi-hal = { git = "https://github.com/joeferner/rpi-hal.git", features = ["bcm2837"] }
+rpi-hal = { version = "0.5", features = ["bcm2837"] }
 ```
 
-If the remote needs SSH and cargo's built-in fetch can't authenticate,
-set `git-fetch-with-cli = true` under `[net]` in `.cargo/config.toml` (or
-export `CARGO_NET_GIT_FETCH_WITH_CLI=true`) so it uses your git CLI's
-credentials.
+If you are writing a library on top of this one rather than an
+application, do **not** name a chip feature on that line. It makes the
+choice unconditional for everyone downstream, and the chip features have
+a precedence order (`bcm2711` > `bcm2837` > `bcm2835`), so a consumer
+who adds a lower-precedence one gets the wrong memory map silently
+rather than an error. Give your own crate a feature per chip and forward
+it, defaulting to whichever board you expect:
+
+```toml
+[features]
+default = ["bcm2837"]
+bcm2837 = ["rpi-hal/bcm2837"]
+bcm2835 = ["rpi-hal/bcm2835"]
+
+[dependencies]
+rpi-hal = { version = "0.5", default-features = false }
+```
 
 ### Linker script (required)
 
@@ -299,6 +367,10 @@ cargo objcopy --release -- -O binary target/kernel8.img
 Either path from "Build and flash" / "Faster iteration" above applies:
 
 - **SD card:** copy `target/kernel8.img` (with `arm_64bit=1` in
-  `config.txt`) or `target/kernel7.img` to the boot partition and boot.
+  `config.txt`), `target/kernel7.img`, or `target/kernel.img` on ARMv6,
+  to the boot partition and boot. The name is not a convention here —
+  the firmware picks which one it looks for from the CPU, and finding
+  none it stops silently.
 - **rpi-loader:** upload over UART, matching the link address —
-  `--load-addr 0x80000` for a 64-bit image, `0x8000` for 32-bit.
+  `--load-addr 0x80000` for a 64-bit image, `0x8000` for either 32-bit
+  one.

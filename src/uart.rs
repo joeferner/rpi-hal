@@ -43,6 +43,26 @@ impl Uart {
     /// and would garble everything at the intended 115200 baud). If
     /// this ever needs to be robust across firmware versions, query
     /// the real clock via the VideoCore mailbox instead of assuming it.
+    /// Until then, `init_uart_clock=48000000` in `config.txt` pins it
+    /// rather than leaving it to the firmware's default — worth stating
+    /// on a board whose console has never worked, since the symptom of
+    /// getting it wrong is a plausible-looking stream of garbage rather
+    /// than silence.
+    ///
+    /// # On a board with on-board Bluetooth
+    ///
+    /// The Pi 3 and the Pi Zero W wire this same PL011 to their
+    /// Bluetooth controller, and their firmware routes it there by
+    /// default, leaving the mini UART ([`crate::mini_uart`]) on the
+    /// GPIO14/15 header pins. Remuxing those pins to ALT0 — the first
+    /// thing this function does — takes the header back for the PL011
+    /// regardless of what the firmware decided, so no `config.txt`
+    /// overlay is needed to get a console here.
+    ///
+    /// The distinction matters when output is wrong rather than absent:
+    /// garbage at a plausible rate is the reference clock above, while
+    /// nothing at all is the pins — either not muxed, or muxed and
+    /// wired to the wrong end of the cable.
     pub fn init(gpio: &GPIO, uart0: UART0) -> Self {
         const GPIO14_15_MASK: u32 = (1 << 14) | (1 << 15);
         disable_pull(gpio, GPIO14_15_MASK);

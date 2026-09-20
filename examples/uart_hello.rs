@@ -1,8 +1,23 @@
+//! Prints a counter over the UART0 console, once a second or so, with
+//! the GPIO4 LED toggling alongside it.
+//!
+//! The first line is the core's `MIDR` Main ID register (see
+//! [`rpi_hal::cpu::main_id`] for how to read it): on a board whose
+//! console has never worked before, it answers "are characters getting
+//! out" and "is this the chip the binary was built for" at the same
+//! time. `0x410fb767` is an ARM1176JZF-S (Pi 1, Pi Zero), `0x410fc075`
+//! a Cortex-A7 (Pi 2), `0x410fd034` a Cortex-A53 (Pi 3).
+//!
+//! Wiring is the standard console setup: a 3.3V USB-serial cable on
+//! GPIO14/15, 115200 8N1, plus an LED and resistor on GPIO4. See
+//! `docs/getting-started.md`.
+
 #![no_std]
 #![no_main]
 
 use core::fmt::Write;
 use embedded_hal::digital::StatefulOutputPin;
+use rpi_hal::cpu;
 use rpi_hal::gpio::{Input, Pin};
 use rpi_hal::halt;
 use rpi_hal::{pac, uart::Uart};
@@ -20,6 +35,11 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
 
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
+
+    // Which core is actually running this -- see the module header for
+    // what the value means. First, so that a console that only manages
+    // one line still says something useful.
+    let _ = writeln!(uart, "rpi-hal: MIDR {:#010x}", cpu::main_id());
 
     // LED heartbeat: toggles every loop iteration regardless of
     // whether the UART message actually gets anywhere, so you can

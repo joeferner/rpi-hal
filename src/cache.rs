@@ -13,6 +13,7 @@
 //! architecture-specific piece — the cache-maintenance instructions —
 //! lives in a single place.
 
+use crate::barrier::dsb;
 use core::arch::asm;
 
 /// Conservative minimum D-cache line size, in bytes.
@@ -36,7 +37,7 @@ pub(crate) fn clean_range(address: u32, len: usize) {
         unsafe { clean_line(line) };
         line += MIN_CACHE_LINE;
     }
-    barrier();
+    dsb();
 }
 
 /// Invalidates every cache line covering `len` bytes from `address`, then
@@ -50,7 +51,7 @@ pub(crate) fn invalidate_range(address: u32, len: usize) {
         unsafe { invalidate_line(line) };
         line += MIN_CACHE_LINE;
     }
-    barrier();
+    dsb();
 }
 
 /// Cleans *and* invalidates every cache line covering `len` bytes from
@@ -72,17 +73,20 @@ pub(crate) fn clean_invalidate_range(address: u32, len: usize) {
         unsafe { clean_invalidate_line(line) };
         line += MIN_CACHE_LINE;
     }
-    barrier();
+    dsb();
 }
 
-// The per-line ops and the barrier are the only architecture-specific
-// part. AArch32 uses CP15 cache-maintenance coprocessor writes (DCCMVAC
-// to clean, DCIMVAC to invalidate, DCCIMVAC for both) and a bare `dsb`;
-// AArch64 uses the `dc cvac` / `dc ivac` / `dc civac` cache-maintenance
-// instructions and `dsb sy`. All operate to the point of coherency — the
-// level shared with the bus masters. On AArch64 the `{0:x}` operand selects
-// the 64-bit view of the (zero-extended, always < 4 GB on this SoC)
-// address, since `dc` takes an X register.
+// The per-line ops are the only architecture-specific part left here;
+// the trailing barrier comes from `crate::barrier`, which has its own
+// three-way split. AArch32 uses CP15 cache-maintenance coprocessor
+// writes (DCCMVAC to clean, DCIMVAC to invalidate, DCCIMVAC for both),
+// with the same encodings on ARMv6 and ARMv7 — maintenance *by MVA* did
+// not change, unlike the barriers; AArch64 uses the `dc cvac` /
+// `dc ivac` / `dc civac` cache-maintenance instructions. All operate to
+// the point of coherency — the level shared with the bus masters. On
+// AArch64 the `{0:x}` operand selects the 64-bit view of the
+// (zero-extended, always < 4 GB on this SoC) address, since `dc` takes an
+// X register.
 
 /// Cleans the single cache line containing `line` to the point of
 /// coherency.
@@ -130,29 +134,6 @@ unsafe fn clean_invalidate_line(line: u32) {
 #[inline(always)]
 unsafe fn clean_invalidate_line(line: u32) {
     asm!("dc civac, {0:x}", in(reg) line);
-}
-
-/// Data synchronization barrier over the full system domain — completes
-/// the cache maintenance above before the caller kicks off DMA.
-///
-/// Also the ordering barrier for the VideoCore shared-memory protocols
-/// (`crate::vchiq`), whose region is mapped non-cacheable rather than
-/// maintained by hand: no maintenance is needed there, but plain
-/// Normal-memory accesses can still be reordered and merged, so publishing
-/// a structure before the flag that advertises it still needs this.
-#[cfg(target_arch = "arm")]
-#[inline(always)]
-pub(crate) fn barrier() {
-    unsafe { asm!("dsb") };
-}
-
-/// Data synchronization barrier over the full system domain — completes
-/// the cache maintenance above before the caller kicks off DMA. See the
-/// AArch32 definition's doc comment for its second use.
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-pub(crate) fn barrier() {
-    unsafe { asm!("dsb sy") };
 }
 
 #[cfg(not(any(target_arch = "arm", target_arch = "aarch64")))]

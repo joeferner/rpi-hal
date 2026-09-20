@@ -396,10 +396,11 @@ pub(crate) fn set_pull_bank(_gpio: &GPIO, bank: u8, mask: u32, pull: Pull) {
     /// follows it.
     const GPPUDCLK0: usize = 0x98;
 
-    // The BCM2836/2837 pull registers aren't in `bcm2837-lpa`'s SVD at
-    // all — it models the BCM2711 scheme, which replaced them — so the
-    // `gpio` token can't reach them and this computes the addresses off
-    // the PAC's own base instead. The token is still taken so both
+    // The legacy pull registers aren't in `bcm2837-lpa`'s SVD at all
+    // (nor `bcm2835-lpa`'s, whose `gpio` module is the same generated
+    // code) — both model the BCM2711 scheme, which replaced them — so
+    // the `gpio` token can't reach them and this computes the addresses
+    // off the PAC's own base instead. The token is still taken so both
     // branches share one signature and one call site.
     let base = crate::pac::GPIO::PTR as usize;
     let gppud = (base + GPPUD) as *mut u32;

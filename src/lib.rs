@@ -1,5 +1,10 @@
-//! Hardware abstraction layer for Raspberry Pi boards using the
-//! BCM2836/BCM2837 SoC (Pi 2, Pi 3).
+//! Hardware abstraction layer for bare-metal Raspberry Pi.
+//!
+//! Built around the BCM2836/BCM2837 (Pi 2, Pi 3), with preliminary
+//! support for the BCM2711 (Pi 4) and the BCM2835 (Pi 1, Pi Zero) —
+//! see the crate's README for what is verified on each. Exactly one of
+//! the `bcm2837`/`bcm2711`/`bcm2835` features selects the chip; none is
+//! a default, since there is no sensible default target chip.
 
 #![no_std]
 #![deny(missing_docs)]
@@ -17,6 +22,7 @@
 pub mod audio_render;
 /// Blocking driver for the auxiliary SPI controllers SPI1 and SPI2.
 pub mod aux_spi;
+mod barrier;
 /// HCI bring-up for the on-board BCM43438 Bluetooth controller (Pi 3):
 /// H4 transport, `.hcd` patchram firmware load, and local
 /// version/address readback.
@@ -37,6 +43,13 @@ mod emmc;
 pub mod fpu;
 /// Per-core ARM generic (architected) timer: monotonic counter, blocking
 /// delays, and interrupt-driven deadlines.
+///
+/// Not built for ARMv6 (BCM2835): the generic timer is an ARMv7-A
+/// extension, and the per-core control and routing registers this driver
+/// programs live in an ARM-local peripheral block the BCM2835 does not
+/// have. [`timer`] — the BCM System Timer, a peripheral rather than CPU
+/// state — is the monotonic clock there.
+#[cfg(not(armv6))]
 pub mod generic_timer;
 /// Typestated GPIO pin wrapper with `embedded-hal` `digital` trait
 /// implementations.
@@ -74,10 +87,26 @@ pub mod mmal;
 /// concurrently with this core.
 #[cfg(feature = "mmu")]
 pub mod mmu;
-#[cfg(all(feature = "rt", feature = "multicore"))]
+#[cfg(all(feature = "rt", feature = "multicore", not(armv6)))]
 /// Bringing up secondary cores (1-3) — see the module's own doc
 /// comment for the wake-up handoff this builds on.
+///
+/// Not built for ARMv6 (BCM2835): that chip has one core, and no
+/// ARM-local mailbox registers for a second one to be woken through. The
+/// `multicore` feature is rejected outright there rather than quietly
+/// producing a build without this module — see the `compile_error!`
+/// below.
 pub mod multicore;
+// A consumer who asked for `multicore` on a uniprocessor chip asked for
+// something that cannot be delivered, and the failure to be loud about is
+// the silent one: without this, the feature would simply compile away and
+// the first sign would be `rpi_hal::multicore` not resolving.
+#[cfg(all(feature = "multicore", armv6))]
+compile_error!(
+    "the `multicore` feature is not available on ARMv6: the BCM2835 (Pi 1, \
+     Pi Zero) is a single-core part. Drop the feature -- note that it is \
+     implied by nothing else, so nothing else has to change."
+);
 /// Reference I2C driver for the OV5647 (Raspberry Pi Camera v1) image
 /// sensor — a third-party device (paired with [`unicam`]), not a SoC
 /// peripheral.
@@ -87,6 +116,11 @@ pub mod ov5647;
 pub mod pcm;
 /// The PMU cycle counter — a cheap per-core CPU-cycle clock for profiling
 /// work too short for the System Timer to measure without disturbing it.
+///
+/// Not built for ARMv6 (BCM2835): the ARM1176 has performance counters,
+/// but behind entirely different CP15 registers from the ARMv7-A PMU this
+/// driver programs. [`timer`] is the clock available there.
+#[cfg(not(armv6))]
 pub mod pmu;
 /// Board reboot and shutdown via the Power Management (PM) block.
 pub mod power;
@@ -144,10 +178,18 @@ pub mod wifi;
 
 /// Re-export of the underlying peripheral access crate, for direct
 /// register access alongside this crate's higher-level wrappers.
-/// Whichever of `bcm2837`/`bcm2711` is enabled (see `Cargo.toml`) --
-/// `bcm2711` wins if both are, since it's the more specific choice.
+/// Whichever of `bcm2837`/`bcm2711`/`bcm2835` is enabled (see
+/// `Cargo.toml`) -- with more than one on, the precedence is
+/// `bcm2711` > `bcm2837` > `bcm2835`, newest chip first, and the same
+/// order every other chip branch in this crate follows.
 #[cfg(feature = "bcm2711")]
 pub use bcm2711_lpa as pac;
+#[cfg(all(
+    not(feature = "bcm2711"),
+    not(feature = "bcm2837"),
+    feature = "bcm2835"
+))]
+pub use bcm2835_lpa as pac;
 #[cfg(all(not(feature = "bcm2711"), feature = "bcm2837"))]
 pub use bcm2837_lpa as pac;
 // With neither feature on there is no `pac` at all, and every module that
@@ -161,12 +203,13 @@ pub use bcm2837_lpa as pac;
 // the two impls' distinguishing types come from `pac`). Not silenced
 // entirely -- that would mean stubbing out a fake `pac`, a worse trade
 // than a short cascade under a clear headline.
-#[cfg(not(any(feature = "bcm2837", feature = "bcm2711")))]
+#[cfg(not(any(feature = "bcm2837", feature = "bcm2711", feature = "bcm2835")))]
 compile_error!(
-    "no chip selected: rpi-hal needs exactly one of the `bcm2837` (Pi 2, Pi 3) \
-     or `bcm2711` (Pi 4) features. Neither is a default, since there is no \
-     sensible default target chip -- add one to this crate's dependency entry, \
-     e.g. `rpi-hal = { version = \"0.1\", features = [\"bcm2837\"] }`."
+    "no chip selected: rpi-hal needs exactly one of the `bcm2837` (Pi 2, Pi 3), \
+     `bcm2711` (Pi 4) or `bcm2835` (Pi 1, Pi Zero) features. None is a default, \
+     since there is no sensible default target chip -- add one to this crate's \
+     dependency entry, e.g. \
+     `rpi-hal = { version = \"0.1\", features = [\"bcm2837\"] }`."
 );
 
 /// Halts the calling core forever, parking it in a low-power
