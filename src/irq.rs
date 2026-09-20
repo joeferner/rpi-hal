@@ -80,8 +80,16 @@
 
 // The exception vector table is architecture-specific: vectors.s on
 // AArch32 (8-entry, VBAR), vectors64.s on AArch64 (16-entry, VBAR_EL1).
-#[cfg(target_arch = "arm")]
+#[cfg(all(target_arch = "arm", not(armv6)))]
 core::arch::global_asm!(include_str!("vectors.s"));
+// The same table on ARMv6 -- every instruction in it exists there, but
+// the `wfe` in its default fault handler is an ARMv6K one, and the
+// assembler defaults to plain ARMv6 for `armv6-none-eabi` and rejects
+// it. The directive is prepended here rather than written into
+// vectors.s, which ARMv7-A builds share and where it would *narrow*
+// what assembles.
+#[cfg(armv6)]
+core::arch::global_asm!(".arch armv6k", include_str!("vectors.s"));
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("vectors64.s"));
 

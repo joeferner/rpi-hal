@@ -1,7 +1,10 @@
-// The boot entry point is architecture-specific: boot.s on AArch32,
-// boot64.s on AArch64 (see each file's header for the differences).
-#[cfg(target_arch = "arm")]
+// The boot entry point is architecture-specific: boot.s on ARMv7-A
+// AArch32, boot6.s on ARMv6, boot64.s on AArch64 (see each file's header
+// for the differences).
+#[cfg(all(target_arch = "arm", not(armv6)))]
 core::arch::global_asm!(include_str!("boot.s"));
+#[cfg(armv6)]
+core::arch::global_asm!(include_str!("boot6.s"));
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("boot64.s"));
 

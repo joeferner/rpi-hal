@@ -1,10 +1,20 @@
-//! AArch32 (ARMv7-A short-descriptor) MMU implementation -- see the
-//! parent [`mmu`](super) module's doc comment for the overall design.
+//! AArch32 (short-descriptor) MMU implementation -- see the parent
+//! [`mmu`](super) module's doc comment for the overall design.
 //!
 //! A single flat first-level table of 1MB sections covering all 4GB,
 //! CP15-programmed, run at PL1.
+//!
+//! One file for both 32-bit architectures, because the table itself is
+//! the same on each: ARMv6 with `SCTLR.XP` set uses the descriptor format
+//! ARMv7-A made the only one, down to the bit positions of `TEX`, `APX`
+//! and `XN`. What differs is the CP15 programming around it, and each
+//! difference is marked `cfg(armv6)` below with its reason -- the short
+//! version being that ARMv6 has no Snoop Control Unit to enable, no
+//! inner-shareable operations, nothing shareable worth marking on a
+//! uniprocessor, and caches that come out of reset holding rubbish.
 
-use super::{LOCAL_PERIPHERAL_BASE, LOCAL_PERIPHERAL_END, PERIPHERAL_BASE, PERIPHERAL_END};
+use super::{LOCAL_PERIPHERAL, PERIPHERAL_BASE, PERIPHERAL_END};
+use crate::barrier::{dsb, isb};
 use crate::cache::clean_range;
 use core::arch::asm;
 use core::cell::UnsafeCell;
@@ -41,7 +51,27 @@ const TEX_NORMAL: u32 = 0b001 << 12;
 const C_BIT: u32 = 1 << 3;
 /// Bit[16] (S): Shareable. Necessary but not sufficient on its own on
 /// this core (Cortex-A7) -- see the parent module's doc comment.
+#[cfg(not(armv6))]
 const S_BIT: u32 = 1 << 16;
+/// Zero on ARMv6, so RAM is mapped Normal Cacheable **Non-shareable**.
+///
+/// The one descriptor field that does not carry over from the ARMv7
+/// constants, and the reasoning is the opposite of the ARMv7 one above.
+/// The ARM1176JZF-S is a uniprocessor part with no coherent interconnect
+/// and no external global monitor: there is nothing for a shareable
+/// mapping to be shared *with*, and marking cacheable memory shareable on
+/// a core that cannot coherently cache it is how a region quietly stops
+/// being cached at all -- which would take `ldrex`/`strex` down with it,
+/// this map's whole purpose (see the parent module's doc comment).
+/// Non-shareable leaves the core's own local exclusive monitor to do the
+/// job, which is what it is for.
+///
+/// Linux reaches the same arrangement from the other direction: its
+/// ARMv6 section flags are `PMD_FLAGS_UP = PMD_SECT_WB` for
+/// uniprocessor, against `PMD_FLAGS_SMP` which adds `PMD_SECT_S`, and it
+/// forces the S bit on only when it knows it is running SMP.
+#[cfg(armv6)]
+const S_BIT: u32 = 0;
 
 /// RAM: Normal, Write-Back Write-Allocate Cacheable, Shareable, full
 /// access, executable -- covers every address this crate's own code,
@@ -66,9 +96,10 @@ const SECTION_DEVICE: u32 = DESCRIPTOR_SECTION | AP_FULL_ACCESS | B_BIT | XN;
 
 /// Builds the identity map: RAM below the peripheral base as
 /// [`SECTION_RAM`], the peripheral block and the ARM-local peripheral
-/// block as [`SECTION_DEVICE`], and everything else left as an invalid
-/// descriptor (bits\[1:0\] = `00`) -- touching genuinely unbacked address
-/// space still faults instead of being silently redefined as valid.
+/// block (on a chip that has one) as [`SECTION_DEVICE`], and everything
+/// else left as an invalid descriptor (bits\[1:0\] = `00`) -- touching
+/// genuinely unbacked address space still faults instead of being
+/// silently redefined as valid.
 const fn build_page_table() -> [u32; SECTION_COUNT] {
     let mut table = [0u32; SECTION_COUNT];
     let mut i = 0;
@@ -77,12 +108,15 @@ const fn build_page_table() -> [u32; SECTION_COUNT] {
         if base < PERIPHERAL_BASE {
             table[i] = base | SECTION_RAM;
         } else if base <= PERIPHERAL_END || {
-            // Under `bcm2711`, `LOCAL_PERIPHERAL_END` is `u32::MAX` (the
-            // ARM-local block runs to the top of the address space), which
-            // makes the upper bound below trivially true -- still the
-            // right check for the BCM2836/2837 case, where it isn't.
+            // Under `bcm2711`, the local block's end is `u32::MAX` (it runs
+            // to the top of the address space), which makes the upper bound
+            // below trivially true -- still the right check for the
+            // BCM2836/2837 case, where it isn't.
             #[allow(clippy::absurd_extreme_comparisons)]
-            let in_local_block = base >= LOCAL_PERIPHERAL_BASE && base <= LOCAL_PERIPHERAL_END;
+            let in_local_block = match LOCAL_PERIPHERAL {
+                Some((local_base, local_end)) => base >= local_base && base <= local_end,
+                None => false,
+            };
             in_local_block
         } {
             table[i] = base | SECTION_DEVICE;
@@ -121,8 +155,9 @@ pub(super) const UNCACHED_GRANULE: usize = 1 << SECTION_SHIFT;
 /// invalidation because `TTBR0` is programmed for non-cacheable table walks
 /// (see [`rpi_hal_mmu_init`]) -- the walker reads RAM directly, so a
 /// descriptor sitting dirty in the D-cache is one the hardware would never
-/// see. The TLB operation is the inner-shareable variant (`TLBIALLIS`), so
-/// secondary cores walking this same table drop their stale entries too.
+/// see. On ARMv7 the TLB operation is the inner-shareable variant
+/// (`TLBIALLIS`), so secondary cores walking this same table drop their
+/// stale entries too.
 ///
 /// # Safety
 ///
@@ -139,10 +174,23 @@ pub(super) unsafe fn set_uncached_block(base: u32) {
     unsafe {
         // TLBIALLIS: invalidate the entire TLB across the inner-shareable
         // domain. The operand is ignored (SBZ).
+        #[cfg(not(armv6))]
         asm!("mcr p15, 0, {0}, c8, c3, 0", in(reg) 0u32);
-        asm!("dsb");
-        asm!("isb");
+
+        // ARMv6 has no inner-shareable TLB operations -- they arrive with
+        // the ARMv7 multiprocessing extensions -- so this is the plain
+        // `TLBIALL`, which is all a uniprocessor needs. The branch
+        // predictor is invalidated alongside it: the ARM1176 can hold
+        // predictions made under the old translation, where ARMv7-A
+        // discards them itself.
+        #[cfg(armv6)]
+        {
+            asm!("mcr p15, 0, {0}, c8, c7, 0", in(reg) 0u32);
+            asm!("mcr p15, 0, {0}, c7, c5, 6", in(reg) 0u32);
+        }
     }
+    dsb();
+    isb();
 }
 
 /// Builds the identity-mapped page table (above) and enables the MMU.
@@ -176,10 +224,45 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         // guaranteed to ever become visible to another core no matter how
         // many dsb/dmb barriers follow. Harmless to set unconditionally
         // even when only core 0 ever runs.
-        let mut actlr: u32;
-        asm!("mrc p15, 0, {0}, c1, c0, 1", out(reg) actlr);
-        actlr |= 1 << 6;
-        asm!("mcr p15, 0, {0}, c1, c0, 1", in(reg) actlr);
+        //
+        // Not done on ARMv6, and this is not a case of "harmless to skip":
+        // `ACTLR` is implementation-defined, the ARM1176 has no Snoop
+        // Control Unit to turn on, and its bit 6 is something else
+        // entirely. A read-modify-write left in place for symmetry would
+        // be setting an unknown bit on a real register.
+        #[cfg(not(armv6))]
+        {
+            let mut actlr: u32;
+            asm!("mrc p15, 0, {0}, c1, c0, 1", out(reg) actlr);
+            actlr |= 1 << 6;
+            asm!("mcr p15, 0, {0}, c1, c0, 1", in(reg) actlr);
+        }
+
+        // Caches and branch predictor come out of reset with UNPREDICTABLE
+        // contents on this core, and are about to be turned on: invalidate
+        // them before they can be consulted. Invalidate rather than
+        // clean+invalidate, deliberately -- a clean would write whatever
+        // random lines reset left looking dirty *out* to RAM. Nothing can
+        // be lost by discarding them, since the caches have been off since
+        // reset.
+        //
+        // ARMv7-A needs none of this: the Cortex-A7 invalidates its caches
+        // at reset.
+        #[cfg(armv6)]
+        {
+            // Invalidate both caches (`c7, c7, 0`) and the branch target
+            // cache (`c7, c5, 6`).
+            asm!("mcr p15, 0, {0}, c7, c7, 0", in(reg) 0u32);
+            asm!("mcr p15, 0, {0}, c7, c5, 6", in(reg) 0u32);
+
+            // TTBCR = 0: every translation walks through TTBR0, with no
+            // TTBR1 split. That is the reset value, but "whatever the GPU
+            // firmware left" is not something this code assumes anywhere
+            // else either (see SCTLR.V in boot6.s), and a non-zero N here
+            // would send the top of the address space to a second table
+            // that does not exist.
+            asm!("mcr p15, 0, {0}, c2, c0, 2", in(reg) 0u32);
+        }
 
         // TTBR0: point at the page table. Low attribute bits (RGN/S/IRGN,
         // meaningful for cached/shared page-table walks) left 0 --
@@ -195,8 +278,8 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         // whatever GPU firmware ran before us isn't something to assume is
         // clean.
         asm!("mcr p15, 0, {0}, c8, c7, 0", in(reg) 0u32);
-        asm!("dsb");
-        asm!("isb");
+        dsb();
+        isb();
 
         // SCTLR: set M (bit 0) and C (bit 2, data cache) -- see the parent
         // module's doc comment on why C is needed for `ldrex`/`strex` to
@@ -205,11 +288,49 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         let mut sctlr: u32;
         asm!("mrc p15, 0, {0}, c1, c0, 0", out(reg) sctlr);
         sctlr |= 1 | (1 << 2);
-        asm!("mcr p15, 0, {0}, c1, c0, 0", in(reg) sctlr);
 
-        // Architecturally required right after enabling the MMU: the
-        // pipeline may have already fetched ahead using the old (MMU-off)
-        // address translation behavior.
-        asm!("isb");
+        // Three more bits on ARMv6. Two of them are real and writable
+        // only here -- ARMv7 dropped both, having made each the only
+        // behaviour -- and the third is a judgement call this core's speed
+        // changes.
+        //
+        // XP (bit 23) is the one line in this file that the whole ARMv6
+        // map depends on. It selects the descriptor format that
+        // `build_page_table` above emits. Leave it clear and the core
+        // reads those same words in the legacy subpage-AP format instead,
+        // where `TEX` is not a memory type, bit 15 is not `APX`, and bit
+        // 16 is not `S` -- every attribute means something else, silently,
+        // and the map that results is nonsense rather than absent.
+        //
+        // U (bit 22) selects the ARMv6 unaligned access model. With it
+        // clear the core keeps the ARMv5 one, where an unaligned word load
+        // does not fault but returns the addressed word *rotated* -- wrong
+        // data, no diagnostic. Nothing this crate compiles emits an
+        // unaligned access today (the target is strict-alignment), so this
+        // is not fixing a live bug; it is closing off a silent failure in
+        // favour of a loud one. Linux sets both bits on this core for the
+        // same reasons (`v6_crval`'s `mmuset` = 0x00c0387d).
+        //
+        // I (bit 12, instruction cache) is the third, and is the one place
+        // this arm deliberately differs from the ARMv7 one rather than
+        // merely spelling the same intent differently. The ARM1176 fetches
+        // from a 1GHz core over a memory system shared with the VideoCore,
+        // and an uncached fetch of every instruction is a cost it feels in
+        // a way the later cores do not. Safe here because the I-cache is
+        // invalidated above before it is switched on, and nothing in this
+        // crate writes instructions: a program that generates or relocates
+        // code must invalidate the I-cache itself, which is true on every
+        // architecture but only matters once the cache is on.
+        #[cfg(armv6)]
+        {
+            sctlr |= (1 << 23) | (1 << 22) | (1 << 12);
+        }
+
+        asm!("mcr p15, 0, {0}, c1, c0, 0", in(reg) sctlr);
     }
+
+    // Architecturally required right after enabling the MMU: the
+    // pipeline may have already fetched ahead using the old (MMU-off)
+    // address translation behavior.
+    isb();
 }

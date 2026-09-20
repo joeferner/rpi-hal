@@ -32,7 +32,7 @@
 //! is left as an invalid (zero) descriptor, so touching genuinely unbacked
 //! address space faults -- same intent as the AArch32 map.
 
-use super::{LOCAL_PERIPHERAL_BASE, LOCAL_PERIPHERAL_END, PERIPHERAL_BASE, PERIPHERAL_END};
+use super::{LOCAL_PERIPHERAL, PERIPHERAL_BASE, PERIPHERAL_END};
 use core::arch::asm;
 use core::cell::UnsafeCell;
 
@@ -141,11 +141,15 @@ fn fill_l2(table: &Table, region: usize) {
 
     for i in 0..ENTRIES {
         let base = region_base + i as u64 * BLOCK_2MB;
+        let in_local_block = match LOCAL_PERIPHERAL {
+            Some((local_base, local_end)) => {
+                base >= u64::from(local_base) && base <= u64::from(local_end)
+            }
+            None => false,
+        };
         let descriptor = if base < u64::from(PERIPHERAL_BASE) {
             base | RAM_BLOCK_FLAGS
-        } else if base <= u64::from(PERIPHERAL_END)
-            || (base >= u64::from(LOCAL_PERIPHERAL_BASE) && base <= u64::from(LOCAL_PERIPHERAL_END))
-        {
+        } else if base <= u64::from(PERIPHERAL_END) || in_local_block {
             base | DEVICE_BLOCK_FLAGS
         } else {
             0

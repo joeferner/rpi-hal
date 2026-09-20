@@ -4,6 +4,55 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Pi 1 and Pi Zero support (BCM2835, ARM1176JZF-S)** — the third
+  architecture this crate reaches, behind a `bcm2835` chip feature and
+  the `armv6-none-eabi` target. HW-verified on a Pi Zero W 1.1: boot,
+  GPIO, the UART console, the System Timer, and the MMU with both caches
+  on, including the exclusive monitor (`examples/atomics_check.rs`).
+
+  The chip half is only addresses — `bcm2835-lpa`'s register block
+  modules are byte-identical to `bcm2837-lpa`'s, so every driver is the
+  same code at a different base. The architecture half is the real work,
+  and it is selected by the target rather than by a feature, so it cannot
+  disagree with what is being compiled: `src/boot6.s` (no Hyp drop, no
+  `MPIDR` check, no secondary cores), the ARMv6 CP15 barriers, the FPU
+  enable for a VFPv2-without-NEON core, and `mmu32.rs`'s ARMv6 arm.
+
+  `multicore`, `generic_timer` and `pmu` are not built there: one core,
+  and no ARM-local peripheral block for the other two to reach. Asking
+  for `multicore` on ARMv6 is a `compile_error!` rather than a quietly
+  missing module.
+
+  This is the only chip that needs a nightly toolchain, because
+  `armv6-none-eabi` is tier 3 and has no precompiled `core`. That
+  requirement belongs to the target rather than to this crate, and the
+  other two chips still build on stable — see README.md's "Toolchain".
+
+- **`cpu::main_id`**, the `MIDR` Main ID register, on all three
+  architectures. Worth printing as the first line out of a new board's
+  console: it says both that the console works and that the chip
+  underneath is the one the binary was built for.
+
+- **`examples/atomics_check.rs`**, which proves the exclusive monitor
+  works rather than assuming it. Not ARMv6-specific: it is what any board
+  should run after a change to the translation table. A broken monitor
+  hangs rather than reporting, so each step announces itself before
+  running and the line you never see names the operation that never
+  finished.
+
+### Changed
+
+- **`cache::barrier` became the `barrier` module** (`dsb`/`dmb`/`isb`),
+  internal, with the architecture split inside it instead of at each call
+  site. `dsb` and `isb` are ARMv7 mnemonics that ARMv6 has only as CP15
+  operations, and a barrier appears in nearly every
+  architecture-specific file here. No behaviour change on ARMv7 or
+  AArch64: the disassembly is identical instruction for instruction.
+
 ## [0.5.0] - 2026-09-04
 
 ### Fixed

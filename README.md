@@ -27,8 +27,23 @@ Supported Devices:
   [issue #29](https://github.com/joeferner/rpi-hal/issues/29) for exactly
   what's verified and the bring-up plan for the rest.
 
+- Pi 1 and Pi Zero / Zero W (BCM2835, ARM1176JZF-S) — **preliminary**:
+  the `bcm2835` feature selects that chip's peripheral map and PAC, and
+  the ARMv6 instruction set comes from building for `armv6-none-eabi`,
+  which also selects this crate's ARMv6 boot code, barriers and MMU
+  programming. HW-verified on a Pi Zero W 1.1: boot and GPIO (`blink`),
+  the UART console (`uart_hello`), the System Timer, and the MMU with
+  the data and instruction caches on — including the exclusive monitor
+  the whole MMU bring-up exists for (`atomics_check`). Interrupts and
+  the drivers above the SoC basics are untested here. Three things do
+  not exist on this chip rather than being untested: `multicore` (one
+  core), `generic_timer` and `pmu` (both rest on ARMv7-only CPU state or
+  the ARM-local peripheral block, which the BCM2835 does not have).
+
+  Unlike the other boards, this one needs **nightly** — see "Toolchain".
+
 Building for any of these requires picking exactly one of the
-`bcm2837`/`bcm2711` features (see "Features" below) — neither is a
+`bcm2837`/`bcm2711`/`bcm2835` features (see "Features" below) — none is a
 default, since there's no sensible default target chip.
 
 ## Toolchain
@@ -39,6 +54,32 @@ Stable Rust 1.88 or newer, and one of the two bare-metal targets:
 rustup target add armv7a-none-eabi              # 32-bit, kernel7.img
 rustup target add aarch64-unknown-none-softfloat # 64-bit, kernel8.img
 ```
+
+The BCM2835 is the exception, and it is worth knowing before choosing
+that board: `armv6-none-eabi` is a tier-3 target, so `rustup` publishes
+no precompiled `core` for it and there is nothing to `target add`. The
+standard library has to be compiled from source, which means nightly and
+`-Z build-std`:
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]
+# Note: armv6-none-eabi is deliberately NOT listed under `targets` --
+# rustup would try to download a standard library that is not published,
+# and fail.
+
+# .cargo/config.toml
+[build]
+target = "armv6-none-eabi"
+
+[unstable]
+build-std = ["core"]
+```
+
+That requirement belongs to the target, not to this crate: any crate
+built for `armv6-none-eabi` inherits it.
 
 1.88 is the floor because the FPU bring-up needs `#[unsafe(naked)]` and
 `naked_asm!`. Enabling the `smoltcp` feature raises it to 1.91, which is
@@ -641,8 +682,7 @@ complement of each other.
 
 The `bench-link` crate (a separate, standalone project) is a
 UART-controlled command-and-control tool used as a real
-hardware-in-the-loop test fixture for this crate's SPI0 driver — see
-[`tests/hil/`](tests/hil/) for the test runner that drives it.
+hardware-in-the-loop test fixture for this crate's SPI0 driver.
 
 See [`docs/getting-started.md`](docs/getting-started.md) for a working
 first build: boots from an SD card and blinks an external LED.
@@ -782,18 +822,27 @@ has what's left.
   like `dma.rs`/`rng.rs` — kept as its own feature anyway since it's a
   large subsystem a consumer who doesn't need 3D shouldn't have to
   compile.
-- **`bcm2837`**/**`bcm2711`** (chip selection — neither on by default,
-  pick exactly one): each pulls in that chip's PAC (`bcm2837-lpa`/
-  `bcm2711-lpa`) as `pac` (see "Relationship to other crates" below),
-  and, for `bcm2711`, also switches `src/mmu.rs`'s `PERIPHERAL_BASE`/
-  `LOCAL_PERIPHERAL_BASE` — and anything computed from them (`src/
-  dma.rs`'s `DMA_BASE`, `src/watchdog.rs`'s `PM_BASE`) — to the
-  BCM2711's relocated addresses. Compile-time, not runtime model
-  detection, matching every other board/config choice in this crate.
-  If both are enabled at once, `bcm2711` wins `pac`'s re-export;
-  `bcm2837-lpa` still compiles as an unused dependency, harmless but
-  avoidable with `default-features = false` plus whichever of `rt`/
-  `mmu` are still wanted (the same opt-out shape `rt` documents above).
+- **`bcm2837`**/**`bcm2711`**/**`bcm2835`** (chip selection — none on by
+  default, pick exactly one): each pulls in that chip's PAC
+  (`bcm2837-lpa`/`bcm2711-lpa`/`bcm2835-lpa`) as `pac` (see
+  "Relationship to other crates" below) and selects that chip's
+  `src/soc.rs`/`src/mmu.rs` memory map — `PERIPHERAL_BASE`/
+  `LOCAL_PERIPHERAL_BASE`, and anything computed from them (`src/
+  dma.rs`'s `DMA_BASE`, `src/watchdog.rs`'s `PM_BASE`). Compile-time,
+  not runtime model detection, matching every other board/config choice
+  in this crate. If more than one is enabled at once the precedence is
+  `bcm2711` > `bcm2837` > `bcm2835`, applied the same way everywhere a
+  chip is branched on; the losing PAC still compiles as an unused
+  dependency, harmless but avoidable with `default-features = false`
+  plus whichever of `rt`/`mmu` are still wanted (the same opt-out shape
+  `rt` documents above).
+
+  That precedence matters when this crate is a dependency of a
+  dependency. A crate that hardcodes `features = ["bcm2837"]` on its own
+  `rpi-hal` line leaves a consumer no way to turn it off, and adding
+  `bcm2835` alongside it silently selects the *Pi 3's* peripheral base.
+  Make the chip a feature of your own crate and forward it, the way
+  `rpi-hal-embassy` and `rpi-loader` do.
 
   `bcm2711` is **preliminary** (see
   [issue #29](https://github.com/joeferner/rpi-hal/issues/29)): most
@@ -804,6 +853,15 @@ has what's left.
   address — meaning nothing IRQ-driven (`irq`, the async GPIO/UART
   traits under the `async` feature, `rpi-hal-embassy`'s time driver) is
   available under `bcm2711` until GIC-400 support lands.
+
+  `bcm2835` is **preliminary** in a different way: the drivers it does
+  reach are the same code the other chips run at a different base, and
+  the SoC basics are HW-verified (see "Supported Devices"), but it is
+  the only chip whose port is also an *instruction set* — `multicore`,
+  `generic_timer` and `pmu` are not compiled there at all, and asking
+  for `multicore` is a `compile_error!` rather than a quietly missing
+  module. It is also the only one that needs nightly, for the tier-3
+  `armv6-none-eabi` target.
 - Consumers that need their own boot sequence instead — e.g.
   `rpi-loader`'s self-relocating loader, which must control exactly
   how and where its own code executes during relocation — depend on
