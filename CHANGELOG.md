@@ -69,13 +69,40 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   permanent into a single dropped frame. Modelled on `brcmfmac`'s
   `rxfail`.
 
+- **Coalesced receive frames are unpacked.** Under load the firmware
+  packs several Ethernet frames into one SDPCM *superframe* on channel 3
+  — nine of them, 13,856 bytes, measured on a 43430 — and it does so
+  whether or not the host asks it not to. `recv_ethernet` reads one once
+  and hands back the packets inside it one call at a time, so callers
+  see no difference; `WifiPhy` and any receive loop already written
+  against it need no change.
+
+  Before this, such a frame was refused whole. That is not one packet
+  lost but every packet in it, which is why a link would carry DHCP and
+  a web page perfectly and then stall the moment anything downloaded —
+  a download being exactly what gives the firmware frames to coalesce.
+
+  The subframes are found by searching rather than by striding: each
+  carries a length and that length's complement, so a header is
+  recognizable on sight, and the padding between them can be skipped
+  without knowing the rule the firmware pads by. Measured, a 1530-byte
+  frame occupies 1536, which is consistent with several alignments and
+  settles none of them.
+
+  Two consequences worth naming. `MAX_FRAME` is now the length field's
+  own 64 KiB ceiling, so no frame the chip can describe is too large to
+  read — at the cost of that much RAM in a `Wifi`. And outgoing data
+  frames are built in a buffer of their own, because a transmit sharing
+  the receive buffer would throw away the rest of a superframe still
+  being handed out, which during a download is most of them.
+
 - **`wifi::Wifi::set_rx_glom`**, which asks the firmware to coalesce
   received frames or not to.
 
-  Worth knowing before relying on it: a 43430 running 7.45.98 returns
-  success for `false` and coalesces anyway. `Wifi::new` asks at bring-up
-  and ignores the answer; this is public so a caller can see what the
-  firmware said.
+  A preference rather than a requirement, now that both answers work. A
+  43430 running 7.45.98 returns success for `false` and coalesces
+  anyway. `Wifi::new` asks at bring-up and ignores the answer; this is
+  public so a caller can see what the firmware said.
 
 ### Fixed
 
@@ -102,14 +129,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Breaking, and the fields are the whole point: they say which
   malformation it was, and the answers are opposite. A `len_check` that
   is not the complement of `len` is a stream that has lost its place. A
-  valid complement with an implausible `len` on channel 3 is a glommed
-  superframe — several Ethernet frames the firmware packed into one —
-  which this driver cannot read and drops whole.
+  valid complement means the stream is in step and the header itself is
+  unusable.
 
-  That case is known and not yet fixed: deglomming is what `brcmfmac`
-  does unconditionally, and it is why that driver has no "off" switch to
-  reach for. Until it is written, a bulk download against firmware that
-  coalesces will stall while small traffic keeps working.
+  Those two numbers are what turned a guess into a diagnosis: the flood
+  of `BadFrame` that prompted all of this looked like a desynchronized
+  stream and was not — `!0x3620 == 0xC9DF`, a valid complement, on
+  channel 3. That is a coalesced frame, which is now read rather than
+  refused (above).
 
 ## [0.6.0] - 2026-09-20
 

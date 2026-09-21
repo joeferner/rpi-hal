@@ -19,6 +19,12 @@
 //! feature, [`WifiPhy`](crate::wifi::WifiPhy) wraps
 //! that as a `phy::Device` so a TCP/IP stack can run on top.
 //!
+//! One received frame is not always one packet. Under load the firmware
+//! coalesces several into a single *superframe* — its answer to the
+//! per-frame cost of the bus — and does so whether or not the host asks
+//! it to. `recv_ethernet` reads one of those once and hands the packets
+//! inside it back one call at a time, so a caller sees no difference.
+//!
 //! The framing follows plan9/9front's `ether4330.c` (a self-contained
 //! bare-metal SDPCM/CDC implementation for this exact chip), cross-
 //! checked against Linux's `brcmfmac` (`sdio.c`/`bcdc.c`). Pi 3 only.
@@ -38,6 +44,13 @@ const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
 /// SDPCM channel for network data frames (the BDC-wrapped Ethernet path).
 const CHANNEL_DATA: u8 = 2;
+/// SDPCM channel carrying a *superframe*: several complete frames the
+/// firmware has coalesced into one, to amortize the per-frame cost of
+/// getting them across the bus. It does this whenever it has more than
+/// one frame in hand, which in practice means under any sustained
+/// download — and it does it whether or not the host asked (see
+/// [`Wifi::set_rx_glom`]), so reading one is not optional.
+const CHANNEL_GLOM: u8 = 3;
 
 /// Length of the BDC header that wraps each data-channel Ethernet frame
 /// (flags, priority, flags2, data-offset).
@@ -184,11 +197,28 @@ const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1_001c;
 /// spend.
 const RESYNC_POLLS: u32 = 1024;
 
-/// Largest SDPCM frame this driver builds or accepts, in bytes — the
-/// SDPCM length field's practical ceiling. Sized to hold a control
-/// command plus a reasonably large iovar reply (e.g. the version
-/// string).
-const MAX_FRAME: usize = 2048;
+/// Largest SDPCM frame this driver builds or accepts, in bytes.
+///
+/// The length field is 16 bits, so this is its ceiling rather than a
+/// budget: no frame the chip can describe is too large to read, and
+/// "the buffer was too small" is a failure that cannot happen.
+///
+/// It is sized that way because of superframes ([`CHANNEL_GLOM`]). A
+/// coalesced frame is as large as however many packets the firmware had
+/// in hand — 13,856 bytes, nine of them, measured on a 43430 — and one
+/// that will not fit is not a frame lost but *every packet inside it*,
+/// which is a stalled download rather than a dropped packet. Picking a
+/// number smaller than the field would mean picking how many packets it
+/// takes to break, and there is no answer to that worth having on a
+/// board with hundreds of megabytes of RAM.
+const MAX_FRAME: usize = 64 * 1024;
+
+/// Largest outgoing data frame, in bytes: an Ethernet frame plus the two
+/// headers in front of it, rounded up to the word the FIFO moves.
+///
+/// Its own buffer rather than a share of [`MAX_FRAME`] — see
+/// [`Wifi::tx`].
+const TX_FRAME_MAX: usize = (SDPCM_HEADER_LEN + BDC_HEADER_LEN + Wifi::MTU + 3) & !3;
 
 /// Errors from the Wi-Fi protocol layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,13 +240,12 @@ pub enum Error {
     ///
     /// * `len_check` not the complement of `len` — both usually
     ///   nonsense — is a stream that has lost its place.
-    /// * a valid complement with `len` far too large, on channel 3, is a
-    ///   header this driver does not handle rather than a broken one: a
-    ///   glommed superframe, several Ethernet frames the firmware has
-    ///   packed into one. [`Wifi::set_rx_glom`] asks for that not to
-    ///   happen and this firmware ignores the request, so it is a case
-    ///   to expect rather than one to be surprised by — see that
-    ///   method.
+    /// * a valid complement means the stream is in step and the header
+    ///   itself is unusable — a length past the end of the buffer, or
+    ///   shorter than a header. A coalesced frame is *not* this case:
+    ///   those are read and unpacked by [`Wifi::recv_ethernet`], and the
+    ///   buffer is the length field's own ceiling, so there is no size
+    ///   the chip can name that will not fit.
     BadFrame {
         /// The length word from the header.
         len: u16,
@@ -274,15 +303,66 @@ pub struct Wifi {
     /// Request id stamped into the next CDC command, to match its
     /// response.
     req_id: u16,
-    /// Scratch buffer for building an outgoing frame or holding an
-    /// incoming one.
+    /// Buffer holding the frame most recently read from the chip, and
+    /// the one a control command is built in.
     frame: [u8; MAX_FRAME],
+    /// Buffer an outgoing *data* frame is built in.
+    ///
+    /// Separate from [`Self::frame`] for one reason, and it is load
+    /// bearing: a coalesced frame is handed out a packet at a time from
+    /// that buffer, and a transmit in the middle of that would overwrite
+    /// the packets still to come. Sharing it would mean every
+    /// acknowledgement sent during a download threw away the rest of the
+    /// superframe it was acknowledging — which is most of them.
+    tx: [u8; TX_FRAME_MAX],
     /// Whether the receive FIFO is being drained: `true` between the
     /// frame-ready interrupt firing and the zero-length header that marks
     /// the FIFO empty. While set, [`Self::recv_frame`] reads the next
     /// frame directly rather than waiting for an interrupt that won't come
     /// for a frame already queued.
     rx_draining: bool,
+    /// How far through a coalesced frame [`Self::recv_ethernet`] has
+    /// got, or `None` when it is not part-way through one.
+    ///
+    /// A superframe is read from the bus once and handed out a packet at
+    /// a time, so this is what makes the next call return the next
+    /// packet instead of reading the bus again.
+    glom: Option<Glom>,
+}
+
+/// Where [`Wifi::recv_ethernet`] has got to in a coalesced frame.
+#[derive(Clone, Copy)]
+struct Glom {
+    /// Offset in [`Wifi::frame`] to resume searching from.
+    at: usize,
+    /// Offset one past the superframe's last byte.
+    end: usize,
+}
+
+/// Finds the next subframe header in `frame` at or after `from`,
+/// returning where it starts and the length it declares.
+///
+/// The recognition test is the SDPCM header's own: a length word
+/// followed by that length's complement. See [`Wifi::next_subframe`] for
+/// why the walk searches rather than striding by a fixed padding.
+fn find_subframe(frame: &[u8], from: usize) -> Option<(usize, usize)> {
+    // Four-byte steps because every SDPCM frame the chip emits starts on
+    // a word boundary; nothing here would work if one did not.
+    let mut at = from.next_multiple_of(4);
+
+    while at + SDPCM_HEADER_LEN <= frame.len() {
+        let len = u16::from_le_bytes([frame[at], frame[at + 1]]) as usize;
+        let check = u16::from_le_bytes([frame[at + 2], frame[at + 3]]);
+        // A length that does not run past the end, with its complement
+        // beside it. Zero is padding rather than an answer -- inside a
+        // superframe there is no "nothing more to read" to signal.
+        if len != 0 && check == !(len as u16) && len >= SDPCM_HEADER_LEN && at + len <= frame.len()
+        {
+            return Some((at, len));
+        }
+        at += 4;
+    }
+    None
 }
 
 impl Wifi {
@@ -321,7 +401,9 @@ impl Wifi {
             fc_mask: 0,
             req_id: 0,
             frame: [0; MAX_FRAME],
+            tx: [0; TX_FRAME_MAX],
             rx_draining: false,
+            glom: None,
         };
 
         // **Tell the firmware not to coalesce received frames.**
@@ -336,14 +418,12 @@ impl Wifi {
         // which is where the firmware starts having several frames to
         // coalesce in the first place.
         //
-        // Best effort, and known not to be enough: 7.45.98 answers this
-        // with success and coalesces anyway. Asked regardless, because a
-        // firmware that honours it is one this driver then works on, and
-        // the request costs one control command at bring-up.
-        //
-        // Deglomming is the actual fix and is not written yet. See
-        // [`Self::set_rx_glom`], which is where what is known about this
-        // lives.
+        // A preference, not a requirement: coalesced frames are unpacked
+        // either way, and 7.45.98 answers this with success and
+        // coalesces regardless. Asked because on a firmware that does
+        // honour it, one frame per read is the cheaper arrangement for a
+        // driver with no scatter-gather to spend. See
+        // [`Self::set_rx_glom`].
         let _ = wifi.set_rx_glom(false, timer);
 
         Ok(wifi)
@@ -357,17 +437,17 @@ impl Wifi {
     /// a well-formed header, and a length of `32 + n × 1536` — several
     /// Ethernet frames padded to the block size and packed into one.
     ///
-    /// That matters because this driver cannot read one. The whole
-    /// superframe is refused as [`Error::BadFrame`], taking every packet
-    /// in it, which is why a link that carries DHCP and a web page
-    /// happily will stall under a download — a download being the thing
-    /// that gives the firmware several frames to coalesce in the first
-    /// place.
+    /// Which is why nothing depends on the answer. Coalesced frames are
+    /// read and handed out a packet at a time either way (see
+    /// [`Wifi::recv_ethernet`]), the same way
+    /// `brcmfmac` handles them unconditionally — and that is why it has
+    /// no "off" switch to copy: it sets this same iovar to *enable*
+    /// coalescing, and supports it regardless.
     ///
-    /// `brcmfmac` has no "off" for this either. It sets the same iovar
-    /// to *enable* coalescing and otherwise handles superframes
-    /// unconditionally, which is the real fix and is not implemented
-    /// here yet.
+    /// So this is here for the throughput question rather than the
+    /// correctness one. Coalescing is the firmware's answer to the
+    /// per-frame cost of the bus, and on a firmware that honours the
+    /// request, turning it off trades that away.
     ///
     /// [`Self::new`] asks for `false` and ignores the answer. This is
     /// public so a caller can see what the firmware said, and ask again
@@ -696,22 +776,25 @@ impl Wifi {
 
         let total = SDPCM_HEADER_LEN + BDC_HEADER_LEN + frame.len();
         let padded = total.next_multiple_of(4);
-        self.frame[..padded].fill(0);
+        // Built in the transmit buffer, not the receive one: a coalesced
+        // frame may still be being handed out of that, and every packet
+        // left in it would go with this write.
+        self.tx[..padded].fill(0);
         // SDPCM header: length + complement, sequence, data channel, and
         // the data offset (start of the BDC header).
-        self.frame[0..2].copy_from_slice(&(total as u16).to_le_bytes());
-        self.frame[2..4].copy_from_slice(&(!(total as u16)).to_le_bytes());
-        self.frame[4] = self.tx_seq;
-        self.frame[5] = CHANNEL_DATA;
-        self.frame[7] = SDPCM_HEADER_LEN as u8;
+        self.tx[0..2].copy_from_slice(&(total as u16).to_le_bytes());
+        self.tx[2..4].copy_from_slice(&(!(total as u16)).to_le_bytes());
+        self.tx[4] = self.tx_seq;
+        self.tx[5] = CHANNEL_DATA;
+        self.tx[7] = SDPCM_HEADER_LEN as u8;
         // BDC header at offset 12: version-2 flags, zero priority/flags2,
         // and a zero data-offset (the Ethernet frame follows immediately).
-        self.frame[SDPCM_HEADER_LEN] = BDC_FLAG_VERSION;
+        self.tx[SDPCM_HEADER_LEN] = BDC_FLAG_VERSION;
         // Ethernet frame after the SDPCM + BDC headers.
         let data_at = SDPCM_HEADER_LEN + BDC_HEADER_LEN;
-        self.frame[data_at..data_at + frame.len()].copy_from_slice(frame);
+        self.tx[data_at..data_at + frame.len()].copy_from_slice(frame);
 
-        self.sdio.f2_write(&self.frame[..padded], timer)?;
+        self.sdio.f2_write(&self.tx[..padded], timer)?;
         self.tx_seq = self.tx_seq.wrapping_add(1);
         Ok(())
     }
@@ -721,9 +804,26 @@ impl Wifi {
     /// the next frame is control/event traffic, which this drops). Strips
     /// the SDPCM and BDC headers, leaving a complete Ethernet frame.
     pub fn recv_ethernet(&mut self, out: &mut [u8], timer: &Timer) -> Result<Option<usize>, Error> {
+        // A superframe already read is emptied before the bus is touched
+        // again: it holds several frames, and this hands back one per
+        // call. See [`Self::next_subframe`].
+        if let Some(len) = self.next_subframe(out) {
+            return Ok(Some(len));
+        }
+
         let Some(frame) = self.recv_frame(timer)? else {
             return Ok(None);
         };
+        if frame.channel == CHANNEL_GLOM {
+            self.glom = Some(Glom {
+                at: frame.data_offset,
+                end: frame.frame_len,
+            });
+            // `None` here is a superframe that held nothing this driver
+            // wanted -- events, or padding -- which is the same answer a
+            // control frame gives, and for the same reason.
+            return Ok(self.next_subframe(out));
+        }
         if frame.channel != CHANNEL_DATA {
             return Ok(None);
         }
@@ -737,6 +837,67 @@ impl Wifi {
         let len = (frame.frame_len - start).min(out.len());
         out[..len].copy_from_slice(&self.frame[start..start + len]);
         Ok(Some(len))
+    }
+
+    /// Hands back the next Ethernet frame from a superframe already in
+    /// [`Self::frame`], or `None` when there are no more.
+    ///
+    /// # Finding the subframes
+    ///
+    /// A superframe is several complete SDPCM frames laid end to end,
+    /// each padded so the next starts on a boundary the chip likes — and
+    /// the firmware does not say which boundary that is. Measured on a
+    /// 43430: a 1530-byte frame occupies 1536, which is consistent with
+    /// alignment to 64 bytes, to 512, and to several values in between.
+    ///
+    /// Rather than guess, this searches. Every SDPCM header carries its
+    /// length and that length's complement, so a header can be
+    /// recognized on sight: the walk steps forward four bytes at a time
+    /// from the end of the previous subframe until it finds one. Padding
+    /// is skipped by not matching, whatever its size, and the pair of
+    /// words makes a false positive on payload bytes vanishingly
+    /// unlikely — with the length bounds below, it needs 32 bits to
+    /// agree by chance in a region that is a few words long.
+    ///
+    /// All-zero words are skipped rather than ending the walk. Zero is
+    /// how the chip says "nothing more" on the bus itself, but inside a
+    /// superframe it is just padding.
+    fn next_subframe(&mut self, out: &mut [u8]) -> Option<usize> {
+        let Glom { mut at, end } = self.glom?;
+
+        loop {
+            let Some((header, len)) = find_subframe(&self.frame[..end], at) else {
+                self.glom = None;
+                return None;
+            };
+            // Recorded before anything can return, so a subframe this
+            // does not want is one the next call starts past rather than
+            // one it finds again.
+            at = header + len;
+            self.glom = Some(Glom { at, end });
+
+            let channel = self.frame[header + 5] & 0x0f;
+            let data_offset = self.frame[header + 7] as usize;
+            // The offset has to name a byte inside this subframe, with
+            // room for the BDC header that follows it. A subframe that
+            // fails this is not one to reach into.
+            if channel != CHANNEL_DATA
+                || data_offset < SDPCM_HEADER_LEN
+                || data_offset + BDC_HEADER_LEN > len
+            {
+                continue;
+            }
+
+            let bdc = BDC_HEADER_LEN + ((self.frame[header + data_offset + 3] as usize) << 2);
+            let start = header + data_offset + bdc;
+            let finish = header + len;
+            if start >= finish {
+                continue;
+            }
+            let copied = (finish - start).min(out.len());
+            out[..copied].copy_from_slice(&self.frame[start..start + copied]);
+            return Some(copied);
+        }
     }
 
     /// Runs one CDC command round-trip: builds the SDPCM control frame
@@ -768,6 +929,11 @@ impl Wifi {
         let seq = self.tx_seq;
         let req_id = self.req_id;
 
+        // The request is built in the receive buffer, so a coalesced
+        // frame part-way through being handed out is overwritten here
+        // rather than at the read below. Same trade as `read_frame`'s:
+        // control traffic is rare and the packets are already lost.
+        self.glom = None;
         self.frame[..padded].fill(0);
         // SDPCM header: length + its complement, sequence, control
         // channel, and the data offset (start of the CDC header).
@@ -866,6 +1032,14 @@ impl Wifi {
     /// "no frame pending"), then the rest. Updates flow control from the
     /// header. Returns `None` when nothing is waiting.
     fn read_frame(&mut self, timer: &Timer) -> Result<Option<FrameInfo>, Error> {
+        // Whatever is read next lands on top of any coalesced frame not
+        // yet handed out, so the walk through it ends here. Reaching
+        // this with one still pending means a caller read the bus
+        // without draining [`Self::recv_ethernet`] first — `poll_event`
+        // and the control path both do — and the packets left in it are
+        // gone either way. Dropping them deliberately beats walking a
+        // buffer that has been written over.
+        self.glom = None;
         self.sdio
             .f2_read(&mut self.frame[..SDPCM_HEADER_LEN], timer)?;
 
