@@ -45,6 +45,40 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SDHOST, brings the radio up on the Arasan controller, and then reads
   the card again with both running.
 
+- **`wifi::Wifi::resync_rx`**, which abandons the receive frame in
+  progress and waits for the chip to flush it.
+
+  This is the way out of a desynchronized function-2 stream and there is
+  no other: the FIFO is a byte stream with no frame boundary a host can
+  search for, so once a read has stopped part-way through a frame, every
+  read after it is offset by whatever is left. Called automatically when
+  a malformed header is read, which is what turns one bad header from
+  permanent into a single dropped frame. Modelled on `brcmfmac`'s
+  `rxfail`.
+
+- **`wifi::Wifi::set_rx_glom`**, which asks the firmware to coalesce
+  received frames or not to.
+
+  Worth knowing before relying on it: a 43430 running 7.45.98 returns
+  success for `false` and coalesces anyway. `Wifi::new` asks at bring-up
+  and ignores the answer; this is public so a caller can see what the
+  firmware said.
+
+### Changed
+
+- **`wifi::Error::BadFrame` carries `len`, `len_check` and `channel`.**
+  Breaking, and the fields are the whole point: they say which
+  malformation it was, and the answers are opposite. A `len_check` that
+  is not the complement of `len` is a stream that has lost its place. A
+  valid complement with an implausible `len` on channel 3 is a glommed
+  superframe — several Ethernet frames the firmware packed into one —
+  which this driver cannot read and drops whole.
+
+  That case is known and not yet fixed: deglomming is what `brcmfmac`
+  does unconditionally, and it is why that driver has no "off" switch to
+  reach for. Until it is written, a bulk download against firmware that
+  coalesces will stall while small traffic keeps working.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added

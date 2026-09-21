@@ -158,6 +158,31 @@ const F2_BLOCK_SIZE: u16 = 512;
 
 /// SDIO function numbers, as `cmd52` addresses them.
 const FN0: u32 = 0;
+/// The backplane function, which carries the chip's own control
+/// registers — including the frame-control register [`resync_rx`](
+/// Wifi::resync_rx) writes.
+const FN1: u32 = 1;
+
+/// Function-1 frame control: writing [`SFC_RF_TERM`] here abandons the
+/// receive frame in progress.
+const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1_000d;
+/// "Read frame terminate", in [`SBSDIO_FUNC1_FRAMECTRL`].
+const SFC_RF_TERM: u8 = 1 << 0;
+/// Low byte of how much of the current receive frame the chip still
+/// holds. Zero in both halves is how a terminated frame reports that it
+/// has been flushed.
+const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1_001b;
+/// High byte of the same count.
+const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1_001c;
+
+/// How many times [`Wifi::resync_rx`] asks whether the abandoned frame
+/// has drained before giving up.
+///
+/// Each pass is two `CMD52` reads, so this is tens of milliseconds
+/// rather than a number of microseconds. It is a bound on a wait that
+/// should take a handful of passes, not a budget anything is expected to
+/// spend.
+const RESYNC_POLLS: u32 = 1024;
 
 /// Largest SDPCM frame this driver builds or accepts, in bytes — the
 /// SDPCM length field's practical ceiling. Sized to hold a control
@@ -170,10 +195,40 @@ const MAX_FRAME: usize = 2048;
 pub enum Error {
     /// An error from the underlying SDIO link.
     Sdio(sdio::Error),
-    /// A received SDPCM frame was malformed (its length-check word
-    /// didn't match, or the length was out of range) — the function-2
+    /// A received SDPCM frame header was malformed — the function-2
     /// receive stream is out of sync.
-    BadFrame,
+    ///
+    /// **The stream has been resynchronized by the time this is
+    /// returned** (see [`Wifi::resync_rx`]), so a caller's receive loop
+    /// should report this and carry on rather than treat it as fatal.
+    /// Without that, one bad header is permanent: the header has been
+    /// consumed and its body has not, so every read after it starts
+    /// mid-frame and fails the same way, forever.
+    ///
+    /// The two fields are what says *which* malformation it was, and
+    /// they answer different questions:
+    ///
+    /// * `len_check` not the complement of `len` — both usually
+    ///   nonsense — is a stream that has lost its place.
+    /// * a valid complement with `len` far too large, on channel 3, is a
+    ///   header this driver does not handle rather than a broken one: a
+    ///   glommed superframe, several Ethernet frames the firmware has
+    ///   packed into one. [`Wifi::set_rx_glom`] asks for that not to
+    ///   happen and this firmware ignores the request, so it is a case
+    ///   to expect rather than one to be surprised by — see that
+    ///   method.
+    BadFrame {
+        /// The length word from the header.
+        len: u16,
+        /// The word that should be its complement.
+        len_check: u16,
+        /// The SDPCM channel the header names — 1 control, 2 data, 3 a
+        /// glommed superframe. Meaningless when the complement is wrong,
+        /// and the whole answer when it is right: channel 3 is the
+        /// firmware coalescing frames, and anything else that size is
+        /// not.
+        channel: u8,
+    },
     /// A CDC command came back with a non-zero firmware status code.
     CommandFailed(i32),
     /// No matching response arrived within the time budget.
@@ -233,9 +288,11 @@ pub struct Wifi {
 impl Wifi {
     /// Wraps a firmware-loaded [`Sdio`] and readies the SDPCM protocol
     /// path: sets function 2's block size, unmasks the SDIO core's
-    /// frame/mailbox interrupts, and enables the host-side SDIO
-    /// interrupt. The chip's firmware must already be running (see
-    /// [`Sdio::load_firmware`]).
+    /// frame/mailbox interrupts, enables the host-side SDIO interrupt,
+    /// and asks the firmware not to coalesce received frames — a
+    /// request some firmware grants and some ignores, see
+    /// [`Self::set_rx_glom`]. The chip's firmware must already be
+    /// running (see [`Sdio::load_firmware`]).
     pub fn new(mut sdio: Sdio, timer: &Timer) -> Result<Self, Error> {
         // Function-2 block size = 512 (low byte then high byte).
         sdio.cmd52_write(FN0, CCCR_FBR2_BLOCKSIZE, F2_BLOCK_SIZE as u8, timer)?;
@@ -257,7 +314,7 @@ impl Wifi {
         )?;
         sdio.cmd52_write(FN0, CCCR_INT_ENABLE, 0b111, timer)?;
 
-        Ok(Self {
+        let mut wifi = Self {
             sdio,
             tx_seq: 0,
             tx_window: 0,
@@ -265,7 +322,58 @@ impl Wifi {
             req_id: 0,
             frame: [0; MAX_FRAME],
             rx_draining: false,
-        })
+        };
+
+        // **Tell the firmware not to coalesce received frames.**
+        //
+        // With glomming on, the chip packs several Ethernet frames into
+        // one SDPCM frame — measured at 13,856 bytes on a 43430 running
+        // 7.45.98, nine packets in one — and this driver has no
+        // deglomming path: it would read a well-formed header whose
+        // length is several times [`MAX_FRAME`] and drop the whole
+        // superframe, taking every packet in it. The symptom is a link
+        // that works for small traffic and collapses under a download,
+        // which is where the firmware starts having several frames to
+        // coalesce in the first place.
+        //
+        // Best effort, and known not to be enough: 7.45.98 answers this
+        // with success and coalesces anyway. Asked regardless, because a
+        // firmware that honours it is one this driver then works on, and
+        // the request costs one control command at bring-up.
+        //
+        // Deglomming is the actual fix and is not written yet. See
+        // [`Self::set_rx_glom`], which is where what is known about this
+        // lives.
+        let _ = wifi.set_rx_glom(false, timer);
+
+        Ok(wifi)
+    }
+
+    /// Asks the firmware to coalesce received frames, or not to.
+    ///
+    /// **Asking is all this does, and one firmware is known to say yes
+    /// and carry on coalescing.** A 43430 running 7.45.98 returns
+    /// success for `false` and then sends superframes anyway: channel 3,
+    /// a well-formed header, and a length of `32 + n × 1536` — several
+    /// Ethernet frames padded to the block size and packed into one.
+    ///
+    /// That matters because this driver cannot read one. The whole
+    /// superframe is refused as [`Error::BadFrame`], taking every packet
+    /// in it, which is why a link that carries DHCP and a web page
+    /// happily will stall under a download — a download being the thing
+    /// that gives the firmware several frames to coalesce in the first
+    /// place.
+    ///
+    /// `brcmfmac` has no "off" for this either. It sets the same iovar
+    /// to *enable* coalescing and otherwise handles superframes
+    /// unconditionally, which is the real fix and is not implemented
+    /// here yet.
+    ///
+    /// [`Self::new`] asks for `false` and ignores the answer. This is
+    /// public so a caller can see what the firmware said, and ask again
+    /// later — the answer can depend on how far bring-up has got.
+    pub fn set_rx_glom(&mut self, enabled: bool, timer: &Timer) -> Result<(), Error> {
+        self.set_iovar_u32("bus:rxglom", u32::from(enabled), timer)
     }
 
     /// Loads the chip's CLM (country/regulatory) blob — the data file the
@@ -767,7 +875,24 @@ impl Wifi {
         }
         let len_check = u16::from_le_bytes([self.frame[2], self.frame[3]]);
         if len_check != !(len as u16) || !(SDPCM_HEADER_LEN..=MAX_FRAME).contains(&len) {
-            return Err(Error::BadFrame);
+            // The header is gone from the FIFO and its body is not, so
+            // the stream is now misaligned and every read after this one
+            // would fail the same way. Put it back in step before
+            // reporting, which is what makes this survivable: a caller
+            // that logs the error and carries on gets a working receive
+            // path rather than an endless flood of the same failure.
+            //
+            // Best effort by construction. If the resynchronization
+            // itself fails there is nothing better to return than the
+            // malformation that prompted it, which is also the more
+            // useful of the two to read.
+            let channel = self.frame[5] & 0x0f;
+            let _ = self.resync_rx(timer);
+            return Err(Error::BadFrame {
+                len: len as u16,
+                len_check,
+                channel,
+            });
         }
 
         // Adopt the firmware's advertised credit window and flow-control
@@ -827,6 +952,46 @@ impl Wifi {
                 Ok(None)
             }
         }
+    }
+
+    /// Abandons the receive frame in progress and waits for the chip to
+    /// flush it, putting the function-2 stream back in step.
+    ///
+    /// This is the way out of a desynchronized receive stream, and there
+    /// is no other: the FIFO is a byte stream with no frame boundary the
+    /// host can search for, so once a read has stopped part-way through
+    /// a frame, every subsequent read is offset by whatever is left of
+    /// it. Writing "read frame terminate" tells the chip to drop the
+    /// remainder, and the byte-count registers report when it has.
+    ///
+    /// Called automatically when a malformed header is read — see
+    /// [`Error::BadFrame`] — so a caller's receive loop does not
+    /// normally need it. It is public for one that drives the FIFO
+    /// itself, and because a driver that finds its own reason to
+    /// distrust the stream has nowhere else to turn.
+    ///
+    /// Modelled on `brcmfmac`'s `rxfail` path, which does the same two
+    /// steps in the same order.
+    pub fn resync_rx(&mut self, timer: &Timer) -> Result<(), Error> {
+        // Cleared first, so that even a failure below leaves the next
+        // receive waiting for a fresh frame-ready interrupt rather than
+        // reading on from where it was.
+        self.rx_draining = false;
+        self.sdio
+            .cmd52_write(FN1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM, timer)?;
+
+        for _ in 0..RESYNC_POLLS {
+            let high = self.sdio.cmd52_read(FN1, SBSDIO_FUNC1_RFRAMEBCHI, timer)?;
+            let low = self.sdio.cmd52_read(FN1, SBSDIO_FUNC1_RFRAMEBCLO, timer)?;
+            if high == 0 && low == 0 {
+                return Ok(());
+            }
+        }
+        // The count never reached zero. Reported rather than waited on
+        // forever: something is wrong with the chip's own receive path,
+        // and the caller's next read failing says so more usefully than
+        // this spinning does.
+        Err(Error::NoResponse)
     }
 
     /// Clears any pending SDIO-core interrupt status — the frame-ready
