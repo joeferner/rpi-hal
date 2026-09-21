@@ -47,7 +47,7 @@ examples:
 	# so the feature is compiled without `embedded-sdmmc` alongside it --
 	# the two SD adapters are independent, and building them only together
 	# would hide an item in one that had come to depend on the other.
-	cargo build --release --features bcm2837,resident-fat --example sd_resident_fat_read
+	cargo build --release --features bcm2837,resident-fat --example sd_resident_fat_read --example sdhost_read
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo build --release --features bcm2837,v3d --example v3d_probe --example gpu_cube
 	# And the video decoder, gated on `mmal` (which pulls in `vchiq`) plus
@@ -64,6 +64,11 @@ examples:
 	# generic timer, a second core. The list grows as the port does; these
 	# are the ones the Pi Zero bring-up itself uses.
 	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu --example blink --example uart_hello --example uart_echo --example timer_hello --example atomics_check --example irq_timer_blink --example gpio_irq_button --example uart_rx_irq_echo
+	# And the SDHOST example on ARMv6, which is where it matters most: a
+	# Pi Zero W is the board with a card and a radio and one Arasan
+	# controller between them. Its own line because it needs
+	# `resident-fat` on top of the set above.
+	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,resident-fat --example sdhost_read
 
 fmt:
 	cargo fmt
@@ -80,7 +85,7 @@ clippy:
 	# adapters, which a plain lint doesn't compile.
 	cargo clippy --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan -- -D warnings
 	# Separate line for the same reason as in `examples` above.
-	cargo clippy --release --features bcm2837,resident-fat --example sd_resident_fat_read -- -D warnings
+	cargo clippy --release --features bcm2837,resident-fat --example sd_resident_fat_read --example sdhost_read -- -D warnings
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
@@ -88,6 +93,9 @@ clippy:
 	# comment for why this one is narrower than the others, and
 	# `examples`' for why the examples are named one by one.
 	cargo clippy --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu --example blink --example uart_hello --example uart_echo --example timer_hello --example atomics_check --example irq_timer_blink --example gpio_irq_button --example uart_rx_irq_echo -- -D warnings
+	# Same again for the SDHOST example -- see `examples` for why it is on
+	# its own line.
+	cargo clippy --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,resident-fat --example sdhost_read -- -D warnings
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo clippy --release --features bcm2837,v3d --example v3d_probe --example gpu_cube -- -D warnings
 	# And for the video decoder, the audio renderer, and the VCHIQ/MMAL

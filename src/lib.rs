@@ -131,6 +131,17 @@ pub mod rng;
 /// Blocking driver for the on-board SD card slot (Arasan EMMC host
 /// controller).
 pub mod sd;
+/// Blocking driver for the SD card slot over the *other* host
+/// controller, SDHOST — the one that leaves the Arasan controller free
+/// for [`sdio`], so a board can drive its card and its wireless chip at
+/// the same time.
+///
+/// Not built for BCM2711: a Pi 4 drives its card from EMMC2, which is a
+/// separate block again, and GPIO48-53 there are the Ethernet PHY's
+/// RGMII interface rather than the card slot — so routing them here
+/// would be actively wrong rather than merely useless.
+#[cfg(not(feature = "bcm2711"))]
+pub mod sdhost;
 /// Blocking SDIO driver for the on-board BCM43438 wireless chip (Wi-Fi
 /// side), via the same Arasan EMMC host controller.
 pub mod sdio;
