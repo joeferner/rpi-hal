@@ -45,7 +45,7 @@ use crate::cache;
 use crate::timer::Timer;
 
 /// Power Manager (PM) block base: peripheral base + `0x10_0000`.
-const PM_BASE: usize = 0x3f10_0000;
+const PM_BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0010_0000;
 /// PM_CAM1 — the camera-1 analog D-PHY power/LDO control register.
 const PM_CAM1: *mut u32 = (PM_BASE + 0x48) as *mut u32;
 /// Password OR'd into the top byte of every PM-block write.
@@ -58,7 +58,7 @@ const PM_CAM1_LDOLPEN: u32 = 1 << 1;
 const PM_CAM1_LDOHPEN: u32 = 1 << 2;
 
 /// Clock manager (CPRMAN) base: peripheral base + `0x10_1000`.
-const CPRMAN_BASE: usize = 0x3f10_1000;
+const CPRMAN_BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0010_1000;
 /// CM_CAM1 control register — the Unicam1 functional clock gate/source.
 const CM_CAM1CTL: *mut u32 = (CPRMAN_BASE + 0x48) as *mut u32;
 /// CM_CAM1 divider register.

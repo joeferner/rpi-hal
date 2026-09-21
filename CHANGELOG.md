@@ -64,6 +64,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and ignores the answer; this is public so a caller can see what the
   firmware said.
 
+### Fixed
+
+- **`power`, `rng`, `pcm` and `unicam` addressed the wrong chip.** Each
+  wrote its register base out as a `0x3f…` literal — the BCM2836/2837
+  peripheral base — with no chip selection, so on a BCM2835, whose
+  peripherals are at `0x2000_0000`, they addressed nothing at all.
+
+  They now take the base from `soc::PERIPHERAL_BASE`, which is the one
+  place in this crate that knows which map is being built for, and which
+  `dma` and `watchdog` were already using.
+
+  This is not a wrong-answer bug, which is the only reason it was found
+  rather than shipped: the MMU maps the peripheral region the chip
+  actually has, so the write faults. `power::reboot` on a Pi Zero took a
+  data abort — `dfar 0x3f100024`, the watchdog register at the other
+  chip's base — instead of rebooting, which meant a board could be told
+  to reboot exactly once and what it did was hang with a fault report.
+  `rng` would have done the same on the first random number asked of it.
+
 ### Changed
 
 - **`wifi::Error::BadFrame` carries `len`, `len_check` and `channel`.**

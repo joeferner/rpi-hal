@@ -18,10 +18,14 @@
 //! mirrored bare-metal Pi references (bztsrc's `raspi3-tutorial`
 //! `rand.c`).
 
-/// RNG peripheral base address (peripheral base `0x3F00_0000` + the
-/// block's `0x0010_4000` offset). BCM2836 and BCM2837 share this
-/// low-peripheral base; the value matches `mmu.rs`'s `PERIPHERAL_BASE`.
-const RNG_BASE: usize = 0x3f10_4000;
+/// RNG peripheral base address: the peripheral base plus the block's
+/// `0x0010_4000` offset.
+///
+/// Taken from [`crate::soc`] rather than written out. It was the
+/// BCM2836/2837 value with no chip selection, which on a BCM2835 is an
+/// address the MMU has not mapped — so this driver did not return poor
+/// random numbers there, it faulted.
+const RNG_BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0010_4000;
 /// Control register: bit 0 (`EN`) enables the generator.
 const RNG_CTRL: *mut u32 = RNG_BASE as *mut u32;
 /// Status register. Bits [31:24] hold the count of 32-bit words

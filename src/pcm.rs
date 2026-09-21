@@ -116,7 +116,7 @@ pub const FIFO_BUS_ADDRESS: u32 = 0x7e20_3004;
 
 /// PCM peripheral base, ARM physical (the bus alias `0x7E20_3000` is what
 /// the DMA engine sees — see [`FIFO_BUS_ADDRESS`]).
-const PCM_BASE: usize = 0x3f20_3000;
+const PCM_BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0020_3000;
 const CS_A: *mut u32 = PCM_BASE as *mut u32;
 const FIFO_A: *mut u32 = (PCM_BASE + 0x04) as *mut u32;
 const MODE_A: *mut u32 = (PCM_BASE + 0x08) as *mut u32;
