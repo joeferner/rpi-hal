@@ -23,10 +23,18 @@
 //! shared with [`crate::watchdog`], keeping each PM-touching module
 //! self-contained the way `rng`/`watchdog` already are.
 
-/// PM block base address (peripheral base `0x3F00_0000` + the block's
-/// `0x0010_0000` offset), matching [`crate::watchdog`] and `mmu.rs`'s
-/// `PERIPHERAL_BASE`.
-const PM_BASE: usize = 0x3f10_0000;
+/// PM block base address: the peripheral base plus the block's
+/// `0x0010_0000` offset.
+///
+/// Taken from [`crate::soc`] rather than written out, which is not
+/// tidiness — it was `0x3f10_0000`, the BCM2836/2837 value, with no chip
+/// selection at all. On a BCM2835, whose peripherals are at
+/// `0x2000_0000`, that address is nothing: [`reboot`] wrote to it and
+/// took a data abort, so a Pi Zero could be told to reboot exactly once
+/// and what it did instead was fault. The MMU maps the peripheral region
+/// the chip actually has, which is what turns a wrong address here into
+/// a translation fault rather than a silent write to whatever is there.
+const PM_BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0010_0000;
 /// Reset controller register: bits [5:4] select the reset type applied
 /// when the watchdog countdown reaches zero.
 const PM_RSTC: *mut u32 = (PM_BASE + 0x1c) as *mut u32;
