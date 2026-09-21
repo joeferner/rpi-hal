@@ -309,6 +309,12 @@ name = "sd_resident_fat_read"
 required-features = ["resident-fat"]
 
 [[example]]
+# The card on SDHOST and the radio on the Arasan controller at once. It
+# mounts a filesystem, so it needs the same FAT layer as the example above.
+name = "sdhost_read"
+required-features = ["resident-fat"]
+
+[[example]]
 name = "i2s_wav_player"
 required-features = ["embedded-sdmmc"]
 

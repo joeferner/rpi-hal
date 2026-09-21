@@ -403,6 +403,22 @@ implementations where applicable, and all verified on real hardware:
   (32-bit only) the same way: `examples/sd_read.rs` and `rpi-loader`'s
   `sd-list`. The DMA-backed variants aren't available under `bcm2711`
   yet — see [issue #29](https://github.com/joeferner/rpi-hal/issues/29).
+- **SD card over SDHOST** (`src/sdhost.rs`, not BCM2711): the *other* SD
+  host controller on this SoC — Broadcom's own, at `0x7E20_2000`, reached
+  at GPIO48-53 with ALT0. It exists for one reason: the Arasan controller
+  above can be muxed to the card slot **or** to the wireless pins but not
+  both, so a board that wants Wi-Fi and its card at the same time has to
+  put the card here and leave Arasan to `sdio`. That is the split
+  Raspberry Pi OS makes on a Pi 3 and a Zero W, and it does not go the
+  other way round: SDHOST has no usable SDIO support. Blocking PIO only —
+  the identification sequence, the 4-bit bus, and single- and multi-block
+  reads and writes paced against the FIFO level in `SDEDM` — plus a
+  `resident-fat` block device (`SdhostBlockDevice`) that moves a whole run
+  in one command. Not in the SVD, so the register map is poked directly
+  and follows Linux's `bcm2835-sdhost`; the BCM2835 datasheet omits this
+  controller entirely. `examples/sdhost_read.rs` mounts the card here,
+  brings the radio up on the Arasan controller, and then reads the card
+  again with both running, which is the test of the whole claim.
 - **Wi-Fi SDIO** (`src/sdio.rs`, Pi 3 only): the on-board BCM43438
   wireless chip's SDIO interface, over the *same* Arasan EMMC controller
   as the SD card but routed to the wireless pins (GPIO34-39). Enumerates

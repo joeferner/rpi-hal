@@ -4,6 +4,47 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`sdhost`, a driver for the SoC's *other* SD host controller** — and
+  with it, the ability to drive the SD card and the wireless chip at the
+  same time.
+
+  The Arasan controller `sd` and `sdio` share can be muxed to the card
+  slot (GPIO48-53, ALT3) or to the radio (GPIO34-39, ALT3), never both,
+  so until now a program that brought Wi-Fi up gave the card away for
+  good. SDHOST is Broadcom's own, simpler controller at `0x7E20_2000`,
+  reaching the card slot at ALT0 — so the card goes there and the radio
+  keeps Arasan to itself. That is the split Raspberry Pi OS makes on a
+  Pi 3 and a Zero W, and it does not go the other way round: SDHOST has
+  no usable SDIO, so the radio cannot move instead.
+
+  `sdio::Sdio::init` already parked GPIO48-53 on ALT0 when it took the
+  wireless pins — it has to, or one controller would be wired to both
+  pin groups — so the card slot was already pointed here and waiting for
+  a driver.
+
+  Blocking PIO only: the identification sequence, the 4-bit bus,
+  single- and multi-block reads and writes paced against the FIFO level
+  in `SDEDM`, and an `SdhostBlockDevice` for `resident-fat` that moves a
+  whole run in one command. The register map is absent from the SVD *and*
+  from the BCM2835 datasheet, so it is poked directly and follows Linux's
+  `bcm2835-sdhost`. Not built for `bcm2711`, where the card is on EMMC2
+  and GPIO48-53 are the Ethernet PHY's RGMII interface.
+
+  The card-side protocol is deliberately written out again rather than
+  shared with `sd`: what the two have in common is a page of the SD
+  specification, what differs is every register it is expressed in, and
+  factoring it out would put a hardware-verified driver's bring-up at the
+  mercy of edits made for this one.
+
+  HW-verified on a Pi Zero W 1.1 by `examples/sdhost_read.rs`, which is
+  the test of the claim rather than of the driver: it mounts the card on
+  SDHOST, brings the radio up on the Arasan controller, and then reads
+  the card again with both running.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added
