@@ -43,7 +43,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   HW-verified on a Pi Zero W 1.1 by `examples/sdhost_read.rs`, which is
   the test of the claim rather than of the driver: it mounts the card on
   SDHOST, brings the radio up on the Arasan controller, and then reads
-  the card again with both running.
+  the card again with both running. Writes are verified separately, by an
+  over-the-air update writing a bundle to the card and reading every
+  entry back — reads measured around 10 MB/s.
+
+  Two things about writing that reads do not reach, and that cost a
+  round of debugging each. A write must let the FIFO drain *before* its
+  stop command, which is the opposite of a read: the card streams until
+  `CMD12` on the way in, so stopping first is a deadlock, while on the
+  way out the last words are still in the FIFO and stopping first
+  truncates them. And nothing may touch the bus until the card has
+  finished committing — the controller reports the release of the busy
+  signal in `SDHSTS`, and the `SDCMD` start bit clearing does not mean an
+  `R1b` command is done. Both produce a write that reports success and
+  fails its read-back.
 
 - **`wifi::Wifi::resync_rx`**, which abandons the receive frame in
   progress and waits for the chip to flush it.

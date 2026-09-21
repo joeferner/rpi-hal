@@ -65,21 +65,14 @@ use crate::mailbox::{ClockId, Mailbox, PowerDeviceId};
 use crate::pac::GPIO;
 use crate::timer::Timer;
 
-/// Peripheral base, ARM physical.
-///
-/// Selected by chip rather than hardcoded, with the crate's usual
-/// precedence: a BCM2835's peripherals sit at `0x2000_0000` and a
-/// BCM2836/7's at `0x3f00_0000`, and a driver that assumed one of those
-/// would read an address that is not this controller on the other board
-/// — which does not fail as a wrong answer, it faults or hangs.
-#[cfg(all(not(feature = "bcm2837"), feature = "bcm2835"))]
-const PERIPHERAL_BASE: usize = 0x2000_0000;
-/// The BCM2836/BCM2837 peripheral base — see the BCM2835 arm above.
-#[cfg(feature = "bcm2837")]
-const PERIPHERAL_BASE: usize = 0x3f00_0000;
-
 /// SDHOST register block, ARM physical (bus `0x7E20_2000`).
-const BASE: usize = PERIPHERAL_BASE + 0x0020_2000;
+///
+/// The peripheral base comes from [`crate::soc`], which is the one place
+/// in this crate that knows which chip's memory map is being built for.
+/// A driver that writes the address out instead compiles for every chip
+/// and works on one — see the comments in [`crate::power`] and
+/// [`crate::rng`], which were both that bug.
+const BASE: usize = crate::soc::PERIPHERAL_BASE as usize + 0x0020_2000;
 
 /// Command register: index, flags, and the "new command" bit that
 /// starts it.
@@ -132,6 +125,9 @@ const SDCMD_WRITE_CMD: u32 = 0x80;
 /// `SDCMD`: a data command reading from the card.
 const SDCMD_READ_CMD: u32 = 0x40;
 
+/// `SDHSTS`: the card has released the busy signal it held after an
+/// `R1b` command. Write-1-to-clear, like the error bits.
+const SDHSTS_BUSY_IRPT: u32 = 0x400;
 /// `SDHSTS`: the card's data-line timeout expired.
 const SDHSTS_REW_TIME_OUT: u32 = 0x80;
 /// `SDHSTS`: the card did not answer the command.
@@ -233,6 +229,27 @@ const FIFO_TIMEOUT_US: u64 = 500_000;
 /// How long to wait for the data state machine to return to idle after a
 /// transfer, in microseconds.
 const TRANSFER_END_TIMEOUT_US: u64 = 500_000;
+
+/// How long to let a card finish committing a write, in microseconds.
+///
+/// Generous because this is the card's own programming time, which is
+/// its slowest operation by a wide margin and varies by orders of
+/// magnitude between cards — a cheap one erasing a block it has to
+/// reclaim first is nothing like a fast one overwriting a clean page.
+/// What this bounds is a card that has stopped answering, not one that
+/// is merely slow.
+const PROGRAMMING_TIMEOUT_US: u64 = 5_000_000;
+
+/// Card status: the card is ready to accept data (`READY_FOR_DATA`).
+const CARD_STATUS_READY_FOR_DATA: u32 = 1 << 8;
+/// Card status: shift of the current-state field.
+const CARD_STATUS_STATE_SHIFT: u32 = 9;
+/// Card status: mask of the current-state field, once shifted down.
+const CARD_STATUS_STATE_MASK: u32 = 0xf;
+/// Card state: transfer — the card has finished whatever it was doing
+/// and will take another command. A write that is still committing
+/// reports "programming" (7) instead.
+const CARD_STATE_TRANSFER: u32 = 4;
 
 /// GPIO alternate function (ALT0) routing GPIO48-53 to this controller.
 ///
@@ -502,28 +519,79 @@ impl Sdhost {
         self.end_transfer(count, false, timer)
     }
 
-    /// Ends a data transfer whose bytes have all moved.
+    /// Ends a data transfer whose bytes have all moved, which is a
+    /// different job in each direction.
     ///
-    /// **The order here is the whole of a bug that cost a bring-up.** A
-    /// multi-block transfer is open-ended: the card keeps streaming until
-    /// `CMD12` stops it, so the data state machine cannot leave
-    /// `READDATA` on its own and the FIFO sits full behind it. Waiting
-    /// for the machine to go idle *before* sending the stop is therefore
-    /// a deadlock — one that presents as a transfer which moved every
-    /// byte correctly and then timed out, with `SDEDM` reporting a full
-    /// FIFO and no error bit anywhere.
+    /// **Reading: stop first.** A multi-block read is open-ended — the
+    /// card streams until `CMD12` — so the data state machine cannot
+    /// leave `READDATA` on its own and the FIFO sits full behind it.
+    /// Waiting for the machine to go idle *before* sending the stop is a
+    /// deadlock, and it presents as a transfer that moved every byte
+    /// correctly and then timed out, with `SDEDM` reporting a full FIFO
+    /// and no error bit anywhere. A single-block read has no stop, so it
+    /// is the one case that needs forcing back to data mode.
     ///
-    /// So: a run of blocks is ended by the stop command, and a single
-    /// block — which has no stop — is ended by forcing the machine back
-    /// to data mode, which is the only case that needs forcing. That
-    /// split is the one the reference driver makes, for this reason.
+    /// **Writing: drain first.** The opposite, and for the opposite
+    /// reason: the last words are still in the FIFO and the card has not
+    /// seen them. Sending the stop there truncates the transfer — the
+    /// card is told the data ended before it did, and the tail of what
+    /// was written is whatever was in those blocks before. That is a
+    /// write which reports success and fails its read-back, which is
+    /// exactly how it was found.
+    ///
+    /// Then the card has to finish programming. Nothing after a write
+    /// may touch the bus until it has, and the card is the only thing
+    /// that knows — see [`Self::wait_ready`].
     fn end_transfer(&self, count: u32, read: bool, timer: &Timer) -> Result<(), Error> {
+        if read {
+            if count > 1 {
+                self.command(CMD_STOP_TRANSMISSION, 0, timer)?;
+            } else {
+                force_data_mode(true, timer)?;
+            }
+            return check_transfer();
+        }
+
+        force_data_mode(false, timer)?;
         if count > 1 {
             self.command(CMD_STOP_TRANSMISSION, 0, timer)?;
-        } else {
-            force_data_mode(read, timer)?;
         }
-        check_transfer()
+        check_transfer()?;
+        self.wait_ready(timer)
+    }
+
+    /// Waits for the card to finish programming what was just written.
+    ///
+    /// A card pulls `DAT0` low while it commits a write and answers
+    /// nothing else until it is done. The controller's busy-wait covers
+    /// the stop command that follows a multi-block write, but not a
+    /// single-block one — which has no stop — and not the rest of the
+    /// programming time either way.
+    ///
+    /// So this asks the card directly, which is what the specification
+    /// says to do: `CMD13` until it reports itself ready for data and
+    /// back in the transfer state. Skipping it means the next command
+    /// lands on a card that is still writing, and what that reads back
+    /// is not what was written.
+    fn wait_ready(&self, timer: &Timer) -> Result<(), Error> {
+        let start = timer.now_micros();
+        loop {
+            let status = self.command(CMD_SEND_STATUS, self.rca, timer)?;
+            // Ready for data, and in the transfer state rather than
+            // still programming.
+            if status & CARD_STATUS_READY_FOR_DATA != 0
+                && (status >> CARD_STATUS_STATE_SHIFT) & CARD_STATUS_STATE_MASK
+                    == CARD_STATE_TRANSFER
+            {
+                return Ok(());
+            }
+            if timer.now_micros() - start > PROGRAMMING_TIMEOUT_US {
+                return Err(Error::TransferFailed {
+                    status: read_reg(SDHSTS),
+                    edm: read_reg(SDEDM),
+                });
+            }
+        }
     }
 
     /// The argument a read or write command takes for `block_index`:
@@ -624,6 +692,16 @@ impl Sdhost {
             });
         }
 
+        // An `R1b` command is not finished when the start bit clears.
+        // The card holds `DAT0` low afterwards and the controller
+        // reports the release separately, in `SDHSTS`, which is the only
+        // thing that says the card is done. Returning at the start bit
+        // hands back a card that is still working, and the next command
+        // is then issued into a bus that is busy.
+        if matches!(command.response, Response::ShortBusy) {
+            self.wait_not_busy(command.index, timer)?;
+        }
+
         Ok(match command.response {
             Response::None => 0,
             // Only the first word. A long response's other three are in
@@ -633,6 +711,27 @@ impl Sdhost {
             // says.
             _ => read_reg(SDRSP0),
         })
+    }
+
+    /// Waits for the controller to report that the card has released the
+    /// busy signal after an `R1b` command.
+    fn wait_not_busy(&self, command: u8, timer: &Timer) -> Result<(), Error> {
+        let start = timer.now_micros();
+        loop {
+            let status = read_reg(SDHSTS);
+            if status & SDHSTS_ERROR_MASK != 0 {
+                return Err(Error::CommandFailed { command, status });
+            }
+            if status & SDHSTS_BUSY_IRPT != 0 {
+                // Write-1-to-clear, so the next command does not read
+                // this one's completion as its own.
+                write_reg(SDHSTS, SDHSTS_BUSY_IRPT);
+                return Ok(());
+            }
+            if timer.now_micros() - start > PROGRAMMING_TIMEOUT_US {
+                return Err(Error::CommandFailed { command, status });
+            }
+        }
     }
 
     /// Asks the card whether it supports the four-bit bus and, if it
@@ -754,6 +853,12 @@ const CMD_SEND_IF_COND: Command = Command {
 const CMD_STOP_TRANSMISSION: Command = Command {
     index: 12,
     response: Response::ShortBusy,
+};
+/// `CMD13`, ask the card for its status — which is how a host finds out
+/// that a write has finished committing.
+const CMD_SEND_STATUS: Command = Command {
+    index: 13,
+    response: Response::Short,
 };
 /// `CMD17`, read one block.
 const CMD_READ_SINGLE: Command = Command {
