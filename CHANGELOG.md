@@ -106,6 +106,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A secondary core launched on AArch32 never reached its entry
+  function**, because `__secondary_core_entry` did not drop out of Hyp
+  mode. `_start` has done that for core 0 since the firmware was found to
+  hand off in Hyp — the secondary trampoline, written later, did not, and
+  neither did anything notice, because the failure is silent by
+  construction.
+
+  Every step the trampoline takes next is *banked*, so in Hyp each one
+  succeeds at writing a register nothing will read. `cps` cannot leave
+  Hyp at all — UNPREDICTABLE per the architecture, which is why `_start`
+  uses `eret` — so the banked stacks are never set and `sp` stays
+  whatever the firmware's stub left. VBAR is not the vector base in Hyp,
+  HVBAR is, so the core takes its exceptions somewhere never
+  initialized and an application's `__unhandled_exception` cannot run.
+  The MMU enable programs `SCTLR`/`TTBR0` rather than `HSCTLR`/`HTTBR`.
+
+  What that looks like from the other side is worth writing down, because
+  it is what makes it hard: the mailbox handoff is written, the
+  firmware's stub acknowledges it (mailbox 3 reads back as zero), the
+  core really is executing — and it produces no output whatsoever, not
+  even a fault report, while core 0 carries on perfectly. Nothing about
+  it resembles a core that failed to start.
+
+  AArch64 was never affected: `secondary64.s` drops EL2→EL1 exactly as
+  `boot64.s` does, which is why a four-core AArch64 application works
+  while the same arrangement on AArch32 does not.
+
 - **`power`, `rng`, `pcm` and `unicam` addressed the wrong chip.** Each
   wrote its register base out as a `0x3f…` literal — the BCM2836/2837
   peripheral base — with no chip selection, so on a BCM2835, whose
