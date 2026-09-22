@@ -20,8 +20,20 @@
 //!   before writing the core's slot with the address of
 //!   `__secondary_core_entry` (the secondary64.s trampoline).
 //!
-//! Either way the trampoline reads back the handoff, brings up the core's
-//! own MMU/caches ([`rpi_hal_mmu_init`](crate)), and jumps to `entry`.
+//! Either way the trampoline first leaves the privilege level the firmware
+//! released the core at — Hyp on AArch32, EL2 on AArch64 — then reads back
+//! the handoff, brings up the core's own MMU/caches
+//! ([`rpi_hal_mmu_init`](crate)), and jumps to `entry`.
+//!
+//! That first step is not a formality, and its absence is the reason this
+//! is worth stating here rather than leaving to the assembly. Stacks, the
+//! vector base and the MMU controls are all *banked* by mode: run the
+//! trampoline in Hyp and each of them writes a register nothing will read,
+//! so the core executes with an uninitialized `sp`, takes its exceptions
+//! through a vector base that was never set, and cannot report the fault
+//! that follows. From core 0 the handoff looks perfect — the mailbox is
+//! written and the firmware's stub acknowledges it — and the core simply
+//! never says anything.
 //!
 //! Requires the `mmu` feature (pulled in automatically -- see this crate's
 //! `Cargo.toml`): the secondary core's own `rpi_hal_mmu_init` call is what

@@ -137,6 +137,43 @@ halt:
 // and jump to the entry point.
 .global __secondary_core_entry
 __secondary_core_entry:
+    // Drop to SVC if the firmware released this core in Hyp mode, for
+    // exactly the reason `_start` does it for core 0 -- and before
+    // anything else here, because everything else here is one of the
+    // things that silently talks to the wrong mode's state otherwise.
+    //
+    // This is not theoretical, and the failure it prevents is the worst
+    // shape a failure can have: all three of the steps below are
+    // *banked*, so in Hyp mode each one succeeds at writing a register
+    // nothing will read. `cps` cannot leave Hyp at all (UNPREDICTABLE
+    // per the architecture, which is why `_start` uses `eret`), so the
+    // banked stacks are never set and `sp` stays whatever the firmware
+    // stub left. VBAR is not the vector base in Hyp -- HVBAR is -- so
+    // the core takes its exceptions somewhere that was never
+    // initialized, and an application's `__unhandled_exception` never
+    // runs. And the MMU enable programs SCTLR/TTBR0 rather than
+    // HSCTLR/HTTBR.
+    //
+    // The result is a secondary core that the firmware's stub really did
+    // release, that really is executing, and that produces no output of
+    // any kind -- not even a fault report -- while core 0 carries on
+    // perfectly. Nothing in the handoff looks wrong from core 0's side:
+    // the mailbox is written and the stub acknowledges it.
+    //
+    // Harmless where the firmware releases secondary cores in SVC: the
+    // `bne` skips it.
+    mrs     r0, cpsr
+    and     r1, r0, #0x1f
+    cmp     r1, #MODE_HYP
+    bne     .Lsecondary_hyp_drop_done
+    bic     r0, r0, #0x1f
+    orr     r0, r0, #MODE_SVC
+    msr     spsr_cxsf, r0
+    adr     lr, .Lsecondary_hyp_drop_done
+    msr     ELR_hyp, lr
+    eret
+.Lsecondary_hyp_drop_done:
+
     // Enable this core's VFP/NEON unit first -- the enable is per-core,
     // and (as on core 0 in _start) it must precede any Rust call in case
     // a hard-float build emitted FP in it. Safe here before the stack is
