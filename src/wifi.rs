@@ -513,6 +513,40 @@ impl Wifi {
         Ok(u32::from_le_bytes(value).saturating_mul(500))
     }
 
+    /// The address of the access point this is associated with, or `None`
+    /// if it is not associated with one.
+    ///
+    /// The firmware's own answer to whether the chip is on a network, and
+    /// the one worth asking: it is what [`Self::join_wpa2`] waits on, and
+    /// unlike the association *events* this firmware emits it is reliable
+    /// — see that method for what those do and do not report.
+    ///
+    /// # Why a refusal is not an error
+    ///
+    /// `WLC_GET_BSSID` fails outright while the chip is unassociated, and
+    /// reads back all zeros in the window between a join being issued and
+    /// the association completing. Both are the firmware answering the
+    /// question, so both come back as `None`.
+    ///
+    /// What does come back as an error is the command not getting through
+    /// at all — an SDIO link or a firmware that has stopped responding.
+    /// That is a different fault from being off the network, it is not
+    /// fixed by rejoining, and a caller watching the association wants to
+    /// be able to tell the two apart.
+    ///
+    /// Only the low-level [`Error::CommandFailed`] refusal is folded into
+    /// `None`, so a caller that wants to know *why* the chip says it is
+    /// unassociated still has the firmware's status code available by
+    /// issuing the [`Self::ioctl_get`] itself.
+    pub fn bssid(&mut self, timer: &Timer) -> Result<Option<[u8; 6]>, Error> {
+        let mut bssid = [0u8; 6];
+        match self.ioctl_get(WLC_GET_BSSID, &mut bssid, timer) {
+            Ok(_) => Ok(bssid.iter().any(|&byte| byte != 0).then_some(bssid)),
+            Err(Error::CommandFailed(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The received signal strength, in dBm.
     ///
     /// Negative, and closer to zero is stronger: around -50 is a radio in
@@ -789,16 +823,16 @@ impl Wifi {
 
         // Poll the associated BSSID rather than waiting for an E_LINK
         // event: this firmware runs the join to completion (E_SET_SSID and
-        // E_PSK_SUP report success) without reliably emitting E_LINK.
-        // `WLC_GET_BSSID` fails (BCME_NOTASSOCIATED) or reads back all
-        // zeros until the join lands, then returns the AP's address; the
+        // E_PSK_SUP report success) without reliably emitting E_LINK. The
         // read also services the receive path, draining the join events.
+        //
+        // Anything other than an address is another go round, an error
+        // included: a command that did not get through says nothing about
+        // whether the join is landing, and the budget below is what ends
+        // the wait either way.
         let start = timer.now_micros();
         loop {
-            let mut bssid = [0u8; 6];
-            if self.ioctl_get(WLC_GET_BSSID, &mut bssid, timer).is_ok()
-                && bssid.iter().any(|&b| b != 0)
-            {
+            if let Ok(Some(bssid)) = self.bssid(timer) {
                 return Ok(bssid);
             }
             if timer.now_micros() - start > 15_000_000 {
@@ -810,8 +844,14 @@ impl Wifi {
 
     /// Configures the chip for the WPA2-PSK network `ssid`/`passphrase`
     /// and issues the join, without waiting for the result — the caller
-    /// drives its own [`Self::poll_event`] loop (or use [`Self::join_wpa2`]
-    /// for the wait). Enables the join events, brings the interface up in
+    /// watches for the association itself, by polling [`Self::bssid`] or
+    /// driving its own [`Self::poll_event`] loop (or use
+    /// [`Self::join_wpa2`], which does the first of those and blocks until
+    /// it lands). This is the way in for anything that cannot afford to
+    /// block for the length of an association: the join runs in the
+    /// firmware, and nothing here has to be waited on for it to.
+    ///
+    /// Enables the join events, brings the interface up in
     /// station mode, sets AES-CCMP/WPA2-PSK, hands the passphrase to the
     /// in-firmware supplicant, and sends the SSID.
     pub fn start_join(&mut self, ssid: &str, passphrase: &str, timer: &Timer) -> Result<(), Error> {
