@@ -58,6 +58,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `R1b` command is done. Both produce a write that reports success and
   fails its read-back.
 
+- **`wifi::Wifi::bssid`**, the firmware's own answer to whether the chip
+  is on a network: the associated AP's address, or `None`.
+
+  What it is for is watching an association rather than making one.
+  `WLC_GET_BSSID` refuses the command while unassociated and reads back
+  zeros in the window between a join being issued and it landing, so both
+  come back as `None`; a command that did not get through at all stays an
+  error, because a chip that has stopped answering is a different fault
+  from a radio that is off the network and is not fixed by rejoining.
+  `join_wpa2` now waits on this rather than open-coding the same ioctl.
+
 - **`wifi::Wifi::resync_rx`**, which abandons the receive frame in
   progress and waits for the chip to flush it.
 
