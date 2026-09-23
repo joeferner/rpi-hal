@@ -281,18 +281,37 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         dsb();
         isb();
 
-        // SCTLR: set M (bit 0) and C (bit 2, data cache) -- see the parent
-        // module's doc comment on why C is needed for `ldrex`/`strex` to
-        // work on this core. I (bit 12, instruction cache) stays clear --
-        // unrelated to this.
+        // SCTLR: set M (bit 0), C (bit 2, data cache) and I (bit 12,
+        // instruction cache). See the parent module's doc comment on why C
+        // is needed for `ldrex`/`strex` to work on this core.
+        //
+        // I used to stay clear here, on the grounds that it was unrelated
+        // to `ldrex`/`strex`. That was true and beside the point: with it
+        // clear, every instruction fetch goes to DRAM over a bus shared
+        // with the VideoCore, which costs about two orders of magnitude on
+        // anything that is not waiting for a peripheral. Measured on a Pi 3
+        // with it clear: 17 MB/s reading a buffer that fits in L1, against
+        // 30 MB/s reading one far too large for any cache -- the L1 figure
+        // being the *lower* of the two is the giveaway, since it means the
+        // loop was bound by fetching its own instructions rather than by
+        // the data it was reading. On the same board a TrueType face took
+        // 78 seconds to parse.
+        //
+        // Nothing about the cost is specific to ARMv6, which is where the
+        // reasoning for setting it was already written down; the later
+        // cores are faster and their memory is no closer.
+        //
+        // Safe here because these cores invalidate their caches at reset,
+        // and nothing in this crate writes instructions: a program that
+        // generates or relocates code must invalidate the I-cache itself,
+        // which is true on every architecture but only matters once the
+        // cache is on.
         let mut sctlr: u32;
         asm!("mrc p15, 0, {0}, c1, c0, 0", out(reg) sctlr);
-        sctlr |= 1 | (1 << 2);
+        sctlr |= 1 | (1 << 2) | (1 << 12);
 
-        // Three more bits on ARMv6. Two of them are real and writable
-        // only here -- ARMv7 dropped both, having made each the only
-        // behaviour -- and the third is a judgement call this core's speed
-        // changes.
+        // Two more bits on ARMv6, both real and writable only here --
+        // ARMv7 dropped each, having made it the only behaviour.
         //
         // XP (bit 23) is the one line in this file that the whole ARMv6
         // map depends on. It selects the descriptor format that
@@ -311,19 +330,12 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
         // favour of a loud one. Linux sets both bits on this core for the
         // same reasons (`v6_crval`'s `mmuset` = 0x00c0387d).
         //
-        // I (bit 12, instruction cache) is the third, and is the one place
-        // this arm deliberately differs from the ARMv7 one rather than
-        // merely spelling the same intent differently. The ARM1176 fetches
-        // from a 1GHz core over a memory system shared with the VideoCore,
-        // and an uncached fetch of every instruction is a cost it feels in
-        // a way the later cores do not. Safe here because the I-cache is
-        // invalidated above before it is switched on, and nothing in this
-        // crate writes instructions: a program that generates or relocates
-        // code must invalidate the I-cache itself, which is true on every
-        // architecture but only matters once the cache is on.
+        // The I-cache is no longer among them: it is set for every core
+        // above. What is left here is the pair ARMv7 dropped, plus the
+        // explicit invalidate this core needs and the later ones do not.
         #[cfg(armv6)]
         {
-            sctlr |= (1 << 23) | (1 << 22) | (1 << 12);
+            sctlr |= (1 << 23) | (1 << 22);
         }
 
         asm!("mcr p15, 0, {0}, c1, c0, 0", in(reg) sctlr);
