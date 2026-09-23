@@ -87,9 +87,43 @@ const WLC_UP: u32 = 2;
 const WLC_SET_PASSIVE_SCAN: u32 = 49;
 /// Firmware command: set infrastructure (BSS) mode.
 const WLC_SET_INFRA: u32 = 20;
+/// Firmware command: set the power-management mode (see
+/// [`PowerManagement`]).
+const WLC_SET_PM: u32 = 86;
 /// Firmware command: read the associated AP's BSSID (fails with a
 /// not-associated status when the chip isn't on a network).
 const WLC_GET_BSSID: u32 = 23;
+/// Firmware command: read the current link rate, in units of 500 kbit/s.
+const WLC_GET_RATE: u32 = 12;
+
+/// Room requested for the `counters` reply.
+///
+/// Sized against the largest layout rather than against the part that is
+/// read, because the firmware checks the room it is offered against the
+/// whole structure and refuses the command outright if it is short — a
+/// buffer big enough for the fields wanted is not big enough to ask with.
+/// The versions in [`COUNTERS_VERSIONS`] run to a few hundred bytes and
+/// grow with each one, so this is generous on purpose; only the leading
+/// [`COUNTERS_PREFIX`] bytes are decoded.
+const COUNTERS_REPLY: usize = 1024;
+
+/// Bytes of the `counters` reply [`Counters`] decodes.
+///
+/// The structure's leading fields — through `rxuflo` — are identical
+/// across every layout version in [`COUNTERS_VERSIONS`]; what differs
+/// between them is what follows.
+const COUNTERS_PREFIX: usize = 156;
+
+/// `counters` layout versions whose leading fields match what
+/// [`Counters`] reads.
+///
+/// Later firmware answers this iovar with a tagged-and-length-prefixed
+/// format instead of a flat structure, under its own much higher version
+/// number — which is why this is a list of known-good layouts rather than
+/// a minimum. Anything outside it is refused rather than misread.
+const COUNTERS_VERSIONS: core::ops::RangeInclusive<u16> = 6..=11;
+/// Firmware command: read the received signal strength, in dBm.
+const WLC_GET_RSSI: u32 = 127;
 /// Firmware command: set the SSID and join (given a `wlc_ssid_t`).
 const WLC_SET_SSID: u32 = 26;
 /// Firmware command: hand the WPA(2) passphrase to the in-firmware
@@ -273,6 +307,13 @@ pub enum Error {
     /// A frame handed to [`Wifi::send_ethernet`] is larger than the driver
     /// can frame (see [`Wifi::MTU`]).
     FrameTooLong,
+    /// The firmware answered in a structure layout this driver does not
+    /// know how to read — see [`Wifi::counters`], which is the only thing
+    /// that returns this.
+    UnsupportedFormat {
+        /// The version the firmware stamped on the structure.
+        version: u16,
+    },
 }
 
 impl From<sdio::Error> for Error {
@@ -454,6 +495,95 @@ impl Wifi {
     /// later — the answer can depend on how far bring-up has got.
     pub fn set_rx_glom(&mut self, enabled: bool, timer: &Timer) -> Result<(), Error> {
         self.set_iovar_u32("bus:rxglom", u32::from(enabled), timer)
+    }
+
+    /// The rate the link is currently running at, in kbit/s.
+    ///
+    /// The rate the two ends settled on, not the rate they are capable
+    /// of: a link that has fallen back to the 802.11b rates reports one
+    /// or two megabits here, and that is a ceiling nothing above it can
+    /// argue with — a transfer that seems mysteriously slow is often
+    /// just this number being small.
+    ///
+    /// Only meaningful while associated.
+    pub fn link_rate_kbps(&mut self, timer: &Timer) -> Result<u32, Error> {
+        let mut value = [0u8; 4];
+        self.ioctl_get(WLC_GET_RATE, &mut value, timer)?;
+        // The firmware counts in half-megabits.
+        Ok(u32::from_le_bytes(value).saturating_mul(500))
+    }
+
+    /// The received signal strength, in dBm.
+    ///
+    /// Negative, and closer to zero is stronger: around -50 is a radio in
+    /// the same room, around -80 is one that still associates and whose
+    /// link rate has collapsed to keep it associated. The companion to
+    /// [`Self::link_rate_kbps`] — the rate says what the link is doing
+    /// and this says why.
+    ///
+    /// Only meaningful while associated.
+    pub fn rssi_dbm(&mut self, timer: &Timer) -> Result<i32, Error> {
+        let mut value = [0u8; 4];
+        self.ioctl_get(WLC_GET_RSSI, &mut value, timer)?;
+        Ok(i32::from_le_bytes(value))
+    }
+
+    /// The firmware's own MAC-layer counters.
+    ///
+    /// Everything else this driver reports is counted above the chip:
+    /// frames the host managed to move, and errors the host could see. A
+    /// frame the radio retried four times and then delivered is not an
+    /// error anywhere in that picture — it cost air time and latency and
+    /// arrived intact — so a link that is working hard and a link that is
+    /// working well look identical from the host. These are the counters
+    /// that tell them apart.
+    ///
+    /// Read [`Counters::txretrans`] against [`Counters::txframe`] for how
+    /// much of the transmit effort is repeat work, and
+    /// [`Counters::rxoflo`] for frames the chip took off the air and then
+    /// dropped because the host had not emptied its receive FIFO — the
+    /// one loss on this path that nothing else counts, because the frame
+    /// never reaches the host to be counted.
+    ///
+    /// Cumulative since the firmware started, so what they are worth is
+    /// the difference between two reads.
+    pub fn counters(&mut self, timer: &Timer) -> Result<Counters, Error> {
+        let mut reply = [0u8; COUNTERS_REPLY];
+        let len = self.get_iovar("counters", &mut reply, timer)?;
+        Counters::parse(&reply[..len])
+    }
+
+    /// Sets how aggressively the radio may sleep between frames.
+    ///
+    /// The firmware powers on in [`PowerManagement::Fast`], so a caller
+    /// that never asks gets a radio that sleeps. That is the right default
+    /// for something battery-powered and the wrong one for a board on a
+    /// wall supply, which is why this is a decision rather than a default:
+    /// `brcmfmac` and `cyw43` both set it explicitly after associating for
+    /// the same reason.
+    ///
+    /// # What sleeping costs
+    ///
+    /// Not throughput directly — it costs *latency*, and only when the
+    /// link goes briefly quiet. A round trip measured with a ping is a
+    /// single packet against an otherwise idle radio, which is the one
+    /// case a sleeping chip handles well, so an idle latency that looks
+    /// healthy says nothing about this setting.
+    ///
+    /// Where it shows up is a window-limited bulk transfer, which is
+    /// quiet by construction: the sender fills the receive window and
+    /// waits, and a radio that treats that pause as idleness adds its
+    /// wake-up to every round trip. Throughput is the window divided by
+    /// the round trip, so the cost lands on the whole transfer rather
+    /// than on the pauses.
+    ///
+    /// Call after joining. The setting does not survive a re-association.
+    pub fn set_power_management(
+        &mut self,
+        mode: PowerManagement,
+        timer: &Timer,
+    ) -> Result<(), Error> {
+        self.ioctl_set_u32(WLC_SET_PM, mode as u32, timer)
     }
 
     /// Loads the chip's CLM (country/regulatory) blob — the data file the
@@ -1213,6 +1343,188 @@ pub struct Event {
     pub status: u32,
     /// Event flags (e.g. [`EVENT_LINK_UP`] on an [`EVENT_LINK`]).
     pub flags: u16,
+}
+
+/// The firmware's MAC-layer counters, as [`Wifi::counters`] reads them.
+///
+/// A direct mirror of the leading fields of the chip's own counters
+/// structure, names and all. They are cumulative since the firmware
+/// started and several of them only ever move under load, so a single
+/// reading says little — take two and subtract.
+///
+/// Fields the structure carries but this does not are the ones after
+/// `rxuflo`, whose position moves between layout versions.
+#[derive(Clone, Copy, Debug)]
+pub struct Counters {
+    /// Layout version the firmware stamped on the structure.
+    pub version: u16,
+    /// Length the firmware gave for the whole structure, which may be
+    /// more than was read.
+    pub length: u16,
+
+    /// Data frames transmitted.
+    pub txframe: u32,
+    /// Data bytes transmitted.
+    pub txbyte: u32,
+    /// MAC-layer retransmissions — a frame the radio sent again because
+    /// the first attempt was not acknowledged. Against
+    /// [`Self::txframe`], the share of transmit effort spent repeating
+    /// itself, and the clearest single measure of a marginal link.
+    pub txretrans: u32,
+    /// Transmit errors, the firmware's own sum of the failures below.
+    pub txerror: u32,
+    /// Management frames transmitted.
+    pub txctl: u32,
+    /// Frames transmitted with a short preamble.
+    pub txprshort: u32,
+    /// Frames whose transmit status came back an error.
+    pub txserr: u32,
+    /// Transmits abandoned for want of a buffer.
+    pub txnobuf: u32,
+    /// Transmits discarded because the chip was not associated.
+    pub txnoassoc: u32,
+    /// Runt frames transmitted.
+    pub txrunt: u32,
+    /// Transmit header cache hits — the firmware's fast path.
+    pub txchit: u32,
+    /// Transmit header cache misses.
+    pub txcmiss: u32,
+    /// Transmit FIFO underflows: the radio started a frame and ran out of
+    /// data to send.
+    pub txuflo: u32,
+    /// Transmit errors the PHY reported.
+    pub txphyerr: u32,
+    /// Transmits deferred because the channel was busy.
+    pub txphycrs: u32,
+
+    /// Data frames received.
+    pub rxframe: u32,
+    /// Data bytes received.
+    pub rxbyte: u32,
+    /// Receive errors, the firmware's own sum of the failures below.
+    pub rxerror: u32,
+    /// Management frames received.
+    pub rxctl: u32,
+    /// Receives dropped for want of a buffer.
+    pub rxnobuf: u32,
+    /// Non-data frames arriving on the data channel.
+    pub rxnondata: u32,
+    /// Frames with a bad distribution-system field.
+    pub rxbadds: u32,
+    /// Malformed control or management frames.
+    pub rxbadcm: u32,
+    /// Fragmentation errors.
+    pub rxfragerr: u32,
+    /// Runt frames received.
+    pub rxrunt: u32,
+    /// Oversized frames received.
+    pub rxgiant: u32,
+    /// Frames for a station the firmware has no control block for.
+    pub rxnoscb: u32,
+    /// Frames rejected as invalid.
+    pub rxbadproto: u32,
+    /// Frames with an invalid source address.
+    pub rxbadsrcmac: u32,
+    /// Frames discarded for an invalid destination address.
+    pub rxbadda: u32,
+    /// Frames the firmware's own filters discarded.
+    pub rxfilter: u32,
+    /// **Receive FIFO overflows.** Frames the radio took off the air and
+    /// then threw away because the host had not emptied the FIFO in
+    /// time.
+    ///
+    /// The one drop on this path that nothing above the chip can see:
+    /// the frame never reaches the host, so no driver counter moves, and
+    /// the sender simply retransmits. A number that climbs during a bulk
+    /// transfer means the bus or the poll cadence is not keeping up with
+    /// the air, whatever the host-side counters say.
+    pub rxoflo: u32,
+    /// Per-FIFO receive DMA descriptor underflows.
+    pub rxuflo: [u32; 6],
+}
+
+impl Counters {
+    /// Decodes a `counters` reply, refusing a layout this does not know.
+    fn parse(reply: &[u8]) -> Result<Counters, Error> {
+        if reply.len() < COUNTERS_PREFIX {
+            return Err(Error::NoResponse);
+        }
+        let at = |offset: usize| -> u32 {
+            u32::from_le_bytes([
+                reply[offset],
+                reply[offset + 1],
+                reply[offset + 2],
+                reply[offset + 3],
+            ])
+        };
+
+        let version = u16::from_le_bytes([reply[0], reply[1]]);
+        if !COUNTERS_VERSIONS.contains(&version) {
+            return Err(Error::UnsupportedFormat { version });
+        }
+
+        let mut rxuflo = [0u32; 6];
+        for (index, fifo) in rxuflo.iter_mut().enumerate() {
+            *fifo = at(132 + index * 4);
+        }
+
+        Ok(Counters {
+            version,
+            length: u16::from_le_bytes([reply[2], reply[3]]),
+            txframe: at(4),
+            txbyte: at(8),
+            txretrans: at(12),
+            txerror: at(16),
+            txctl: at(20),
+            txprshort: at(24),
+            txserr: at(28),
+            txnobuf: at(32),
+            txnoassoc: at(36),
+            txrunt: at(40),
+            txchit: at(44),
+            txcmiss: at(48),
+            txuflo: at(52),
+            txphyerr: at(56),
+            txphycrs: at(60),
+            rxframe: at(64),
+            rxbyte: at(68),
+            rxerror: at(72),
+            rxctl: at(76),
+            rxnobuf: at(80),
+            rxnondata: at(84),
+            rxbadds: at(88),
+            rxbadcm: at(92),
+            rxfragerr: at(96),
+            rxrunt: at(100),
+            rxgiant: at(104),
+            rxnoscb: at(108),
+            rxbadproto: at(112),
+            rxbadsrcmac: at(116),
+            rxbadda: at(120),
+            rxfilter: at(124),
+            rxoflo: at(128),
+            rxuflo,
+        })
+    }
+}
+
+/// How aggressively the radio may sleep between frames, for
+/// [`Wifi::set_power_management`].
+///
+/// The values are the firmware's own, so this is the whole of what the
+/// chip offers rather than a selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerManagement {
+    /// The receiver stays on. Lowest latency, highest current, and the
+    /// right choice for anything on a wall supply.
+    None = 0,
+    /// The radio sleeps once a link has been idle briefly and wakes for
+    /// beacons.
+    Max = 1,
+    /// As [`Self::Max`], but the radio stays awake while traffic is
+    /// flowing and only sleeps after a longer idle period. The firmware's
+    /// power-on default.
+    Fast = 2,
 }
 
 /// One access point found by [`Wifi::scan`].

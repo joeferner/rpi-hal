@@ -96,6 +96,54 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the receive buffer would throw away the rest of a superframe still
   being handed out, which during a download is most of them.
 
+- **`wifi::Wifi::set_power_management`** and `wifi::PowerManagement`,
+  which say how aggressively the radio may sleep between frames.
+
+  The firmware powers on sleeping, so a program that never asks gets a
+  radio that does — the right default for something battery-powered and
+  the wrong one for a board on a wall supply, which is why this is a
+  decision rather than a default. `brcmfmac` and `cyw43` both set it
+  explicitly after associating, for the same reason.
+
+  What sleeping costs is latency, not throughput directly, and only when
+  the link goes briefly quiet — which is why a healthy ping says nothing
+  about it. A ping is one packet against an idle radio, the one case a
+  sleeping chip handles well. A window-limited bulk transfer is quiet by
+  construction instead: the sender fills the receive window and waits,
+  and a radio that reads that pause as idleness adds its wake-up to
+  every round trip. Throughput being the window over the round trip, the
+  cost lands on the whole transfer rather than on the pauses.
+
+- **`wifi::Wifi::counters`** and `wifi::Counters`, the firmware's own
+  MAC-layer counters.
+
+  Everything else this driver reports is counted above the chip: frames
+  the host moved and errors the host could see. A frame the radio
+  retried four times and then delivered is an error nowhere in that
+  picture — it cost air time and latency and arrived intact — so a link
+  working hard and a link working well look identical from the host.
+  `txretrans` against `txframe` is how much of the transmit effort is
+  repeat work, and `rxoflo` counts frames the chip took off the air and
+  dropped because the host had not emptied its FIFO: the one loss on
+  this path nothing above the chip can see, since the frame never
+  arrives to be counted.
+
+  Only the leading fields, through `rxuflo`, are decoded — they are what
+  every layout version agrees on. The reply buffer is nonetheless sized
+  for the largest layout, because the firmware checks the room it is
+  offered against the whole structure and refuses the command outright
+  if it is short: a buffer big enough for the fields wanted is not big
+  enough to ask with. A version outside the known-good range gives
+  `Error::UnsupportedFormat` rather than a misread, since later firmware
+  answers this iovar with a tagged format under a much higher version
+  number.
+
+- **`wifi::Wifi::link_rate_kbps`** and **`wifi::Wifi::rssi_dbm`**, the
+  rate the two ends settled on and the signal strength behind it. A
+  transfer that seems mysteriously slow is often just a link that has
+  fallen back to the 802.11b rates, which is a ceiling nothing above it
+  can argue with; the RSSI says why it fell back.
+
 - **`wifi::Wifi::set_rx_glom`**, which asks the firmware to coalesce
   received frames or not to.
 
