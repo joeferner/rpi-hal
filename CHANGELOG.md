@@ -154,6 +154,42 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The instruction cache was never enabled on ARMv7-A**, so every
+  instruction fetch went to DRAM over a bus shared with the VideoCore.
+  `mmu32.rs` set `SCTLR.M` and `SCTLR.C` and left `SCTLR.I` clear, on the
+  stated grounds that the I-cache was "unrelated" to the `ldrex`/`strex`
+  problem `C` was there for. That was true and beside the point.
+
+  Measured on a Pi 3, reading a buffer with a summing loop:
+
+  | | before | after |
+  |---|---|---|
+  | buffer that fits in L1 | 17 MB/s | 1597 MB/s |
+  | buffer far larger than any cache | 30 MB/s | 1115 MB/s |
+
+  The giveaway is in the *before* column: the L1 figure is the lower of
+  the two, which can only mean the loop was bound by fetching its own
+  instructions rather than by the data it was reading. For scale, an
+  application parsing a TrueType face on the same board went from 84.5
+  seconds to 2.3, and rasterizing eleven glyphs from 287 ms to 6.5 ms.
+
+  It costs everything, not one workload — card reads, the network stack,
+  any decode — and it is close to invisible, because a board that is
+  merely a hundred times slower than it should be still boots, still
+  serves pages and still keeps time. Nothing reports it. An application
+  that wants to know can read the three bits itself:
+
+  ```rust
+  let sctlr: u32;
+  unsafe { core::arch::asm!("mrc p15, 0, {0}, c1, c0, 0", out(reg) sctlr) };
+  // bit 0 MMU, bit 2 D-cache, bit 12 I-cache
+  ```
+
+  ARMv6 and AArch64 were never affected — both set all three already,
+  and the ARMv6 arm carried the written-down reasoning for why an
+  uncached fetch of every instruction is expensive. Only the ARMv7 path
+  was missing it.
+
 - **A secondary core launched on AArch32 never reached its entry
   function**, because `__secondary_core_entry` did not drop out of Hyp
   mode. `_start` has done that for core 0 since the firmware was found to
