@@ -161,6 +161,31 @@ fn fill_l2(table: &Table, region: usize) {
     }
 }
 
+/// Clears the level-2 block descriptor covering `base`, leaving those
+/// 2MB with no translation.
+///
+/// The counterpart to [`set_uncached_block`] above, and deliberately much
+/// less than it: no barriers and no TLB invalidation, because
+/// [`crate::mmu::install_stack_guard`] is its only caller and runs before
+/// the MMU is enabled — nothing has translated this address yet, so there
+/// is nothing cached to shoot down.
+///
+/// # Safety
+///
+/// `base` must be 2MB-aligned and inside the regions [`L2`] covers, and
+/// the block it names must hold nothing: it becomes unreachable. Must be
+/// called before the MMU is enabled, per the reasoning above.
+pub(super) unsafe fn invalidate_block(base: u32) {
+    let base = u64::from(base);
+    let region = (base / BLOCK_1GB) as usize;
+    let index = ((base % BLOCK_1GB) / BLOCK_2MB) as usize;
+
+    let entries = L2[region].0.get() as *mut u64;
+    // Zero is an invalid descriptor, which is what `fill_l2` already wrote
+    // for every address outside RAM and the peripheral blocks.
+    unsafe { entries.add(index).write_volatile(0) };
+}
+
 /// Builds the identity-mapped translation tables and enables the MMU.
 ///
 /// Must be called at EL1 (a consumer's boot stub is responsible for the
@@ -185,6 +210,12 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
             l1.add(region)
                 .write_volatile(l2.0.get() as u64 | DESC_TABLE);
         }
+
+        // Punch the guard out of the margin below the stack, while the
+        // table is still only a pile of words in RAM -- see that
+        // function for why doing it here costs no maintenance.
+        #[cfg(feature = "rt")]
+        crate::mmu::install_stack_guard();
 
         // MAIR_EL1: attr0 = Normal, Inner+Outer Write-Back non-transient
         // Read/Write-Allocate (0xFF); attr1 = Device-nGnRE (0x04); attr2 =

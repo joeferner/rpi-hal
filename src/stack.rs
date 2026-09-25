@@ -8,10 +8,12 @@
 //!
 //! What this module is for is the question that is otherwise
 //! unanswerable from inside a program: *how close am I?* An overflow
-//! runs off the bottom of the region and takes a data abort, which
-//! without an application-supplied `__unhandled_exception` (see
-//! `vectors.s`) parks silently and looks exactly like a hang in a
-//! driver. One line at startup —
+//! runs off the bottom of the region and takes a data abort — the `mmu`
+//! feature leaves the margin below it unmapped for exactly that reason —
+//! and with no handler for it that abort parks silently and looks like a
+//! hang in a driver. `rpi-hal`'s `fault-report` feature prints it
+//! instead, and names the overflow rather than leaving a plain
+//! translation fault to be recognised. One line at startup —
 //!
 //! ```ignore
 //! writeln!(uart, "sp {:#x}, {} KiB free", stack::pointer(),

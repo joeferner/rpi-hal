@@ -193,6 +193,29 @@ pub(super) unsafe fn set_uncached_block(base: u32) {
     isb();
 }
 
+/// Clears the section descriptor covering `base`, leaving that megabyte
+/// with no translation.
+///
+/// The counterpart to [`set_uncached_block`] above, and deliberately much
+/// less than it: no cache maintenance and no TLB invalidation, because
+/// [`crate::mmu::install_stack_guard`] is its only caller and runs before
+/// the MMU is enabled — the caches are off, so the write reaches RAM on
+/// its own, and there is no translation cached for an address that has
+/// never been translated.
+///
+/// # Safety
+///
+/// `base` must be 1MB-aligned, and the megabyte it names must hold
+/// nothing: it becomes unreachable. Must be called before the MMU is
+/// enabled, per the reasoning above.
+pub(super) unsafe fn invalidate_block(base: u32) {
+    let index = (base >> SECTION_SHIFT) as usize;
+    let entry = unsafe { (PAGE_TABLE.0.get() as *mut u32).add(index) };
+    // Zero is an invalid descriptor (bits[1:0] = 00), which is what every
+    // address this table does not map already holds.
+    unsafe { entry.write_volatile(0) };
+}
+
 /// Builds the identity-mapped page table (above) and enables the MMU.
 /// Called from `boot.s`, after `VBAR`/`SCTLR.V` setup and before `.bss`
 /// zeroing/`kmain`: a fault during this sequence is at least catchable
@@ -215,6 +238,15 @@ pub(super) unsafe fn set_uncached_block(base: u32) {
 #[no_mangle]
 pub unsafe extern "C" fn rpi_hal_mmu_init() {
     let ttbr0 = PAGE_TABLE.0.get() as u32;
+
+    // Punch the guard out of the margin below the stack, while the table
+    // is still only a pile of words in RAM -- see that function for why
+    // doing it here costs no maintenance. Idempotent, which matters
+    // because every secondary core runs this too.
+    #[cfg(feature = "rt")]
+    unsafe {
+        crate::mmu::install_stack_guard()
+    };
 
     unsafe {
         // ACTLR.SMP (bit 6): per the Cortex-A7 TRM, a core must set this

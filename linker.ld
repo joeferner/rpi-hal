@@ -53,13 +53,18 @@ SECTIONS
        least 1 GiB (every Pi this crate supports) the few MiB of address
        space are noise.
 
-       `__stack_slack` below the stack is deliberate margin: an overflow
-       walks into reserved nothing for that far before it can reach
-       .data/.rodata/.text, which turns a class of silent corruption into
-       a survivable overrun. It is 2 MiB-aligned so that the `mmu`
-       feature can later leave that block unmapped and make an overflow
-       fault at the moment it happens -- 2 MiB is the coarser of the two
-       granules in play (AArch64 block, vs AArch32's 1 MiB section). */
+       `__stack_slack` below the stack is the guard region: the `mmu`
+       feature leaves it with no translation (see
+       `mmu::install_stack_guard`), so an overflow faults on the
+       instruction that causes it rather than walking into
+       .data/.rodata/.text and corrupting the running program.
+
+       2 MiB-aligned because that is the coarser of the two granules in
+       play -- an AArch64 block, against AArch32's 1 MiB section -- so
+       the region is a whole number of descriptors on either
+       architecture and no real memory shares one with it. Shrinking it
+       below one granule leaves no guard at all: the region is rounded
+       inward to whole descriptors. */
     .stack (NOLOAD) : ALIGN(0x200000)
     {
         __stack_slack_bottom = .;
@@ -77,9 +82,10 @@ SECTIONS
            through, so any main-mode frame deeper than 4 KiB sat in
            memory the first interrupt would push onto.
 
-           ABT/UND/FIQ get stacks so that an application overriding the
-           weak `__unhandled_exception` (see vectors.s) can be ordinary
-           Rust: those handlers run in their own mode, on their own
+           ABT/UND/FIQ get stacks so that a real `__unhandled_exception`
+           -- this crate's under `fault-report`, or an application's
+           overriding the weak default in fault_fallback.s -- can be
+           ordinary Rust: those handlers run in their own mode, on their own
            banked `sp`, and pushing onto one that was never initialized
            faults again immediately -- reporting nothing, which is the
            failure the override exists to fix. */
