@@ -93,6 +93,12 @@ clippy:
 	cargo clippy --release --features bcm2837,embedded-sdmmc,smoltcp --example sd_fat_read --example usb_ethernet_smoltcp --example bt_probe --example ble_advertise --example ble_scan -- -D warnings
 	# Separate line for the same reason as in `examples` above.
 	cargo clippy --release --features bcm2837,resident-fat --example sd_resident_fat_read --example sdhost_read -- -D warnings
+	# `mmu` without `rt`, which no other line here covers: every one of
+	# them has `rt` on, and the code `mmu` compiles differs without it.
+	# That gap let a dead-code warning ship -- `invalidate_block` is
+	# reachable only from the `rt`-gated stack guard -- and it surfaced in
+	# a *downstream* crate's doc build rather than here.
+	cargo clippy --release --no-default-features --features bcm2837,mmu -- -D warnings
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
