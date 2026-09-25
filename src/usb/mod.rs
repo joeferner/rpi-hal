@@ -26,7 +26,10 @@
 //! at full/low speed via periodic split scheduling (the report endpoint
 //! of a HID keyboard on a physical port). [`enumerate`](crate::usb::enumerate) ties the whole
 //! bring-up together — root-port reset, root-hub configuration, and
-//! per-port reset/probe/address — and hands each downstream device to a
+//! per-port reset/probe/address, applied again to any port that turns
+//! out to have a hub on it, so a device several hubs deep is found and
+//! pointed at the right transaction translator for where it sits — and
+//! hands each device to a
 //! callback (see the `usb_enum`/`usb_hid_keyboard` examples). On top of
 //! that sit the class drivers — HID ([`hid`](crate::usb::hid)), turning a
 //! device's report endpoint into input events: a boot-protocol keyboard
@@ -35,9 +38,8 @@
 //! on-board LAN9514
 //! USB-Ethernet controller ([`lan9514`](crate::usb::lan9514)), so far
 //! reaching its registers over vendor control transfers. Still missing:
-//! recursion into hubs plugged into the root hub's ports (only one level
-//! is walked today), bulk transfers (which Ethernet frame RX/TX needs),
-//! and the rest of the LAN9514 driver and a network stack on top. Each is
+//! bulk transfers (which Ethernet frame RX/TX needs), and the rest of the
+//! LAN9514 driver and a network stack on top. Each is
 //! real, separate work still to come, layered on top of
 //! [`dwc2`](crate::usb::dwc2)/[`control`](crate::usb::control).
 //!
@@ -100,6 +102,28 @@ use crate::usb::hub::Hub;
 /// Downstream devices are addressed from here upward.
 const ROOT_HUB_ADDRESS: u8 = 1;
 
+/// Highest USB device address (USB 2.0 spec §9.4.6 — `wValue` of
+/// SET_ADDRESS is 7 bits, and 0 is the unaddressed default). A bus with
+/// more devices than this on it is one [`enumerate`] stops walking.
+const MAX_ADDRESS: u8 = 127;
+
+/// `bDeviceClass` identifying a device as a hub (USB 2.0 spec §11.23.1)
+/// — what [`enumerate`] keys its recursion off. A hub declares this in
+/// its *device* descriptor rather than per-interface, so a downstream
+/// hub is recognizable from the descriptor read while addressing it,
+/// with no configuration descriptor needed.
+const CLASS_HUB: u8 = 9;
+
+/// How deep below the root hub [`enumerate`] descends, as a
+/// [`Device::depth`] — a device at this depth is reported, but a hub at
+/// it is not recursed into.
+///
+/// USB 2.0 spec §4.1.1 caps a bus at seven tiers: the host controller,
+/// up to five hubs in a chain, and the device. The board's root hub is
+/// the first of those five, so four more may hang below it, which puts
+/// the deepest reachable device four levels down.
+const MAX_HUB_DEPTH: u8 = 4;
+
 /// Powers the USB host controller on through the VideoCore mailbox — the
 /// mandatory first step before [`dwc2::Dwc2Host::init`], since the
 /// firmware hands the core off only partially powered (see [`dwc2`]'s
@@ -145,11 +169,21 @@ impl From<TransferError> for EnumerationError {
 /// A downstream device found and addressed by [`enumerate`], handed to
 /// its per-device callback. Everything needed to talk to the device
 /// further (read its configuration, configure it, poll its endpoints) is
-/// here.
+/// here, plus where on the bus it was found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Device {
     /// The hub downstream port (1-based) the device is on.
     pub port: u8,
+    /// Address of the hub whose [`Self::port`] this is — the root hub
+    /// for a device plugged straight into the board, or a downstream
+    /// hub's own address for one found behind it. With [`Self::port`]
+    /// it names the device's position on the bus, which survives a
+    /// reboot in a way the assigned address doesn't.
+    pub hub_address: u8,
+    /// How many hubs below the root hub the device sits: `0` on one of
+    /// the root hub's own ports, `1` behind a hub plugged into one of
+    /// those, and so on — up to four, the deepest USB allows.
+    pub depth: u8,
     /// The device's addressed endpoint 0 — address, speed, endpoint-0
     /// max packet size, and split target all filled in.
     pub endpoint: ControlEndpoint,
@@ -171,23 +205,35 @@ pub struct Device {
 /// device is addressed before the next port is touched (two devices must
 /// never sit at address 0 at once).
 ///
+/// A device that turns out to be a hub itself is brought up the same way
+/// the root hub was and walked in turn, depth first, so the whole bus is
+/// reported however many hubs deep it goes (up to the four levels below
+/// the root hub that USB allows). Each device carries the
+/// [`hub_address`](Device::hub_address)/[`port`](Device::port) it was
+/// found on and its [`depth`](Device::depth), and its
+/// [`endpoint`](Device::endpoint) already points at the right
+/// transaction translator for its position — the nearest high-speed hub
+/// above it, which for a device several levels down is not necessarily
+/// the hub it is plugged into (see
+/// [`Hub::split_target`](hub::Hub::split_target)).
+///
 /// `on_device` receives the [`Channel`] enumeration ran on (to do
 /// further transfers), the timer, and the [`Device`]; return
 /// [`ControlFlow::Break`] from it to stop enumerating early (e.g. once
 /// the device of interest is found), or [`ControlFlow::Continue`] to
-/// keep going. A port whose reset or descriptor read fails is skipped
-/// rather than aborting the whole enumeration; only a failure of the
-/// shared root-hub bring-up returns an [`EnumerationError`].
+/// keep going. A hub is reported to `on_device` before the devices
+/// behind it, so breaking on one stops before it is walked.
+///
+/// A port whose reset or descriptor read fails is skipped rather than
+/// aborting the whole enumeration, as is a hub that fails to configure
+/// (it is still reported, just not descended into); only a failure of
+/// the shared root-hub bring-up returns an [`EnumerationError`].
 ///
 /// The controller is borrowed immutably, so a callback that needs a
 /// channel of its own — one to keep polling a device's endpoint after
 /// enumeration finishes, say — can capture the same `&Dwc2Host` and
 /// call [`Dwc2Host::alloc_channel`] on it. The channel passed in is
 /// enumeration's own and goes away when this returns.
-///
-/// This drives a single level of hubs (the root hub's own ports); a hub
-/// plugged into one of those ports is reported as a device but not itself
-/// recursed into.
 pub fn enumerate<F>(
     dwc2: &Dwc2Host,
     timer: &Timer,
@@ -219,12 +265,43 @@ where
     };
     let (hub_endpoint, _root_descriptor) =
         probe_and_address(channel, timer, root, ROOT_HUB_ADDRESS)?;
-    let hub = Hub::configure(channel, timer, hub_endpoint)?;
+    let hub = Hub::configure(channel, timer, hub_endpoint, dwc2.port_speed() == 0)?;
 
+    // Whether the walk ran to the end or a callback broke out of it makes
+    // no difference here: stopping early is the caller's own request, not
+    // something to report as a failure.
+    let mut next_address = ROOT_HUB_ADDRESS + 1;
+    let _ = enumerate_hub(channel, timer, &hub, 0, &mut next_address, &mut on_device);
+
+    Ok(())
+}
+
+/// Walks one hub's downstream ports, reporting each device through
+/// `on_device` and recursing into any device that is itself a hub.
+/// Returns [`ControlFlow::Break`] if enumeration should stop entirely —
+/// either because `on_device` asked it to, or because there are no
+/// addresses left to hand out.
+///
+/// `depth` is the [`Device::depth`] of the devices on *this* hub's
+/// ports, so the root hub is walked with `0`. `next_address` is threaded
+/// through rather than derived from the depth because addresses are one
+/// flat sequence across the whole bus, not per hub.
+///
+/// Taking `on_device` as a `dyn FnMut` rather than a generic is what
+/// makes the recursion possible at all: a generic callback would have to
+/// monomorphize into a distinct function per nesting level, which for a
+/// function that calls itself does not terminate.
+fn enumerate_hub(
+    channel: &mut Channel,
+    timer: &Timer,
+    hub: &Hub,
+    depth: u8,
+    next_address: &mut u8,
+    on_device: &mut dyn FnMut(&mut Channel, &Timer, Device) -> ControlFlow<()>,
+) -> ControlFlow<()> {
     // Enumerate each connected port's device, one at a time — addressing
     // each before touching the next so two just-reset devices don't both
     // sit at address 0. A port that misbehaves is skipped, not fatal.
-    let mut next_address = ROOT_HUB_ADDRESS + 1;
     for port in 1..=hub.num_ports {
         let Ok(status) = hub.port_status(channel, timer, port) else {
             continue;
@@ -239,27 +316,46 @@ where
             continue;
         }
 
+        if *next_address > MAX_ADDRESS {
+            return ControlFlow::Break(());
+        }
         let probe = ControlEndpoint {
             address: 0,
             low_speed: status.low_speed(),
             max_packet_size: 8,
             split: hub.split_target(port, &status),
         };
-        let address = next_address;
+        let address = *next_address;
         let Ok((endpoint, descriptor)) = probe_and_address(channel, timer, probe, address) else {
             continue;
         };
-        next_address += 1;
+        *next_address += 1;
 
         let device = Device {
             port,
+            hub_address: hub.endpoint().address,
+            depth,
             endpoint,
             descriptor,
         };
         if on_device(channel, timer, device).is_break() {
-            break;
+            return ControlFlow::Break(());
+        }
+
+        // A hub declares itself in its device descriptor, so this is
+        // already known without reading anything further. Configuring it
+        // powers and settles its own ports, after which it is driven
+        // exactly like the root hub was.
+        if descriptor.device_class == CLASS_HUB && depth < MAX_HUB_DEPTH {
+            let Ok(child) = Hub::configure(channel, timer, endpoint, status.high_speed()) else {
+                continue;
+            };
+            if enumerate_hub(channel, timer, &child, depth + 1, next_address, on_device).is_break()
+            {
+                return ControlFlow::Break(());
+            }
         }
     }
 
-    Ok(())
+    ControlFlow::Continue(())
 }

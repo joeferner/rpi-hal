@@ -4,6 +4,63 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`usb::enumerate` walks hubs plugged into hubs.** It used to stop one
+  level down: a hub in one of the board's ports was reported as a device
+  and everything behind it was invisible, so a keyboard on a hub simply
+  did not exist as far as this crate was concerned
+  ([issue #15](https://github.com/joeferner/rpi-hal/issues/15)). The
+  per-port bring-up — reset, probe, address, and now configure-and-descend
+  when the descriptor says class 9 — is applied to each hub it meets, in
+  depth-first order, down to the four levels below the root hub that USB
+  2.0 §4.1.1 allows.
+
+  `usb::Device` gained `hub_address` and `depth` to say where on the bus
+  the device was found, which a flat walk had no need to report. The
+  callback is generic, so the recursion goes through a `dyn FnMut`
+  internally: monomorphizing a generic callback per nesting level is a
+  recursion the compiler does not terminate.
+
+  What actually makes a device several levels down reachable is the split
+  target, and it is not simply "the hub it is plugged into". A transaction
+  translator lives in a *high-speed* hub, so a full-speed hub below one
+  has none of its own — everything under it is on the same full-speed
+  segment and belongs to the translator further up, which is now what
+  `usb::hub::Hub::split_target` returns. Getting this wrong is not a
+  degraded transfer, it is a transfer addressed to a translator that isn't
+  there.
+
+### Changed
+
+- **The hub port requests in `usb::control` take the hub's
+  `ControlEndpoint` instead of its address and low-speed flag** —
+  `set_port_power`, `get_port_status`, `set_port_reset` and
+  `clear_port_feature`. Breaking, and it is what makes the recursion above
+  possible: those requests are addressed *to the hub*, so reaching a hub
+  that is itself behind another hub means carrying that hub's own split
+  target, which an address and a bool cannot express.
+
+- **`usb::hub::Hub::configure` waits the connect debounce on top of
+  `bPwrOn2PwrGood`**, 100ms more per hub. The two waits are for different
+  things: the power-good delay is the hub's rail reaching the port, and
+  only once it has does the attached device start up and drive the pull-up
+  that announces it — which USB 2.0 §7.1.7.3 allows a further 100ms
+  (`TATTDB`) to settle. This is conformance rather than a fix for anything
+  observed; no device on the bench was found to need it. It is also not a
+  general answer to a device that attaches late, which no fixed delay is:
+  that is what a hub's status-change endpoint is for, and `enumerate`
+  remains a one-shot snapshot of the bus.
+
+- **`usb::hub::Hub::configure` takes a `high_speed` flag** and exposes it
+  as a field, alongside a new `Hub::endpoint` accessor. Breaking.
+  `ControlEndpoint` distinguishes only low speed from the rest, because
+  that is the one bit a transfer puts on the wire — but whether a hub has
+  a transaction translator at all turns on high speed versus full, so the
+  caller that reset the port (and read its speed bits) has to pass it in.
+
 ## [0.7.0] - 2026-09-25
 
 ### Added

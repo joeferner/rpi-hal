@@ -24,6 +24,19 @@ const PORT_RESET_POLLS: u32 = 20;
 /// Delay between the port-status polls of [`Hub::reset_port`].
 const PORT_RESET_POLL_MS: u32 = 10;
 
+/// How long [`Hub::configure`] waits for attached devices to show up
+/// after powering the ports, on top of the hub's own `bPwrOn2PwrGood`.
+///
+/// The two waits are for different things and neither substitutes for
+/// the other. `bPwrOn2PwrGood` is the hub's own power rail reaching the
+/// port; only once it has does the attached device start up and drive
+/// the pull-up that signals its speed, and USB 2.0 spec §7.1.7.3 gives
+/// that up to 100ms (`TATTDB`) to settle before a hub is required to
+/// report it. Reading a port's status the moment the power-good delay
+/// expires therefore reads it before the device is there, and a hub with
+/// a device on every port answers "nothing attached" for all of them.
+const CONNECT_DEBOUNCE_MS: u32 = 100;
+
 /// The `wPortStatus` bitmap from a hub GET_PORT_STATUS (USB 2.0 spec
 /// §11.24.2.7) — a downstream port's connection, enable, power, and
 /// attached-device speed, wrapped so callers read named bits.
@@ -57,10 +70,12 @@ impl PortStatus {
     }
 }
 
-/// A configured USB hub: its addressed endpoint 0 plus the two facts
-/// needed to drive its downstream ports (how many there are, and how
-/// long to wait after powering one). Build it with [`Self::configure`],
-/// then reset and inspect individual ports through it.
+/// A configured USB hub: its addressed endpoint 0 plus the facts
+/// needed to drive its downstream ports (how many there are, how long
+/// to wait after powering one, and whether the hub is running at high
+/// speed and so has a transaction translator). Build it with
+/// [`Self::configure`], then reset and inspect individual ports through
+/// it.
 pub struct Hub {
     endpoint: ControlEndpoint,
     /// `bNbrPorts` — the number of downstream ports (1-based when
@@ -69,21 +84,32 @@ pub struct Hub {
     /// `bPwrOn2PwrGood` converted to milliseconds — how long to wait
     /// after powering a port before a device on it is stable.
     pub power_on_good_ms: u32,
+    /// Whether the hub itself is operating at high speed, which is what
+    /// decides whether it has a transaction translator of its own — see
+    /// [`Self::split_target`].
+    pub high_speed: bool,
 }
 
 impl Hub {
     /// Brings up the already-addressed hub at `endpoint`: activates its
     /// configuration, reads its class descriptor for the port count and
     /// power-on-good delay, powers every downstream port, and waits that
-    /// delay before returning a [`Hub`] ready to drive those ports.
+    /// delay plus the 100ms USB gives an attached device to announce
+    /// itself before returning a [`Hub`] ready to drive those ports.
     ///
     /// `endpoint` must be the hub's endpoint 0 after SET_ADDRESS, with
     /// its real `bMaxPacketSize0` (see
     /// [`control::probe_and_address`](crate::usb::control::probe_and_address)).
+    /// `high_speed` is whether the hub is itself running at high speed —
+    /// `Dwc2Host::port_speed() == 0` for a hub on the root port, or
+    /// [`PortStatus::high_speed`] of the upstream hub port it is plugged
+    /// into. It can't be read back off `endpoint`, which distinguishes
+    /// only low speed from the rest, and [`Self::split_target`] needs it.
     pub fn configure(
         channel: &mut Channel,
         timer: &Timer,
         endpoint: ControlEndpoint,
+        high_speed: bool,
     ) -> Result<Hub, EnumerationError> {
         let mut config = [0u8; 64];
         get_configuration_descriptor(channel, timer, endpoint, 0, &mut config)?;
@@ -102,15 +128,23 @@ impl Hub {
         let power_on_good_ms = hub_descriptor[5] as u32 * 2;
 
         for port in 1..=num_ports {
-            set_port_power(channel, timer, endpoint.address, port, endpoint.low_speed)?;
+            set_port_power(channel, timer, endpoint, port)?;
         }
-        timer.delay_ms(power_on_good_ms);
+        timer.delay_ms(power_on_good_ms + CONNECT_DEBOUNCE_MS);
 
         Ok(Hub {
             endpoint,
             num_ports,
             power_on_good_ms,
+            high_speed,
         })
+    }
+
+    /// The hub's own addressed endpoint 0 — what further control
+    /// transfers to the hub (and the split target of anything below it)
+    /// are built from.
+    pub fn endpoint(&self) -> ControlEndpoint {
+        self.endpoint
     }
 
     /// Reads downstream `port`'s current [`PortStatus`] (1-based).
@@ -120,13 +154,7 @@ impl Hub {
         timer: &Timer,
         port: u8,
     ) -> Result<PortStatus, EnumerationError> {
-        let (status, _change) = get_port_status(
-            channel,
-            timer,
-            self.endpoint.address,
-            port,
-            self.endpoint.low_speed,
-        )?;
+        let (status, _change) = get_port_status(channel, timer, self.endpoint, port)?;
         Ok(PortStatus(status))
     }
 
@@ -145,23 +173,15 @@ impl Hub {
         timer: &Timer,
         port: u8,
     ) -> Result<PortStatus, EnumerationError> {
-        let hub_address = self.endpoint.address;
-        let low_speed = self.endpoint.low_speed;
+        let endpoint = self.endpoint;
 
-        let _ = clear_port_feature(
-            channel,
-            timer,
-            hub_address,
-            port,
-            PORT_FEATURE_C_CONNECTION,
-            low_speed,
-        );
-        set_port_reset(channel, timer, hub_address, port, low_speed)?;
+        let _ = clear_port_feature(channel, timer, endpoint, port, PORT_FEATURE_C_CONNECTION);
+        set_port_reset(channel, timer, endpoint, port)?;
 
         let mut status = PortStatus(0);
         for _ in 0..PORT_RESET_POLLS {
             timer.delay_ms(PORT_RESET_POLL_MS);
-            if let Ok((s, _)) = get_port_status(channel, timer, hub_address, port, low_speed) {
+            if let Ok((s, _)) = get_port_status(channel, timer, endpoint, port) {
                 status = PortStatus(s);
                 if status.enabled() {
                     break;
@@ -169,22 +189,35 @@ impl Hub {
             }
         }
 
-        let _ = clear_port_feature(
-            channel,
-            timer,
-            hub_address,
-            port,
-            PORT_FEATURE_C_RESET,
-            low_speed,
-        );
+        let _ = clear_port_feature(channel, timer, endpoint, port, PORT_FEATURE_C_RESET);
         Ok(status)
     }
 
     /// The [`SplitTarget`] for a device on downstream `port`, given its
-    /// (post-reset) [`PortStatus`]: `Some` for a full/low-speed device
-    /// (its transfers go through this hub's transaction translator),
-    /// `None` for a high-speed device (it reaches the host directly).
+    /// (post-reset) [`PortStatus`] — the nearest transaction translator
+    /// upstream of that device, or `None` if it needs none.
+    ///
+    /// A transaction translator lives in a *high-speed* hub, one per
+    /// downstream port (or one shared by all of them), and exists to
+    /// relay a slower device's transfers onto the high-speed bus above.
+    /// So which one a device needs depends on where the speed actually
+    /// changes:
+    ///
+    /// - This hub is high speed and the device is too: no translation,
+    ///   `None`.
+    /// - This hub is high speed and the device is full/low speed: the
+    ///   bus changes speed right here, so this hub's translator on
+    ///   `port` is the target.
+    /// - This hub is *not* high speed: it has no translator at all, and
+    ///   everything below it sits on the same full/low-speed bus segment
+    ///   the hub itself is on. The device therefore shares the hub's own
+    ///   split target — the translator further upstream where that
+    ///   segment began, or `None` if the whole chain is full speed down
+    ///   from the root port.
     pub fn split_target(&self, port: u8, status: &PortStatus) -> Option<SplitTarget> {
+        if !self.high_speed {
+            return self.endpoint.split;
+        }
         if status.high_speed() {
             None
         } else {
