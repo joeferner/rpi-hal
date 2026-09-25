@@ -134,6 +134,16 @@ pub enum Error {
     /// this driver rather than anything the hardware did: the fix is to
     /// widen that buffer for the tag that needs it.
     ValueTooLarge,
+    /// The firmware answered with a zero-width or zero-height display
+    /// mode, which means it has no mode configured — nothing plugged in,
+    /// or an output it could not bring up.
+    ///
+    /// Unlike the variants above this is the firmware answering, not
+    /// failing to: only [`Mailbox::display_mode`] turns it into an error,
+    /// because a size to allocate is what that function exists to
+    /// produce. [`Mailbox::display_size`] passes the zeros through
+    /// unjudged.
+    NoDisplayMode,
 }
 
 /// Identifies which SoC clock a [`Mailbox::clock_rate_hz`] query is
@@ -368,6 +378,132 @@ impl DisplayId {
             other => Self::Other(other),
         }
     }
+}
+
+/// How many displays [`Mailbox::select_display`] will enumerate.
+///
+/// More than any Pi has, so a preference list runs out of displays to
+/// name before it runs out of room. A firmware reporting more than this
+/// has its surplus ignored rather than being refused: the ones that
+/// matter are attached, and the fallback is display 0 either way.
+pub const MAX_DISPLAYS: usize = 5;
+
+/// What [`Mailbox::select_display`] did, and what it had to choose from.
+///
+/// Returned rather than logged because this crate has no console to log
+/// to. The caller does — and needs to: with two displays attached, a
+/// picture on the wrong one is otherwise a mystery, and which of the
+/// outcomes below happened is the whole explanation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Selection {
+    /// The displays the firmware reported, indexed by its own numbering.
+    /// An entry is `None` where the query failed.
+    attached: [Option<DisplayId>; MAX_DISPLAYS],
+    /// How many of [`Self::attached`] the firmware actually reported.
+    count: usize,
+    /// The display the framebuffer tags now act on, as far as this can
+    /// tell. `None` only if the firmware would not say what display 0 is.
+    chosen: Option<DisplayId>,
+    /// How [`Self::chosen`] came to be the one.
+    outcome: Outcome,
+    /// What `num_displays` answered, or `None` where it would not answer
+    /// at all.
+    reported: Option<u32>,
+}
+
+impl Selection {
+    /// The displays the firmware reported, paired with its own number for
+    /// each — which is what [`Mailbox::set_display_num`] takes, and what
+    /// a log line should name alongside the id.
+    pub fn attached(&self) -> impl Iterator<Item = (u32, Option<DisplayId>)> + '_ {
+        self.attached[..self.count]
+            .iter()
+            .enumerate()
+            .map(|(number, id)| (number as u32, *id))
+    }
+
+    /// How many displays the firmware reported.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// The display the framebuffer tags act on after the call.
+    pub fn chosen(&self) -> Option<DisplayId> {
+        self.chosen
+    }
+
+    /// How [`Self::chosen`] came to be the one.
+    pub fn outcome(&self) -> Outcome {
+        self.outcome
+    }
+
+    /// How many displays the firmware said it had, or `None` where it did
+    /// not answer the question at all.
+    ///
+    /// The distinction [`Outcome::Sole`] cannot make, and the one worth
+    /// having when two displays are plugged in and only one is reported.
+    /// `None` is a firmware too old to know the tag. `Some(1)` is a
+    /// firmware that knows it and means it — on a Pi that usually means
+    /// `max_framebuffers` has been left at its default of 1 in
+    /// `config.txt`, which is what decides how many displays the firmware
+    /// will expose regardless of how many are attached.
+    ///
+    /// `Some(0)` happens too, and is read here the same way as `Some(1)`:
+    /// whatever the picture is going to land on is already selected.
+    pub fn reported_count(&self) -> Option<u32> {
+        self.reported
+    }
+}
+
+/// How [`Mailbox::select_display`] arrived at the display it did.
+///
+/// Worth distinguishing at the call site rather than collapsing to a
+/// bool: three of these four are fine and one is a preference that could
+/// not be met, and only the caller knows whether that is worth saying
+/// loudly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// One display, so there was nothing to choose and nothing was
+    /// changed. Also what a firmware too old to know these tags gets: it
+    /// names nothing and counts nothing, and has one display as far as it
+    /// is concerned.
+    ///
+    /// [`Selection::reported_count`] tells those two apart, which matters
+    /// when more than one display is plugged in and this is still the
+    /// outcome.
+    Sole,
+    /// The preference list named a display that was attached, and the
+    /// firmware moved the framebuffer tags to it.
+    Preferred,
+    /// The preference list was empty, so the firmware's own selection
+    /// stands. With more than one display attached that selection is
+    /// whichever it enumerated first this boot, which is not stable from
+    /// boot to boot.
+    Firmwares,
+    /// Nothing in the preference list was attached, or the firmware
+    /// refused to select it, so display 0 was taken instead.
+    FellBack,
+}
+
+/// The size to allocate a framebuffer so the firmware does not scale it —
+/// see [`Mailbox::display_mode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayMode {
+    /// Width to allocate, in pixels.
+    pub width: u32,
+    /// Height to allocate, in pixels.
+    pub height: u32,
+    /// The overscan border as it was found, before any attempt to clear
+    /// it. Zero where there was none.
+    pub overscan: Overscan,
+    /// Whether the border was cleared.
+    ///
+    /// `false` alongside a non-zero [`Self::overscan`] means the firmware
+    /// would not give it up — `config.txt` pinning the values does that —
+    /// so the image genuinely has to stay inside the border, and
+    /// [`Self::width`]/[`Self::height`] are the area within it rather
+    /// than the whole mode.
+    pub overscan_cleared: bool,
 }
 
 /// A framebuffer allocated by [`Mailbox::allocate_framebuffer`]: where
@@ -960,6 +1096,206 @@ impl Mailbox {
     /// returns where to write pixels.
     ///
     /// The buffer is exactly the size of the display, so pixels are
+    /// Points the framebuffer tags at the first display in `order` that
+    /// is actually attached.
+    ///
+    /// With one display there is nothing to choose and nothing is
+    /// changed: the tags already act on it. With two — a DSI panel and
+    /// HDMI both plugged in — which one they act on is whichever the
+    /// firmware enumerated as number 0 that boot, and that is *not stable
+    /// from boot to boot*. A board that wants a particular screen has to
+    /// say so, which is what `order` is: most preferred first.
+    ///
+    /// An empty `order` enumerates and reports without selecting
+    /// anything, leaving the firmware's own choice in force.
+    ///
+    /// Call this **before** [`display_mode`](Self::display_mode) and
+    /// before allocating: both act on the selected display, so asking
+    /// first sizes the buffer from whichever screen the firmware happened
+    /// to start on.
+    ///
+    /// # What it reports, and why it does not log
+    ///
+    /// Everything worth saying comes back in the [`Selection`] rather
+    /// than going to a console this crate does not have. A caller that
+    /// wants the usual bring-up lines has all of it: which displays were
+    /// found and under what numbers, which one was taken, and by
+    /// [`Outcome`] whether that was the preference, the firmware's own
+    /// choice, or a fallback.
+    ///
+    /// # Errors
+    ///
+    /// None. A firmware that answers neither `num_displays` nor
+    /// `display_id` has one display as far as it is concerned, already
+    /// selected — so a failed query is not an error here, it is
+    /// [`Outcome::Sole`], and moving the selection could only make things
+    /// worse.
+    pub fn select_display(&mut self, order: &[DisplayId]) -> Selection {
+        let reported = self.num_displays().ok();
+        let count = (reported.unwrap_or(0) as usize).min(MAX_DISPLAYS);
+        let mut attached = [None; MAX_DISPLAYS];
+
+        if count < 2 {
+            attached[0] = self.display_id(0).ok();
+            return Selection {
+                attached,
+                // A firmware answering zero still has the one display the
+                // picture is going to land on, and a caller listing what
+                // it found should see it.
+                count: count.max(1),
+                chosen: attached[0],
+                outcome: Outcome::Sole,
+                reported,
+            };
+        }
+
+        // Asking what each display is does not select it — the number is
+        // an argument of the query, not the firmware's selection — so the
+        // enumeration runs first and touches nothing, and the single
+        // `set_display_num` below is the only thing that decides where
+        // the framebuffer lands.
+        for (number, id) in attached.iter_mut().enumerate().take(count) {
+            *id = self.display_id(number as u32).ok();
+        }
+
+        if order.is_empty() {
+            return Selection {
+                attached,
+                count,
+                chosen: attached[0],
+                outcome: Outcome::Firmwares,
+                reported,
+            };
+        }
+
+        for wanted in order {
+            let Some(number) = attached[..count].iter().position(|id| id == &Some(*wanted)) else {
+                continue;
+            };
+            if self.set_display_num(number as u32).is_ok() {
+                return Selection {
+                    attached,
+                    count,
+                    chosen: Some(*wanted),
+                    outcome: Outcome::Preferred,
+                    reported,
+                };
+            }
+        }
+
+        // Nothing named is attached, or the firmware refused. Display 0 is
+        // where the picture would have landed with no preference expressed
+        // at all, so that is what an unsatisfiable one falls back to —
+        // stated rather than assumed, since a `set_display_num` that
+        // failed in the loop above is the one case where the selection is
+        // not known to still be where it started.
+        let _ = self.set_display_num(0);
+        Selection {
+            attached,
+            count,
+            chosen: attached[0],
+            outcome: Outcome::FellBack,
+            reported,
+        }
+    }
+
+    /// The size to allocate so the firmware does not scale the picture.
+    ///
+    /// **The firmware scales a framebuffer to the display mode.** A buffer
+    /// smaller than the mode is not letterboxed into a corner, it is
+    /// stretched to fill the screen — and by a different factor in each
+    /// axis if the aspect ratios differ, which is what a logo drawn round
+    /// and shown oval means. So this is not "a reasonable size to draw
+    /// in", it is the mode exactly, and getting it wrong is visible
+    /// rather than merely wasteful.
+    ///
+    /// # Why this is more than one query
+    ///
+    /// The firmware keeps a blank overscan border, for televisions that
+    /// crop their input, and "Get Physical Width/Height" reports the image
+    /// *inside* it — so a 720×576 mode with a 32-pixel border answers
+    /// 656×512. Clearing the border does not resize a framebuffer the
+    /// firmware has already made, and re-querying after the clear still
+    /// answers the inner size, so the border has to be read **first** and
+    /// added back arithmetically to recover the mode.
+    ///
+    /// # This clears the border
+    ///
+    /// Unavoidably, and that is why this takes `&mut self`: the full mode
+    /// is not otherwise obtainable. A firmware that will not give it up —
+    /// `config.txt` pinning the values — means the image genuinely has to
+    /// stay inside it, and [`DisplayMode::overscan_cleared`] is `false`
+    /// with the inner size reported, which is then the right size to
+    /// allocate. A caller that wants its border kept should not call
+    /// this; [`overscan`](Self::overscan) and
+    /// [`display_size`](Self::display_size) are the parts it composes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoDisplayMode`] where the firmware reports a zero
+    /// width or height, which means it has no mode configured and is no
+    /// more usable than no answer at all. What to do about that is the
+    /// caller's — a fallback size is a policy, not a fact about the
+    /// hardware.
+    ///
+    /// What this cannot fix is a firmware driving the *wrong mode*: if a
+    /// 1024×600 panel is being sent 720×576, this answers 720×576,
+    /// correctly, and the panel does the stretching. That is a
+    /// `config.txt` matter (`hdmi_cvt`/`hdmi_group`/`hdmi_mode`).
+    pub fn display_mode(&mut self) -> Result<DisplayMode, Error> {
+        // Read the border *before* clearing it: once it is zero, the size
+        // it was hiding cannot be recovered from the firmware any more.
+        let overscan = self.overscan().unwrap_or(Overscan {
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+        });
+
+        let inner = self.display_size()?;
+        if inner.width == 0 || inner.height == 0 {
+            return Err(Error::NoDisplayMode);
+        }
+
+        if overscan.is_zero() {
+            return Ok(DisplayMode {
+                width: inner.width,
+                height: inner.height,
+                overscan,
+                overscan_cleared: true,
+            });
+        }
+
+        // Read the border back rather than trusting what `set_overscan`
+        // echoed: the echo is that one call's answer, while a fresh query
+        // is independent evidence that the change took.
+        let cleared = self
+            .set_overscan(Overscan {
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+            })
+            .is_ok()
+            && self.overscan().is_ok_and(|border| border.is_zero());
+
+        Ok(if cleared {
+            DisplayMode {
+                width: inner.width + overscan.left + overscan.right,
+                height: inner.height + overscan.top + overscan.bottom,
+                overscan,
+                overscan_cleared: true,
+            }
+        } else {
+            DisplayMode {
+                width: inner.width,
+                height: inner.height,
+                overscan,
+                overscan_cleared: false,
+            }
+        })
+    }
+
     /// written to the memory the VideoCore is scanning out at that very
     /// moment. Anything that redraws a whole frame will show a partly
     /// updated picture for as long as the redraw takes — see
