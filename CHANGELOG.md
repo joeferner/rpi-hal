@@ -165,6 +165,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`Rng::new` handed out words the generator had queued before it was
+  asked to warm up.** The constructor arms a discard of 262,144 samples
+  and documents the first read as transparently waiting it out. On a
+  board whose generator was already enabled — left running by the
+  firmware, or by a previous image loaded over a UART loader, which is
+  the normal case when developing without power-cycling — arming the
+  count does not flush the output FIFO, so the first reads returned the
+  queued words and the ~0.74 s warmup stall landed on the read after
+  they ran out. Timed per word on a Pi 3: 6 µs, 5 µs, 4 µs, 4 µs, then
+  736,688 µs.
+
+  Those four may well be good output from the generator's previous run,
+  but nothing readable from inside `Rng` says whether whatever enabled
+  the block armed a warmup of its own; if it did not, they are exactly
+  the early biased samples the discard exists to remove. For a function
+  whose callers include a TLS client random and an ECDHE private half,
+  on a system with no entropy pool and no seed file behind it, that is
+  not a distinction to leave to chance. `new` now drains the FIFO until
+  the status word count reads zero. A cold boot is unaffected — the FIFO
+  is empty and the loop does not run — and the stall moves back onto the
+  first read, where it is predictable.
+
 - **The instruction cache was never enabled on ARMv7-A**, so every
   instruction fetch went to DRAM over a bus shared with the VideoCore.
   `mmu32.rs` set `SCTLR.M` and `SCTLR.C` and left `SCTLR.I` clear, on the

@@ -45,9 +45,10 @@ const RNG_CTRL_EN: u32 = 0x1;
 const RNG_INT_OFF: u32 = 0x1;
 /// Number of entropy-source samples the block discards before its
 /// output is trusted, written into `RNG_STATUS` at init. Until this
-/// many samples have been drawn the FIFO stays empty (status word-count
-/// reads zero), so the read path's own wait naturally covers warmup —
-/// no separate spin in [`Rng::new`]. `0x40000` is the value the
+/// many samples have been drawn the block presents no new words (status
+/// word-count reads zero), so once [`Rng::new`] has emptied whatever was
+/// already queued, the read path's own wait naturally covers warmup — no
+/// separate spin in the constructor. `0x40000` is the value the
 /// reference drivers use.
 const RNG_WARMUP_COUNT: u32 = 0x40000;
 
@@ -57,12 +58,25 @@ pub struct Rng {
 }
 
 impl Rng {
-    /// Enables the generator and arms its warmup discard.
+    /// Enables the generator, arms its warmup discard, and empties the
+    /// output FIFO.
     ///
     /// Doesn't block: warmup completes asynchronously in hardware, and
     /// the block simply reports no words available until it's done — so
     /// the first [`next_u32`](Rng::next_u32) transparently waits out any
     /// remaining warmup rather than this constructor stalling for it.
+    ///
+    /// The FIFO drain is what makes that true on a board whose generator
+    /// was already running — left enabled by the firmware, or by a
+    /// previous image loaded over a UART loader, which is the normal case
+    /// when developing without power-cycling. Arming a fresh warmup count
+    /// does not flush words the block had already queued, so without the
+    /// drain the first few reads return those and the warmup stall lands
+    /// at an unpredictable later word instead. Those queued words may be
+    /// perfectly good output from the generator's previous run, but
+    /// nothing readable from this side distinguishes that from a block
+    /// enabled with no warmup armed at all, whose first words are exactly
+    /// the biased samples the discard exists to remove — so they go.
     ///
     /// # Safety of construction
     ///
@@ -85,7 +99,16 @@ impl Rng {
             // Enable the generator.
             core::ptr::write_volatile(RNG_CTRL, RNG_CTRL_EN);
         }
-        Self { _private: () }
+        let rng = Self { _private: () };
+        // Drop anything the block had queued from a previous run, so the
+        // warmup just armed is what every word this `Rng` hands out has
+        // been through. On a cold boot the FIFO is empty and this does
+        // not execute; the block is now warming up, so it presents no
+        // new words for the loop to chase.
+        while rng.words_available() != 0 {
+            unsafe { core::ptr::read_volatile(RNG_DATA) };
+        }
+        rng
     }
 
     /// Number of 32-bit words currently available to read without
