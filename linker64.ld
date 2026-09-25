@@ -44,11 +44,18 @@ SECTIONS
        to EL1h run on `SP_EL1`, the same one `kmain` is using, so there
        are no banked per-mode stacks to reserve.
 
-       `__stack_slack` below it is deliberate margin -- an overflow walks
-       into reserved nothing for that far before it can reach
-       .data/.rodata/.text -- and is 2 MiB-aligned so the `mmu` feature
-       can later leave that block unmapped and make an overflow fault
-       where it happens. 2 MiB is the AArch64 block size. */
+       `__stack_slack` below it is the guard region: the `mmu` feature
+       leaves it with no translation (see `mmu::install_stack_guard`), so
+       an overflow faults on the instruction that causes it rather than
+       walking into .data/.rodata/.text and corrupting the running
+       program.
+
+       2 MiB-aligned because that is this architecture's block size, and
+       also the coarser of the two granules in play across the pair of
+       scripts -- so the region is a whole number of descriptors either
+       way and no real memory shares one with it. Shrinking it below one
+       block leaves no guard at all: the region is rounded inward to
+       whole descriptors. */
     .stack (NOLOAD) : ALIGN(0x200000)
     {
         __stack_slack_bottom = .;

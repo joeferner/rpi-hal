@@ -112,6 +112,83 @@ use crate::cache::clean_invalidate_range;
 /// build for both targets — 2MB, the value below on AArch64.
 pub const UNCACHED_GRANULE: usize = imp::UNCACHED_GRANULE;
 
+/// Bytes one translation-table descriptor covers.
+///
+/// The same number [`UNCACHED_GRANULE`] publishes, named again because
+/// [`install_stack_guard`] cares about the shape of the table rather than
+/// about `set_uncached`'s contract — and the day those stop being the same
+/// number, each wants to move on its own.
+#[cfg(feature = "rt")]
+const DESCRIPTOR_BYTES: usize = imp::UNCACHED_GRANULE;
+
+#[cfg(feature = "rt")]
+extern "C" {
+    /// Lowest address of the reserved margin below the main stack.
+    static __stack_slack_bottom: u8;
+    /// Lowest address of the main stack, and one past the top of the
+    /// margin below it.
+    static __stack_bottom: u8;
+}
+
+/// Leaves the reserved margin below the main stack with no translation, so
+/// that an overflow faults on the instruction that causes it.
+///
+/// Without this a stack overflow is not an error at all. The map is an
+/// identity map of every address below the peripheral base, so `sp`
+/// descending past `__stack_bottom` crosses nothing the hardware objects
+/// to: it walks the margin, reaches `.data` and `.text` below it, and
+/// overwrites the running program. What that looks like is not a fault but
+/// a board that behaves strangely and later reboots, arbitrarily far from
+/// the call that actually went too deep.
+///
+/// The margin is reserved by this crate's linker scripts (`__stack_slack`,
+/// 2 MiB) and is 2 MiB-aligned precisely so it can be given up here: 2 MiB
+/// is the coarser of the two granules in play, so the region is a whole
+/// number of descriptors on either architecture and no real memory shares
+/// one with it. It holds nothing — `.stack` is a `NOLOAD` region between
+/// `.data` and `.bss` — so nothing is lost by making it unreachable, and
+/// the 2 MiB of address space is noise on a board with at least a
+/// gigabyte.
+///
+/// Rounded inward, so a margin that has been overridden to something not a
+/// multiple of a descriptor gives up only the descriptors lying entirely
+/// inside it. A margin smaller than one descriptor yields no guard at all
+/// rather than an approximate one.
+///
+/// # What this does not cover
+///
+/// Only the main stack of the core that boots. The AArch32 exception-mode
+/// stacks sit *above* `__stack_top`, and a secondary core runs on a
+/// [`Stack`](crate::multicore::Stack) the application placed in `.bss`;
+/// both are ordinary mapped memory with their neighbours right below them,
+/// exactly as this one used to be.
+///
+/// # Safety
+///
+/// Called from `rpi_hal_mmu_init` on each core, after the table is built
+/// and before the MMU is enabled. That ordering is what makes it free of
+/// cache and TLB maintenance: the descriptor write lands in RAM with the
+/// caches off, and there is no stale translation to invalidate because
+/// there are no translations yet. Writing the same zeroes on every core is
+/// why calling it more than once is harmless.
+#[cfg(feature = "rt")]
+pub(crate) unsafe fn install_stack_guard() {
+    let margin_bottom = &raw const __stack_slack_bottom as usize;
+    let margin_top = &raw const __stack_bottom as usize;
+
+    let first = margin_bottom.next_multiple_of(DESCRIPTOR_BYTES);
+    let last = margin_top - margin_top % DESCRIPTOR_BYTES;
+
+    let mut block = first;
+    while block < last {
+        // SAFETY: `block` is descriptor-aligned and lies inside the region
+        // the linker script reserved, which holds nothing. The caller's
+        // contract puts this before the MMU is enabled.
+        unsafe { imp::invalidate_block(block as u32) };
+        block += DESCRIPTOR_BYTES;
+    }
+}
+
 /// Why a [`set_uncached`] call was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

@@ -918,15 +918,12 @@ FAULT: data abort on core 0
 `pc` is the faulting instruction with the per-exception bias already
 subtracted, so it can go straight into `objdump`.
 
-The last line needs a caveat: it only appears if the overflow *faults*,
-and on these boards it does not yet. `mmu` identity-maps all of RAM, so
-`sp` descending past `__stack_bottom` walks into the `__stack_slack`
-region the linker script reserves below it and then into `.text`, with
-the hardware raising nothing — an overflow today is silent corruption,
-not a report. That slack is sized and 2 MiB-aligned so the `mmu` feature
-can leave it as an invalid descriptor, which would make an overflow fault
-at the instruction that causes it; the check here is already right for
-when it does.
+The last line is the one worth having the feature for, and it works
+because the `mmu` feature leaves the margin below the stack unmapped —
+see "Catching a stack overflow" below. A stack overflow otherwise reaches
+this handler looking like any other translation fault, and the comparison
+that identifies it needs the linker script's `__stack_bottom`, which a
+person reading a register dump does not have to hand.
 
 `examples/fault_report.rs` raises one on purpose.
 
@@ -944,6 +941,48 @@ abort and a prefetch abort arrive in the same CPU mode, and on AArch64
 `ESR_EL1` is not written at all by an IRQ or an FIQ. A handler written
 before this existed, taking no argument and reading `lr` itself, still
 links and still works.
+
+### Catching a stack overflow
+
+`mmu` leaves the margin below the main stack with no translation, so an
+overflow faults on the instruction that causes it instead of walking into
+`.text` and corrupting the running program.
+
+The margin is the linker scripts' `__stack_slack`: 2 MiB, reserved
+`NOLOAD` between `.data` and the stack, holding nothing. It is
+2 MiB-aligned so that it is a whole number of translation-table
+descriptors on either architecture — a 1 MiB AArch32 section, a 2 MiB
+AArch64 block — and no real memory shares a descriptor with it. The
+descriptors are cleared in `rpi_hal_mmu_init`, before the MMU is enabled,
+which is what makes it free of cache and TLB maintenance.
+
+What comes out the other end, with `fault-report` on:
+
+```text
+about to fault: recurse until the stack runs out
+FAULT: synchronous exception at EL1 on core 0
+  pc     0x00000000000800ac
+  addr   0x00000000003ffc10  read
+  cause  translation fault, level 2
+  class  data abort
+  esr    0x96000006   spsr 0x600003c5
+  sp     0x00000000003ffc10
+  stack  0x00400000..0x00500000
+  *** past the bottom of the stack: this is a stack overflow
+```
+
+The `pc` there is the compiler's own stack probe — the read it emits to
+touch a newly allocated frame — and `addr` is a thousand-odd bytes below
+`__stack_bottom`, in the first frame that did not fit.
+
+This covers the main stack of the core that boots, and nothing else. The
+AArch32 exception-mode stacks sit above `__stack_top`, and a secondary
+core runs on a `multicore::Stack` the application placed in `.bss`; both
+have their neighbours immediately below them, as the main stack used to.
+
+Overriding `__stack_slack` to something smaller than one descriptor
+leaves no guard rather than an approximate one — the region is rounded
+inward to whole descriptors.
 
 ### Supplying your own MMU table
 

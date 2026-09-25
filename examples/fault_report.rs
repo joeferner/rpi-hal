@@ -96,22 +96,10 @@ enum Fault {
     /// only distinguish by vector slot, both being CPSR mode 0x17.
     BadJump,
     /// Recurses without bound until `sp` runs off the end of the region
-    /// the linker script reserved.
-    ///
-    /// **This currently produces no report at all**, and that is worth
-    /// seeing rather than worth hiding. Nothing below the stack is
-    /// unmapped -- `linker.ld` reserves `__stack_slack` beneath it and
-    /// says the region is 2 MiB-aligned so the `mmu` feature *can later*
-    /// leave it invalid, which it does not yet do -- so `sp` descending
-    /// past `__stack_bottom` crosses no boundary the hardware objects
-    /// to. It walks the slack, reaches `.text`/`.data`, and overwrites
-    /// the running program. Observed: the announcement below, then
-    /// silence, then a spontaneous reboot.
-    ///
-    /// That is the failure mode the whole report exists to replace, and
-    /// it is the one case it cannot reach until an unmapped guard region
-    /// exists. When one does, this becomes a data abort just below
-    /// `__stack_bottom` and the report's last line names it.
+    /// the linker script reserved, which faults on the store that first
+    /// reaches below `__stack_bottom` -- into the guard the `mmu`
+    /// feature leaves unmapped there. The report's last line is the one
+    /// that matters here.
     StackOverflow,
 }
 
@@ -170,23 +158,31 @@ pub extern "C" fn kmain() -> ! {
 }
 
 /// Recurses with a frame large enough to reach the end of a 1 MiB stack
-/// quickly, and touches it so the compiler cannot elide it.
+/// in about a thousand calls.
 ///
-/// `#[inline(never)]` because the whole point is a call, and the
-/// volatile write is what stops the recursion becoming a loop: LLVM will
-/// otherwise turn a tail-recursive function with an unused frame into
-/// something that never grows the stack at all, and the example silently
-/// stops testing anything.
+/// Both `black_box` calls are load-bearing, and the second one more than
+/// the first. Without something opaque touching `frame` *after* the
+/// recursive call, the frame is dead across it: LLVM tail-call-eliminates
+/// the recursion into a branch and shrinks the array to a few bytes, and
+/// the result is a function that spins forever on one 16-byte frame
+/// without ever growing the stack. That is not a hypothetical -- it is
+/// what this example compiled to, and what it spent a hardware run
+/// silently proving nothing with. An earlier `write_volatile` on one
+/// element was not enough: it kept the store, not the frame.
 ///
-/// The `unconditional_recursion` lint is exactly right about this
-/// function and exactly wrong about whether it is a mistake: running off
-/// the end of the stack is the behaviour being demonstrated.
+/// `#[inline(never)]` is the easy half of the same requirement.
 #[inline(never)]
 #[allow(unconditional_recursion)]
 fn consume(depth: u32) -> u32 {
     let mut frame = [0u32; 256];
-    // SAFETY: `frame` is a live local; the write is volatile only to
-    // keep it from being optimised away.
-    unsafe { core::ptr::write_volatile(&mut frame[0], depth) };
-    consume(depth + 1).wrapping_add(frame[0])
+    frame[0] = depth;
+    // The frame has to really exist...
+    core::hint::black_box(&mut frame);
+
+    let deeper = consume(depth + 1);
+
+    // ...and has to still be live here, which is what stops the call
+    // above from becoming a branch.
+    core::hint::black_box(&mut frame);
+    deeper.wrapping_add(frame[0])
 }

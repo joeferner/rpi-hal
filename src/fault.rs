@@ -14,11 +14,11 @@
 //!
 //! ```text
 //! FAULT: data abort on core 0
-//!   pc     0x0008a41c
-//!   addr   0x000ffff8  write
-//!   cause  permission fault, second level
-//!   dfsr   0x0000080f   spsr 0x600001d3
-//!   stack  0x00100000..0x00200000
+//!   pc     0x00009a5c
+//!   addr   0x003fffa8  write
+//!   cause  translation fault, first level
+//!   dfsr   0x00000805   spsr 0x600001d3
+//!   stack  0x00400000..0x00500000
 //!   *** past the bottom of the stack: this is a stack overflow
 //! ```
 //!
@@ -31,14 +31,15 @@
 //! is a comparison the program can make and a person reading hex
 //! generally cannot.
 //!
-//! It only fires if an overflow *faults*, which on these boards it does
-//! not yet do: `mmu32`/`mmu64` identity-map all of RAM, so `sp`
-//! descending past `__stack_bottom` walks into `__stack_slack` and then
-//! into `.text` without the hardware objecting. `linker.ld` sizes and
-//! 2 MiB-aligns that slack precisely so the `mmu` feature can leave it
-//! as an invalid descriptor; until it does, an overflow is silent
-//! corruption rather than a report. The check costs two comparisons and
-//! is already correct for the day the guard exists.
+//! It fires because the `mmu` feature leaves the margin below the stack
+//! unmapped (`mmu::install_stack_guard`), so an overflow is a fault at
+//! the instruction that causes it rather than a quiet walk into `.text`.
+//! The `pc` is wherever the first store past the end happened to be,
+//! which is rarely the recursing function itself: above it is
+//! `__aeabi_memclr4`, zeroing a frame that no longer fits, and on
+//! AArch64 it is usually the stack probe the compiler emits to touch a
+//! new frame. The address is the useful half, always a little below
+//! `__stack_bottom`.
 //!
 //! # The console it writes to
 //!
