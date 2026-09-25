@@ -66,8 +66,12 @@ clippy-armv6:
 # links -- including the non-obvious case where a module's own `//!` links
 # resolve in the *crate root's* scope, because they get merged with the
 # outer doc comment on the `pub mod` declaration in lib.rs.
+#
+# `--all-features` because the feature-gated modules are otherwise not
+# documented at all, and so not checked at all: a broken link in one of
+# them passed a plain `cargo doc` for as long as the feature existed.
 doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 # What `cargo publish` will verify: it builds the packaged tarball, which
 # catches the "works in this working copy, broken on crates.io" class of

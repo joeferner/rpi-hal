@@ -4,6 +4,68 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **An `embassy-net` adapter over `rpi-hal`'s Wi-Fi driver**, behind a
+  `wifi` feature: `wifi::new` returns the queue-pair `WifiDriver` the
+  stack takes and a `WifiRunner` to spawn, the same shape the LAN9514
+  adapter has and for the same reason — `embassy_net_driver::Driver`'s
+  methods are synchronous, so the bus work has to live on the far side of
+  a channel.
+
+  Its runner polls where the LAN9514's awaits an interrupt. Every call
+  into `rpi-hal`'s Wi-Fi driver is blocking, so there is nothing for it to
+  await; it drains the chip, hands over one queued frame and sleeps a
+  millisecond. Receiving comes first deliberately — the firmware advances
+  its transmit credit window in the headers of received frames, so a
+  runner favouring transmit would starve itself of the credit it needs.
+
+  `wifi::rx_stats`/`tx_stats` report what each direction has managed,
+  including the last error in full. They are counters rather than log
+  lines because the failure this most wants watching — a malformed SDPCM
+  header, which the driver resynchronizes from — arrives in floods, and
+  printing each one costs more than the receive it reports on.
+
+  The runner also watches the association and, given a
+  `WifiRunner::reconnecting(Reconnect { .. })`, puts it back on its own: an
+  access point that reboots overnight costs a board a minute of downtime
+  rather than a reboot. It has to live here because the runner owns the
+  chip from the moment the stack is built — every call into `rpi-hal`'s
+  driver takes it by `&mut`, and there is one.
+
+  What it watches is `Wifi::bssid`, the firmware's own answer, and only
+  after the radio has received nothing for ten seconds: a probe is a
+  control command, and `rpi-hal`'s control path drops data frames that
+  arrive while it waits for the reply, so a link carrying anything is
+  never disturbed by one. The rejoin is `start_join` and then polling
+  rather than `join_wpa2`, which blocks for up to fifteen seconds — on an
+  executor that is every other task on the core stopped.
+
+  `wifi::associated` is the current state and `wifi::link_stats` counts
+  what it has cost. The stack is told the link is down for as long as it
+  is, so DHCP runs again on the far side: the network a board comes back
+  on to need not be the one it left.
+
+  `examples/embassy_net_wifi.rs` is the end-to-end path: firmware off the
+  card, join, DHCP, and TCP echo on port 7, rejoining by itself.
+
+  The `wifi` feature deliberately does not imply `embassy-net-driver`.
+  The two adapters share only `embassy-net-driver-channel`: this one
+  wants `embassy-time` for its ticker and has no use for `rpi-hal/async`,
+  and that one is the other way round.
+
+### Changed
+
+- **Requires `rpi-hal` 0.7.0**, which is what makes the Wi-Fi adapter
+  above resolvable. It was written against HAL changes that were on that
+  crate's main branch and in no release — its coalesced-frame handling and
+  `Wifi::bssid`, which the reconnect watch asks — so this repository
+  carried a `[patch.crates-io]` pointing at a working copy and did not
+  build from a clean checkout. 0.7.0 carries them, so the patch comes out
+  and the version moves.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added

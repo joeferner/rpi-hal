@@ -39,6 +39,10 @@ pub mod lan9514;
 /// `embassy-time` driver over the BCM System Timer — see the module's own
 /// documentation for the interrupt wiring an application must provide.
 pub mod time_driver;
+/// `embassy-net` adapter over `rpi-hal`'s Wi-Fi driver — see the module's
+/// own documentation for why its runner polls where `lan9514`'s does not.
+#[cfg(feature = "wifi")]
+pub mod wifi;
 
 /// Re-exported at the crate root because that is the path
 /// `#[embassy_executor::main(executor = "rpi_hal_embassy::Executor")]`

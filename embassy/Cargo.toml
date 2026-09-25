@@ -52,7 +52,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 #
 # `bcm2711` is not among them: this crate's time driver is IRQ-driven via
 # `Lic`, which does not exist under rpi-hal's `bcm2711` feature.
-rpi-hal = { version = "0.6.0", default-features = false }
+rpi-hal = { version = "0.7.0", default-features = false }
 # Deliberately no `platform-*` feature: those select an upstream executor
 # backend, and this crate supplies its own `__pender` and idle loop instead
 # so that AArch32 and AArch64 behave identically. `platform-cortex-ar`
@@ -90,6 +90,17 @@ critical-section = { version = "1.2.0", default-features = false }
 embassy-net-driver = { version = "0.2.0", optional = true }
 embassy-net-driver-channel = { version = "0.4.0", optional = true }
 embassy-futures = { version = "0.1.2", optional = true }
+# The ticker behind the `wifi` feature's runner (src/wifi.rs), and the one
+# place this crate depends on the time API rather than only supplying its
+# driver. It is here because `rpi-hal`'s Wi-Fi calls are blocking, so that
+# runner has nothing to await and sleeps between passes instead; the
+# LAN9514 adapter above awaits a USB transfer and needs no such thing.
+#
+# Optional for exactly that reason: it pins an `embassy-time` version on
+# whoever enables the feature, and an application not using the radio
+# should not inherit that. When `rpi-hal` grows an interrupt-driven SDIO
+# path this dependency goes away with the ticker.
+embassy-time = { version = "0.5.1", default-features = false, optional = true }
 
 [dev-dependencies]
 # The examples are whole programs, so unlike the library they do need
@@ -101,7 +112,11 @@ embassy-futures = { version = "0.1.2", optional = true }
 # canonical source per dependency across all build targets, and rejects
 # the manifest outright ("different source paths depending on the build
 # target") if a normal and a dev edge disagree.
-rpi-hal = { version = "0.6.0", features = ["rt", "async"] }
+#
+# `embedded-sdmmc` is for one example: the Wi-Fi chip has no firmware of
+# its own, so `embassy_net_wifi` has to read the image off the card before
+# there is a radio to hand to `embassy-net` at all.
+rpi-hal = { version = "0.7.0", features = ["rt", "async", "embedded-sdmmc"] }
 # The application-facing time API (`Instant`, `Duration`, `Timer::after`),
 # used by the examples to exercise the driver in this crate. A library
 # dependency here would be wrong: an application picks its own
@@ -145,6 +160,10 @@ embassy-net = { version = "0.9.1", default-features = false, features = [
 picoserve = { version = "0.19.0", default-features = false, features = [
     "embassy",
 ] }
+# The FAT layer the Wi-Fi example reads its firmware through, paired with
+# the `BlockDevice` adapter rpi-hal's feature of the same name supplies.
+# The version has to match what that adapter implements the trait for.
+embedded-sdmmc = { version = "0.9.0", default-features = false }
 
 [features]
 # The chip, forwarded to rpi-hal's feature of the same name, and a default
@@ -206,6 +225,24 @@ embassy-net-driver = [
     "rpi-hal/async",
 ]
 
+# The `embassy-net` adapter over rpi-hal's Wi-Fi driver (src/wifi.rs).
+#
+# Deliberately not part of `embassy-net-driver` above, and not implying it:
+# the two adapters share only the channel crate. This one wants
+# `embassy-time` for its ticker and has no use for `rpi-hal/async`, since
+# every call it makes into the Wi-Fi driver is blocking; that one is the
+# other way round. Folding them together would make each application pay
+# for the chip it does not have.
+#
+# What it does not imply is a chip feature, though only the BCM2835 and
+# BCM2837 boards carry the radio this drives. That stays the application's
+# selection, the same as everywhere else here.
+wifi = [
+    "dep:embassy-net-driver",
+    "dep:embassy-net-driver-channel",
+    "dep:embassy-time",
+]
+
 # Auto-discovery covers every other example. These need explicit entries
 # so they can declare `required-features`, which keeps a plain
 # `cargo build --examples` from failing on them and lets
@@ -230,6 +267,10 @@ required-features = ["embassy-net-driver"]
 [[example]]
 name = "embassy_picoserve_site"
 required-features = ["embassy-net-driver"]
+
+[[example]]
+name = "embassy_net_wifi"
+required-features = ["wifi"]
 
 [profile.dev]
 panic = "abort"

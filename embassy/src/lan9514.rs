@@ -352,7 +352,7 @@ pub struct RxStats {
     pub gaps_long: u32,
 }
 
-/// What [`receive_forever`] has managed since boot.
+/// What the receive loop has managed since boot.
 ///
 /// The counterpart to [`tx_stats`], and for the same reason: a frame lost on
 /// the way in is as invisible as one lost on the way out, and it is the
@@ -446,7 +446,7 @@ pub struct TxStats {
     pub last_error: Option<TransferError>,
 }
 
-/// What [`transmit_forever`] has managed since boot.
+/// What the transmit loop has managed since boot.
 ///
 /// Exists because a frame this adapter drops is otherwise invisible. The
 /// stack is told the send succeeded, the chip never sees the frame, and the

@@ -280,6 +280,40 @@ nothing could say when a frame had landed. The receive now parks on the
 bulk endpoint and wakes on the controller's interrupt, so that choice is
 gone along with the ticker.
 
+## Wi-Fi
+
+Enable the `wifi` feature for the `wifi` module, which does the same job
+for `rpi-hal`'s Wi-Fi driver: a stack over the on-board radio on the
+boards that have one. See `examples/embassy_net_wifi.rs`.
+
+```rust
+let (driver, runner) = rpi_hal_embassy::wifi::new(state, wifi, timer, mac);
+spawner.spawn(wifi_task(runner).unwrap());
+let (stack, net_runner) = embassy_net::new(driver, config, resources, seed);
+```
+
+The `wifi` passed in is one that has already joined a network — bring-up
+is blocking and belongs before the executor starts, since the chip has no
+firmware of its own and has to be fed it off the card first.
+
+Two differences from the Ethernet adapter, both consequences of
+`rpi-hal`'s Wi-Fi calls being blocking. There is **no interrupt to
+dispatch**: the runner drives its own transfers and sleeps a millisecond
+between passes, so latency is bounded by that interval rather than by a
+wake-up. And the receive side is drained *before* anything is sent, which
+is not an arbitrary order — the firmware advances its transmit credit
+window in the headers of received frames, so a runner that favoured
+transmit would run out of credit and have nothing to read the
+replenishment from. A transmit refused for want of credit stays queued
+and goes out on a later pass rather than being dropped.
+
+`wifi::rx_stats()` and `wifi::tx_stats()` report what each direction has
+managed since boot, the last error included in full. Counters rather than
+log lines: the failure most worth watching is a malformed SDPCM header,
+which `rpi-hal` resynchronizes from and returns — and which arrives in
+floods when it arrives at all, each line costing more than the receive it
+reports on.
+
 ## Building
 
 ```sh
