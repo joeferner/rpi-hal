@@ -15,7 +15,7 @@
 
 use core::fmt::Write;
 use rpi_hal::halt;
-use rpi_hal::mailbox::{Mailbox, Overscan, PixelOrder};
+use rpi_hal::mailbox::{DisplayId, Mailbox, Outcome, PixelOrder};
 use rpi_hal::{pac, uart::Uart};
 
 /// Resolution to fall back on when the firmware won't say what it is
@@ -33,6 +33,29 @@ const FALLBACK_HEIGHT: u32 = 480;
 /// framebuffer example uses, and simplest to index into.
 const DEPTH_BITS: u32 = 32;
 
+/// Which display to draw on, most preferred first.
+///
+/// Only decides anything on a board with more than one attached, and
+/// there it decides a lot: which display the firmware enumerates as
+/// number 0 is not stable from boot to boot, so without a preference the
+/// bars land on a coin toss. An order rather than a single choice because
+/// the same card is carried between boards -- the first one on the list
+/// that is actually attached gets the picture.
+///
+/// The panel first because it is the deliberate one: HDMI is on every Pi
+/// whether or not anything is plugged into it, while a DSI panel had to
+/// be ribboned on by somebody who meant it. A board with only one of them
+/// gets the picture either way.
+///
+/// Empty is a valid setting and means "whatever the firmware picked".
+///
+/// A Pi will not report more than one display until `max_framebuffers=2`
+/// is set in `config.txt`, whatever is actually attached -- so a board
+/// where this appears to do nothing should check there first. The
+/// bring-up line below prints the count the firmware gave, which is what
+/// distinguishes that from a firmware too old to know the tag.
+const PREFERENCE: &[DisplayId] = &[DisplayId::MainLcd, DisplayId::Hdmi0];
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
@@ -46,6 +69,11 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+
+    // Before `display_resolution`, not after: the mode query and the
+    // allocation both act on the selected display, so asking first would
+    // size the buffer from whichever screen the firmware started on.
+    report_displays(&mut mailbox, &mut uart);
 
     let (width, height) = display_resolution(&mut mailbox, &mut uart);
 
@@ -83,100 +111,120 @@ pub extern "C" fn kmain() -> ! {
     halt();
 }
 
+/// Points the framebuffer at [`PREFERENCE`] and says what it found.
+///
+/// The selecting is [`Mailbox::select_display`]'s; what is left here is
+/// reporting, which the HAL cannot do -- it has no console. With two
+/// displays attached, a picture on the wrong one is otherwise a mystery,
+/// and which of these outcomes happened is the whole explanation.
+fn report_displays(mailbox: &mut Mailbox, uart: &mut Uart) {
+    let selection = mailbox.select_display(PREFERENCE);
+
+    if selection.outcome() == Outcome::Sole {
+        // Say which kind of "one display" this is. With two plugged in
+        // and this still printing, the count is the whole diagnosis:
+        // `None` is a firmware that does not know the tag, and a number
+        // is a firmware that does and still says one -- which on a Pi
+        // means `max_framebuffers` is at its default of 1 in
+        // `config.txt`, and no amount of cabling will change it.
+        let _ = match selection.reported_count() {
+            Some(count) => writeln!(
+                uart,
+                "display: firmware reports {count}, using {:?}",
+                selection.chosen()
+            ),
+            None => writeln!(
+                uart,
+                "display: firmware does not report a display count, using {:?}",
+                selection.chosen()
+            ),
+        };
+        return;
+    }
+
+    let _ = writeln!(
+        uart,
+        "display: firmware reports {:?} displays",
+        selection.reported_count()
+    );
+    for (number, id) in selection.attached() {
+        let _ = writeln!(uart, "display: {number} is {id:?}");
+    }
+    let _ = match selection.outcome() {
+        Outcome::Preferred => writeln!(uart, "display: drawing on {:?}", selection.chosen()),
+        Outcome::Firmwares => writeln!(
+            uart,
+            "display: no preference set, using whichever the firmware selected ({:?})",
+            selection.chosen()
+        ),
+        Outcome::FellBack => writeln!(
+            uart,
+            "display: none of {PREFERENCE:?} is attached, falling back to display 0 ({:?})",
+            selection.chosen()
+        ),
+        Outcome::Sole => unreachable!("handled above"),
+    };
+}
+
 /// Works out the resolution to allocate at, printing each step it took
 /// to get there.
 ///
-/// Two firmware behaviors make this more than one query. The firmware
-/// keeps a blank overscan border by default -- 48 pixels on every edge,
-/// for televisions that crop their input -- and "Get Physical
-/// Width/Height" reports the image *inside* that border, so a 1920x1080
-/// HDMI display answers 1824x984. Clearing the border does not resize
-/// the framebuffer the firmware already made, so re-querying after the
-/// clear still answers 1824x984; the border has to be added back
-/// arithmetically to recover the mode. Allocating at that recovered
-/// size is what covers the whole screen, since the allocation request
-/// sets the physical size rather than being limited by the reported one.
-///
-/// A firmware that won't give up the border (`config.txt` pinning the
-/// values) means the image genuinely has to stay inside it, so in that
-/// case the reported size is already the right one and gets used as-is.
+/// The awkward part is [`Mailbox::display_mode`]'s: the firmware keeps a
+/// blank overscan border for televisions that crop their input, "Get
+/// Physical Width/Height" reports the image *inside* it, and clearing the
+/// border does not resize a framebuffer already made -- so the border has
+/// to be read first and added back arithmetically. What is left here is
+/// saying what happened, and choosing a fallback when the firmware has no
+/// mode at all, which is a policy rather than a fact about the hardware
+/// and so is not the HAL's to pick.
 fn display_resolution(mailbox: &mut Mailbox, uart: &mut Uart) -> (u32, u32) {
-    // Read the border *before* clearing it -- once it's zero, the width
-    // it was hiding can't be recovered from the firmware any more.
-    let border = match mailbox.overscan() {
-        Ok(border) => {
+    let mode = match mailbox.display_mode() {
+        Ok(mode) => mode,
+        Err(rpi_hal::mailbox::Error::NoDisplayMode) => {
+            // Nothing plugged in, or an output the firmware could not
+            // bring up. Worth drawing at all, so that a board with a
+            // display attached later has something on it.
             let _ = writeln!(
                 uart,
-                "overscan: top {} bottom {} left {} right {}",
-                border.top, border.bottom, border.left, border.right
+                "display: firmware has no mode configured, \
+                 falling back to {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}"
             );
-            border
+            return (FALLBACK_WIDTH, FALLBACK_HEIGHT);
         }
         Err(e) => {
-            let _ = writeln!(uart, "overscan: not reported ({e:?}), assuming none");
-            Overscan {
-                top: 0,
-                bottom: 0,
-                left: 0,
-                right: 0,
-            }
-        }
-    };
-
-    let inner = match mailbox.display_size() {
-        Ok(size) if size.width > 0 && size.height > 0 => {
             let _ = writeln!(
                 uart,
-                "display: firmware reports {}x{} inside the border",
-                size.width, size.height
-            );
-            size
-        }
-        other => {
-            // Zero width or height means firmware has no mode configured
-            // (nothing plugged in), which is no more usable than no
-            // answer at all.
-            let _ = writeln!(
-                uart,
-                "display: no usable size from firmware ({other:?}), \
+                "display: no size from firmware ({e:?}), \
                  falling back to {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}"
             );
             return (FALLBACK_WIDTH, FALLBACK_HEIGHT);
         }
     };
 
-    if border.is_zero() {
-        return (inner.width, inner.height);
+    if !mode.overscan.is_zero() {
+        let _ = writeln!(
+            uart,
+            "overscan: top {} bottom {} left {} right {}",
+            mode.overscan.top, mode.overscan.bottom, mode.overscan.left, mode.overscan.right
+        );
     }
-
-    let cleared = Overscan {
-        top: 0,
-        bottom: 0,
-        left: 0,
-        right: 0,
-    };
-    // Read the border back rather than trusting what `set_overscan`
-    // echoed: the echo is this one call's answer, a fresh query is
-    // independent evidence that the change actually took.
-    if mailbox.set_overscan(cleared).is_err() || !mailbox.overscan().is_ok_and(|o| o.is_zero()) {
+    if mode.overscan.is_zero() {
+        let _ = writeln!(uart, "display: full mode is {}x{}", mode.width, mode.height);
+    } else if mode.overscan_cleared {
+        let _ = writeln!(
+            uart,
+            "overscan: cleared, full mode is {}x{}",
+            mode.width, mode.height
+        );
+    } else {
         let _ = writeln!(
             uart,
             "overscan: border stayed, drawing inside it at {}x{}",
-            inner.width, inner.height
+            mode.width, mode.height
         );
-        return (inner.width, inner.height);
     }
 
-    let full = (
-        inner.width + border.left + border.right,
-        inner.height + border.top + border.bottom,
-    );
-    let _ = writeln!(
-        uart,
-        "overscan: cleared, full mode is {}x{}",
-        full.0, full.1
-    );
-    full
+    (mode.width, mode.height)
 }
 
 /// Fills the framebuffer with eight equal-width vertical bars in the
