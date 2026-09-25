@@ -49,6 +49,11 @@ pub mod console;
 /// the whole program.
 #[cfg(feature = "entropy")]
 pub mod entropy;
+/// The global heap — see the module's own documentation for why it
+/// declares the `#[global_allocator]` and what that decides for the rest
+/// of the program.
+#[cfg(feature = "heap")]
+pub mod heap;
 
 // The rest of the modules this crate is being assembled from -- clock,
 // heap, storage, config, site, web, metrics, mdns, ota -- arrive one at a

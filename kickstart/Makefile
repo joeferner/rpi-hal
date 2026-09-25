@@ -33,7 +33,7 @@ ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 # `bcm2837` is the one named because the examples are Pi 2/3 images. A
 # board is free to select another; what this list covers is that the
 # modules compile, and none of them is chip-conditional.
-FEATURES := console,entropy,bcm2837
+FEATURES := console,entropy,heap,bcm2837
 
 # Twice, because a feature-gated module is not compiled at all without its
 # feature: the plain pass proves the crate is usable with nothing turned

@@ -24,9 +24,15 @@ named for it.
 | --- | --- |
 | `console` | One sink for the whole image, and `logln!` |
 | `entropy` | The SoC's hardware RNG, and the `getrandom` backend over it |
+| `heap` | A TLSF `#[global_allocator]`, sized from what the firmware reports |
 
-Still to come: clock, heap, storage, config, site, web, metrics, mdns,
-ota.
+Still to come: clock, storage, config, site, web, metrics, mdns, ota.
+
+`entropy` and `heap` each install something the *whole binary* resolves
+against — a `getrandom` backend and a `#[global_allocator]`. There is no
+way for a library to make such a choice overridable, so both are off by
+default and enabling one is how a board says it wants this crate to take
+it.
 
 ## Chips
 
@@ -43,9 +49,8 @@ once resolves by `rpi-hal`'s precedence — `bcm2711` > `bcm2837` >
 `bcm2835` — rather than failing, which is why nothing here builds with
 `--all-features`; the `make` recipes name an explicit set instead.
 
-Only `entropy` needs a chip so far. `console` deliberately reaches
-nothing in `rpi-hal`, so a board taking only that needs no selection at
-all.
+`entropy` and `heap` need a chip; `console` deliberately reaches nothing
+in `rpi-hal`, so a board taking only that needs no selection at all.
 
 `examples/hello.rs` takes no features at all, which is what makes it
 useful: it proves the parts that have nothing to do with the crate's

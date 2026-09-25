@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "bcm2837"]
+features = ["console", "entropy", "heap", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -52,7 +52,7 @@ critical-section = { version = "1.2.0", default-features = false, optional = tru
 # silently rather than failing. In practice an application's own `rpi-hal`
 # line already names one and cargo unifies it; the forwarding features
 # below exist for builds of *this* crate, which have no such line.
-rpi-hal = { version = "0.6.0", default-features = false, optional = true }
+rpi-hal = { version = "0.7.0", default-features = false, optional = true }
 
 # The randomness interface the RustCrypto primitives under `rustls` reach
 # through. `custom` is the feature that lets a target with no OS supply
@@ -67,6 +67,14 @@ getrandom = { version = "0.2", default-features = false, features = [
     "custom",
 ], optional = true }
 
+# The allocator behind `heap`. `default-features = false` with `tlsf`
+# named: the crate also ships a linked-list allocator, and which one is
+# in the binary should be a line someone wrote rather than a default --
+# see src/heap.rs for why this one.
+embedded-alloc = { version = "0.6", default-features = false, features = [
+    "tlsf",
+], optional = true }
+
 [dev-dependencies]
 # The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
 # to real peripherals, which the library itself does not yet do. Keeping
@@ -79,7 +87,7 @@ getrandom = { version = "0.2", default-features = false, features = [
 # what `Uart::init` reaches through. Pi 2/3 because that is what the
 # examples are written for; a consumer selects its own chip and is not
 # affected by this line.
-rpi-hal = { version = "0.6.0", features = ["bcm2837"] }
+rpi-hal = { version = "0.7.0", features = ["bcm2837"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -126,6 +134,26 @@ console = ["dep:critical-section"]
 # otherwise.
 entropy = ["dep:rpi-hal", "dep:getrandom", "dep:critical-section"]
 
+# The `#[global_allocator]` and its sizing (src/heap.rs).
+#
+# Needs a chip for the same reason `entropy` does: the extent comes from
+# `rpi_hal::mem::heap_region`, which asks the firmware through the
+# mailbox.
+#
+# Like `entropy`, enabling this decides something for the whole binary
+# rather than for the caller -- a program has exactly one allocator. Off
+# by default so that taking that decision is explicit.
+#
+# `rpi-hal/rt` is the one place this crate asks for a boot sequence rather
+# than leaving it to the application, and it is not a convenience.
+# `rpi_hal::mem` lives behind that feature because the region's lower
+# bound is `__bss_end`, a symbol only `rt`'s linker script defines -- so
+# an image that could turn `rt` off is an image with no answer to where
+# free memory starts. Any board linking against `rpi-link.x` already has
+# it; this makes the requirement resolve rather than surface as a missing
+# module.
+heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:embedded-alloc"]
+
 # The chip, forwarded to `rpi-hal`'s feature of the same name. None is a
 # default, so a board says which it is -- and says it once, since cargo
 # unifies this with whatever its own `rpi-hal` line asks for.
@@ -160,6 +188,10 @@ name = "entropy"
 # example from here on will want it for the same reason, which is a fair
 # sign of what a real board's feature list looks like.
 required-features = ["entropy", "console", "bcm2837"]
+
+[[example]]
+name = "heap"
+required-features = ["heap", "console", "bcm2837"]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding

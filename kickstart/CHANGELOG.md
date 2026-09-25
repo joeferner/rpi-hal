@@ -8,6 +8,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The global heap**, behind a `heap` feature: `heap::init` sizes the
+  region with `rpi_hal::mem::heap_region` and hands it to an
+  `embedded-alloc` TLSF allocator declared here as the
+  `#[global_allocator]`. The bounds come from the firmware rather than
+  being hardcoded, so one image is correct whatever `gpu_mem` the board
+  is set to.
+
+  `init` is safe, which it could not be without the guard it carries:
+  `TlsfHeap::init` is `unsafe` because a second call hands the allocator
+  a region it has already given parts of away, and that is silent
+  corruption rather than anything reported. A second call returns
+  `Error::AlreadyInitialized`.
+
+  Like `entropy`, this is a program-wide decision — a binary has exactly
+  one allocator — so it is off by default and a board wanting its own
+  leaves it alone.
+
+  It also implies `rpi-hal/rt`, the one place this crate asks for a boot
+  sequence. Not a convenience: `rpi_hal::mem` is behind `rt` because the
+  region's lower bound is `__bss_end`, a symbol only `rt`'s linker script
+  defines.
+
+- **`rpi-hal` raised to 0.7.0**, which is where `mem::heap_region` lives.
+
 - **Hardware entropy and the `getrandom` backend**, behind an `entropy`
   feature: `entropy::fill` for callers who want bytes, and
   `register_custom_getrandom!` so the RustCrypto primitives under
