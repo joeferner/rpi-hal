@@ -17,11 +17,14 @@ use core::fmt::Write;
 
 use rpi_hal::{halt, pac, timer::Timer, uart::Uart};
 
-// The library is empty so far, so nothing here can call into it -- but a
-// crate nothing refers to is never linked, and this crate is destined to
+// This example takes no features, so the library it links against has no
+// modules compiled into it and there is nothing here to call -- see
+// `console.rs` for an example that uses one. Named anyway because a crate
+// nothing refers to is never linked, and this crate is destined to
 // install things by linkage the way `rpi-hal-embassy`'s time driver does.
-// Naming it now means the examples are already proving that an image
-// links against it, rather than starting to once something depends on it.
+// So this stays the image that proves the scaffolding on its own: if it
+// boots, nothing about the toolchain, the targets or the linker script is
+// what broke.
 use rpi_kickstart as _;
 
 // A library cannot supply this: a program may have exactly one, so it is

@@ -16,15 +16,21 @@ This crate is that program, written once.
 
 ## Status
 
-**Skeleton.** The repository, the build and the release path are in
-place; the library is still empty. `examples/hello.rs` is a whole image
-that boots and greets, which is what proves the parts that have nothing
-to do with the crate's contents — toolchain, targets, linker script, both
-load addresses.
+Early. The repository, the build and the release path are in place, and
+the modules are being moved in one at a time, each behind the feature
+named for it.
 
-The modules are being moved in one at a time, each behind the feature
-named for it: console, clock, entropy, heap, storage, config, site, web,
-metrics, mdns, ota.
+| Feature | What it is |
+| --- | --- |
+| `console` | One sink for the whole image, and `logln!` |
+
+Still to come: clock, entropy, heap, storage, config, site, web, metrics,
+mdns, ota.
+
+`examples/hello.rs` takes no features at all, which is what makes it
+useful: it proves the parts that have nothing to do with the crate's
+contents — toolchain, targets, linker script, both load addresses — so if
+it boots, none of those is what broke.
 
 ## Design
 

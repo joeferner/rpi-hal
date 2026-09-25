@@ -23,10 +23,17 @@ rust-version = "1.88"
 default-target = "armv7a-none-eabi"
 targets = ["aarch64-unknown-none-softfloat"]
 
-# No `[dependencies]` yet. This crate's whole reason to exist is the layer
-# above `rpi-hal`, so an edge to it is coming with the first module; adding
-# it before there is a line of code that uses it would only be a
-# dependency the compiler has to resolve and nothing has to justify.
+[dependencies]
+# API only. The single implementation comes from `rpi-hal`'s `rt` feature,
+# and it has to: a program links only if its crate graph contains exactly
+# one, so a library naming an implementation takes the choice away from
+# every consumer.
+#
+# Still the only edge here, and `console` is a fair test of how long that
+# lasts -- the module it backs is the one every other module logs through,
+# and it needs nothing from `rpi-hal` at all. See src/console.rs for why
+# its sink is a trait object rather than a `Uart`.
+critical-section = { version = "1.2.0", default-features = false, optional = true }
 
 [dev-dependencies]
 # The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
@@ -41,6 +48,34 @@ targets = ["aarch64-unknown-none-softfloat"]
 # examples are written for; a consumer selects its own chip and is not
 # affected by this line.
 rpi-hal = { version = "0.6.0", features = ["bcm2837"] }
+# How an example hands the console a sink that outlives `kmain`'s stack,
+# since `console::init` borrows for `'static`. Not a library dependency:
+# which static-storage crate an application uses is its own choice, and
+# this crate only ever receives the reference.
+static_cell = "2.1.1"
+
+[features]
+# Nothing is on by default, and that is the crate's whole arrangement: a
+# board states what it is and pays for nothing else. `default` is written
+# out as empty rather than omitted so that the absence is a decision on
+# the page instead of something to be inferred from a missing key.
+default = []
+
+# The console sink and `logln!` (src/console.rs).
+#
+# The `critical-section` edge is what the feature actually buys: the sink
+# is shared between tasks and interrupt handlers, so it is behind a mutex,
+# and that mutex needs an implementation in the final binary. A board that
+# never logs should not have to supply one.
+console = ["dep:critical-section"]
+
+# Auto-discovery covers `hello`, which needs no features. This one needs
+# an entry so it can declare `required-features` -- without it a plain
+# `cargo build --examples` would fail on an example whose module is not
+# compiled.
+[[example]]
+name = "console"
+required-features = ["console"]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding

@@ -15,17 +15,33 @@
 # adding those recipes is a `make` change and not a source one, and it can
 # wait for a board that wants it.
 
-AARCH64 := --target aarch64-unknown-none-softfloat
+# Both architectures in one invocation. `--target` may be repeated, which
+# is what keeps each recipe below to two lines instead of four -- the
+# second dimension being the feature set, and that one cannot be folded
+# away.
+ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 
 .PHONY: build examples fmt fmt-check clippy doc package pre-commit clean
 
+# Twice, because a feature-gated module is not compiled at all without its
+# feature: the plain pass proves the crate is usable with nothing turned
+# on, and `--all-features` is the only pass that sees the modules.
 build:
-	cargo build --release
-	cargo build --release $(AARCH64)
+	cargo build --release $(ARCHES)
+	cargo build --release $(ARCHES) --all-features
 
+# Same two passes, and here the second one is load-bearing for a different
+# reason: cargo silently *skips* an example whose `required-features` are
+# unmet rather than reporting it, so without `--all-features` an example
+# can rot indefinitely while the build stays green.
+#
+# `--all-features` will stop being the right spelling the moment two
+# features conflict -- `rpi-hal-embassy` reached that point with an
+# example that defines `__irq_handler` -- at which point this becomes an
+# enumerated list.
 examples:
-	cargo build --release --examples
-	cargo build --release --examples $(AARCH64)
+	cargo build --release $(ARCHES) --examples
+	cargo build --release $(ARCHES) --examples --all-features
 
 fmt:
 	cargo fmt
@@ -37,8 +53,8 @@ fmt-check:
 # code here that talks to hardware, which makes them the code most likely
 # to earn a lint.
 clippy:
-	cargo clippy --release --examples -- -D warnings
-	cargo clippy --release --examples $(AARCH64) -- -D warnings
+	cargo clippy --release $(ARCHES) --examples -- -D warnings
+	cargo clippy --release $(ARCHES) --examples --all-features -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails,
 # so without it this catches nothing. What it does catch is broken

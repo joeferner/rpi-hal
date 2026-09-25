@@ -37,6 +37,14 @@
 #![no_std]
 #![deny(missing_docs)]
 
-// Nothing is exported yet. The modules this crate is being assembled from
-// -- console, clock, entropy, heap, storage, config, site, web, metrics,
-// mdns, ota -- arrive one at a time, each behind the feature named for it.
+/// The console every module logs to — see the module's own documentation
+/// for why its sink is a trait object and its clock is passed in.
+///
+/// The macro that writes to it, [`logln!`], is at the crate root: an
+/// exported `macro_rules!` lands there whatever file it is written in.
+#[cfg(feature = "console")]
+pub mod console;
+
+// The rest of the modules this crate is being assembled from -- clock,
+// entropy, heap, storage, config, site, web, metrics, mdns, ota -- arrive
+// one at a time, each behind the feature named for it.
