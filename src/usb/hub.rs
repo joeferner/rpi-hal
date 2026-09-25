@@ -12,7 +12,7 @@ use crate::usb::control::{
     set_configuration, set_port_power, set_port_reset, PORT_FEATURE_C_CONNECTION,
     PORT_FEATURE_C_RESET,
 };
-use crate::usb::descriptor::ConfigurationDescriptor;
+use crate::usb::descriptor::{ConfigurationDescriptor, Descriptors, EndpointDescriptor};
 use crate::usb::dwc2::{Channel, ControlEndpoint, SplitTarget};
 use crate::usb::EnumerationError;
 
@@ -72,10 +72,16 @@ impl PortStatus {
 
 /// A configured USB hub: its addressed endpoint 0 plus the facts
 /// needed to drive its downstream ports (how many there are, how long
-/// to wait after powering one, and whether the hub is running at high
-/// speed and so has a transaction translator). Build it with
+/// to wait after powering one, whether the hub is running at high
+/// speed and so has a transaction translator, and where its
+/// status-change endpoint is). Build it with
 /// [`Self::configure`], then reset and inspect individual ports through
 /// it.
+///
+/// Plain data once built — every field is a fact read off the hub during
+/// [`Self::configure`], so a `Hub` is `Copy` and can be kept in a table
+/// the way [`Bus`](crate::usb::Bus) keeps one per hub on the bus.
+#[derive(Clone, Copy)]
 pub struct Hub {
     endpoint: ControlEndpoint,
     /// `bNbrPorts` — the number of downstream ports (1-based when
@@ -88,6 +94,9 @@ pub struct Hub {
     /// decides whether it has a transaction translator of its own — see
     /// [`Self::split_target`].
     pub high_speed: bool,
+    /// The endpoint number of the hub's status-change endpoint, and that
+    /// endpoint's max packet size — see [`Self::status_endpoint`].
+    status_endpoint: Option<(u8, u16)>,
 }
 
 impl Hub {
@@ -112,11 +121,12 @@ impl Hub {
         high_speed: bool,
     ) -> Result<Hub, EnumerationError> {
         let mut config = [0u8; 64];
-        get_configuration_descriptor(channel, timer, endpoint, 0, &mut config)?;
+        let config_len = get_configuration_descriptor(channel, timer, endpoint, 0, &mut config)?;
         let config_value = ConfigurationDescriptor::parse(&config)
             .ok_or(EnumerationError::MalformedDescriptor)?
             .value();
         set_configuration(channel, timer, endpoint, config_value)?;
+        let status_endpoint = find_status_endpoint(&config[..config_len]);
 
         let mut hub_descriptor = [0u8; 16];
         let len = get_hub_descriptor(channel, timer, endpoint, &mut hub_descriptor)?;
@@ -137,7 +147,34 @@ impl Hub {
             num_ports,
             power_on_good_ms,
             high_speed,
+            status_endpoint,
         })
+    }
+
+    /// The hub's status-change endpoint: its endpoint number and max
+    /// packet size, or `None` if the hub's configuration didn't declare
+    /// one (which no conforming hub does — USB 2.0 spec §11.12.4 requires
+    /// exactly one interrupt-IN endpoint).
+    ///
+    /// Polling it with [`Channel::interrupt_in`]
+    /// is how a full host hears about a device attached or removed after
+    /// the bus was first walked. It answers with a bitmap — bit 0 the hub
+    /// itself, bit *n* downstream port *n* — naming only what changed, and
+    /// NAKs when nothing has, so watching a quiet hub costs one NAK'd
+    /// transaction per poll rather than a status read per port.
+    ///
+    /// [`Bus::poll`](crate::usb::Bus::poll) deliberately does *not* use
+    /// it, and reads the ports instead. This crate's DWC2 driver cannot
+    /// yet schedule high-speed periodic transfers reliably, and the way it
+    /// fails here is the dangerous kind: as well as
+    /// [`TransferError::FrameOverrun`](crate::usb::dwc2::TransferError::FrameOverrun),
+    /// the endpoint has been observed completing successfully with an
+    /// all-zero bitmap while the hub's own port status showed a connection
+    /// change outstanding — a device attached to that hub is then never
+    /// seen at all. This is exposed for a caller that wants it anyway, and
+    /// for `Bus` to build on once that is fixed.
+    pub fn status_endpoint(&self) -> Option<(u8, u16)> {
+        self.status_endpoint
     }
 
     /// The hub's own addressed endpoint 0 — what further control
@@ -227,4 +264,19 @@ impl Hub {
             })
         }
     }
+}
+
+/// Finds the status-change endpoint in a hub's configuration descriptor
+/// block: the first interrupt-IN endpoint declared there, returned as its
+/// endpoint number and max packet size.
+///
+/// A hub's configuration has exactly one endpoint besides endpoint 0 (USB
+/// 2.0 spec §11.12.4), so "the first interrupt IN" is not a heuristic
+/// standing in for a better match — it is the only candidate a conforming
+/// hub offers.
+fn find_status_endpoint(config: &[u8]) -> Option<(u8, u16)> {
+    Descriptors::new(config)
+        .filter_map(EndpointDescriptor::parse)
+        .find(|endpoint| endpoint.is_interrupt() && endpoint.is_in())
+        .map(|endpoint| (endpoint.number(), endpoint.max_packet_size()))
 }
