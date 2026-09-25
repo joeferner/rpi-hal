@@ -79,6 +79,15 @@ pub mod irq;
 pub mod lic;
 /// Blocking driver for the VideoCore mailbox property interface.
 pub mod mailbox;
+/// Where the loaded image ends and free RAM begins — see
+/// [`mem::heap_region`], which is how a program sizes a heap without
+/// hardcoding a board's memory split.
+///
+/// Needs the `rt` feature, since the boundary it reports is the one this
+/// crate's linker script places. A program supplying its own script owns
+/// that layout instead.
+#[cfg(feature = "rt")]
+pub mod mem;
 /// Blocking driver for the mini UART (UART1).
 pub mod mini_uart;
 /// Client for the VideoCore firmware's MMAL multimedia framework, over

@@ -11,8 +11,8 @@
 //!
 //!   1. Pick a heap allocator crate (`embedded-alloc` here) and register it
 //!      with `#[global_allocator]`.
-//!   2. Give it a region of RAM to hand out. This example uses everything
-//!      from the end of `.bss` (`__bss_end`, from the linker script) up to
+//!   2. Give it a region of RAM to hand out. `rpi_hal::mem::heap_region`
+//!      is that region: everything from the end of the loaded image up to
 //!      the top of the ARM/VideoCore memory split, which the VideoCore
 //!      firmware reports via the mailbox. The whole ARM region below the
 //!      peripheral base (`0x3F00_0000`) is identity-mapped as cacheable
@@ -35,6 +35,7 @@ use core::fmt::Write;
 
 use embedded_alloc::LlffHeap as Heap;
 use rpi_hal::mailbox::Mailbox;
+use rpi_hal::mem;
 use rpi_hal::pac;
 use rpi_hal::uart::Uart;
 
@@ -44,12 +45,6 @@ use rpi_hal::uart::Uart;
 /// does is set it up.
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
-
-extern "C" {
-    /// End of the `.bss` section, defined by `linker.ld`. Only its address
-    /// is meaningful -- the byte itself is never read.
-    static __bss_end: u8;
-}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -64,33 +59,31 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
 
-    // Heap starts just past everything the linker statically placed. Reading
-    // the symbol's address (not the symbol) is the whole point; `&raw const`
-    // avoids ever forming a reference to a byte we never actually own.
-    let heap_start = &raw const __bss_end as usize;
-
-    // The top of the heap is the top of the ARM side of the memory split.
-    // Asking the firmware (rather than hardcoding, say, 1 GiB) means the same
-    // binary sizes its heap correctly whatever `gpu_mem` the board is set to
-    // and however much RAM it has.
+    // Everything above the loaded image, up to the top of the ARM side of
+    // the memory split. Asking the firmware for that top (rather than
+    // hardcoding, say, 1 GiB) means the same binary sizes its heap correctly
+    // whatever `gpu_mem` the board is set to and however much RAM it has.
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
-    let region = match mailbox.arm_memory() {
-        Ok(region) => region,
+    let heap = match mem::heap_region(&mut mailbox) {
+        Ok(heap) => heap,
         Err(e) => {
-            let _ = writeln!(uart, "could not read ARM memory size: {e:?}");
+            let _ = writeln!(uart, "no heap: {e:?}");
             halt();
         }
     };
-    let heap_end = (region.base_address + region.size_bytes) as usize;
-    let heap_size = heap_end - heap_start;
 
-    let _ = writeln!(uart, "heap: {} KiB at 0x{heap_start:08x}", heap_size / 1024);
+    let _ = writeln!(
+        uart,
+        "heap: {} KiB at {:#010x}",
+        heap.len() / 1024,
+        heap.start
+    );
 
     // Safe to call exactly once, before any allocation, with a region that
-    // isn't used for anything else. `heap_start`..`heap_end` is above `.bss`
-    // and below the peripheral base, and the main stack grows *down* from the
-    // 0x8000 load address (below all of this), so nothing else claims it.
-    unsafe { HEAP.init(heap_start, heap_size) };
+    // isn't used for anything else -- which is exactly what `heap_region`
+    // describes: the linker script places the stacks *inside* the image, so
+    // nothing above its end is reserved for anything to find.
+    unsafe { HEAP.init(heap.start, heap.len()) };
 
     // From here on, `alloc` just works.
 
