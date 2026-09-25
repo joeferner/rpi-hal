@@ -23,9 +23,29 @@ named for it.
 | Feature | What it is |
 | --- | --- |
 | `console` | One sink for the whole image, and `logln!` |
+| `entropy` | The SoC's hardware RNG, and the `getrandom` backend over it |
 
-Still to come: clock, entropy, heap, storage, config, site, web, metrics,
-mdns, ota.
+Still to come: clock, heap, storage, config, site, web, metrics, mdns,
+ota.
+
+## Chips
+
+`bcm2835` (Pi 1, Zero), `bcm2837` (Pi 2, 3) and `bcm2711` (Pi 4) forward
+to `rpi-hal`'s features of the same name. None is a default.
+
+Most boards never name one here: an application's own `rpi-hal` line
+already selects a chip and cargo unifies it across the graph. They exist
+for a build that has no such line — this repository's own, and a consumer
+that depends on `rpi-kickstart` without depending on `rpi-hal` directly.
+
+They are not mutually exclusive, because cargo features cannot be. Two at
+once resolves by `rpi-hal`'s precedence — `bcm2711` > `bcm2837` >
+`bcm2835` — rather than failing, which is why nothing here builds with
+`--all-features`; the `make` recipes name an explicit set instead.
+
+Only `entropy` needs a chip so far. `console` deliberately reaches
+nothing in `rpi-hal`, so a board taking only that needs no selection at
+all.
 
 `examples/hello.rs` takes no features at all, which is what makes it
 useful: it proves the parts that have nothing to do with the crate's

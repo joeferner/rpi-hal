@@ -44,7 +44,12 @@
 /// exported `macro_rules!` lands there whatever file it is written in.
 #[cfg(feature = "console")]
 pub mod console;
+/// Hardware entropy, and the `getrandom` backend the crypto stack needs —
+/// see the module's own documentation for what enabling it decides for
+/// the whole program.
+#[cfg(feature = "entropy")]
+pub mod entropy;
 
 // The rest of the modules this crate is being assembled from -- clock,
-// entropy, heap, storage, config, site, web, metrics, mdns, ota -- arrive
-// one at a time, each behind the feature named for it.
+// heap, storage, config, site, web, metrics, mdns, ota -- arrive one at a
+// time, each behind the feature named for it.

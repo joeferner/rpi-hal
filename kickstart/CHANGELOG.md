@@ -8,6 +8,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Hardware entropy and the `getrandom` backend**, behind an `entropy`
+  feature: `entropy::fill` for callers who want bytes, and
+  `register_custom_getrandom!` so the RustCrypto primitives under
+  `rustls` reach the same generator. The `rpi_hal::rng` instance is a
+  lazily-built static behind a `critical-section` mutex — constructing
+  one arms a warmup discard of 262,144 samples, so a fresh instance per
+  call would pay that for every byte of a handshake.
+
+  Enabling it is a program-wide decision, like a `#[global_allocator]`:
+  the registration is a symbol the whole binary resolves against. Hence
+  off by default, so a board with its own backend simply leaves it alone.
+
+- **Chip features** `bcm2835`, `bcm2837` and `bcm2711`, forwarding to
+  `rpi-hal`'s. None is a default, and most boards never name one — an
+  application's own `rpi-hal` line already selects a chip and cargo
+  unifies it. They are spelled `rpi-hal?/…` so that naming a chip does
+  not drag the HAL into a build that only wants `console`.
+
+  Nothing in this repository builds with `--all-features` as a result:
+  the chip features are not a set to turn all of, since more than one
+  resolves by `rpi-hal`'s precedence rather than failing. The `make`
+  recipes and `[package.metadata.docs.rs]` name an explicit set.
+
 - **The console sink and `logln!`**, behind a `console` feature:
   `console::init` installs one sink for the whole image, and `logln!`
   reaches it from anywhere, stamping each line with the uptime. The sink

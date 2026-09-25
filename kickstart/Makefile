@@ -23,25 +23,32 @@ ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 
 .PHONY: build examples fmt fmt-check clippy doc package pre-commit clean
 
+# Every module, plus one chip. Enumerated rather than `--all-features`,
+# which is wrong here and not merely inelegant: the chip features forward
+# to `rpi-hal`'s, and turning on more than one resolves by its
+# `bcm2711` > `bcm2837` > `bcm2835` precedence instead of failing. A
+# sweep would therefore check -- and link example images against -- a
+# peripheral base nothing in this repository runs on.
+#
+# `bcm2837` is the one named because the examples are Pi 2/3 images. A
+# board is free to select another; what this list covers is that the
+# modules compile, and none of them is chip-conditional.
+FEATURES := console,entropy,bcm2837
+
 # Twice, because a feature-gated module is not compiled at all without its
 # feature: the plain pass proves the crate is usable with nothing turned
-# on, and `--all-features` is the only pass that sees the modules.
+# on, and the second is the only one that sees the modules.
 build:
 	cargo build --release $(ARCHES)
-	cargo build --release $(ARCHES) --all-features
+	cargo build --release $(ARCHES) --features $(FEATURES)
 
 # Same two passes, and here the second one is load-bearing for a different
 # reason: cargo silently *skips* an example whose `required-features` are
-# unmet rather than reporting it, so without `--all-features` an example
-# can rot indefinitely while the build stays green.
-#
-# `--all-features` will stop being the right spelling the moment two
-# features conflict -- `rpi-hal-embassy` reached that point with an
-# example that defines `__irq_handler` -- at which point this becomes an
-# enumerated list.
+# unmet rather than reporting it, so without it an example can rot
+# indefinitely while the build stays green.
 examples:
 	cargo build --release $(ARCHES) --examples
-	cargo build --release $(ARCHES) --examples --all-features
+	cargo build --release $(ARCHES) --examples --features $(FEATURES)
 
 fmt:
 	cargo fmt
@@ -54,7 +61,7 @@ fmt-check:
 # to earn a lint.
 clippy:
 	cargo clippy --release $(ARCHES) --examples -- -D warnings
-	cargo clippy --release $(ARCHES) --examples --all-features -- -D warnings
+	cargo clippy --release $(ARCHES) --examples --features $(FEATURES) -- -D warnings
 
 # `-D warnings` is the whole point: a plain doc build almost never fails,
 # so without it this catches nothing. What it does catch is broken
@@ -62,10 +69,12 @@ clippy:
 # `//!` links resolve in the *crate root's* scope, because they get merged
 # with the outer doc comment on the `pub mod` declaration in lib.rs.
 #
-# `--all-features` because a feature-gated module is otherwise not
-# documented at all, and so not checked at all.
+# The same enumerated set as everything above, and for the same reason: a
+# feature-gated module is otherwise not documented at all, and so not
+# checked at all. It matches `[package.metadata.docs.rs]`, so what this
+# builds is what the published page will be.
 doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features $(FEATURES)
 
 # What `cargo publish` will verify: it builds the packaged tarball, which
 # catches the "works in this working copy, broken on crates.io" class of

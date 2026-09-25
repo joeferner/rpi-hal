@@ -22,6 +22,11 @@ rust-version = "1.88"
 [package.metadata.docs.rs]
 default-target = "armv7a-none-eabi"
 targets = ["aarch64-unknown-none-softfloat"]
+# Enumerated rather than `all-features = true`, because the chip features
+# are not a set to turn all of: they forward to `rpi-hal`'s, where more
+# than one resolves by precedence. Every module is listed, since a
+# feature-gated one is otherwise absent from the published page entirely.
+features = ["console", "entropy", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -34,6 +39,33 @@ targets = ["aarch64-unknown-none-softfloat"]
 # and it needs nothing from `rpi-hal` at all. See src/console.rs for why
 # its sink is a trait object rather than a `Uart`.
 critical-section = { version = "1.2.0", default-features = false, optional = true }
+
+# The HAL, for `entropy`'s hardware RNG. `default-features = false` keeps
+# `rt` and `mmu` out of what this crate imposes: the boot sequence and the
+# MMU bring-up are the application's to choose, and cargo unions in
+# whatever it selects.
+#
+# Deliberately no chip feature on this line. `rpi-hal`'s PAC selection has
+# a precedence order -- `bcm2711` > `bcm2837` > `bcm2835` -- so a chip
+# named here would be one a consumer could not turn off, and adding a
+# lower-precedence chip alongside it selects the wrong peripheral base
+# silently rather than failing. In practice an application's own `rpi-hal`
+# line already names one and cargo unifies it; the forwarding features
+# below exist for builds of *this* crate, which have no such line.
+rpi-hal = { version = "0.6.0", default-features = false, optional = true }
+
+# The randomness interface the RustCrypto primitives under `rustls` reach
+# through. `custom` is the feature that lets a target with no OS supply
+# its own backend, which is what src/entropy.rs registers.
+#
+# 0.2 rather than 0.3: that is what the crypto stack in this crate's
+# consumers resolves to, and the two majors are different mechanisms --
+# 0.3 replaced `register_custom_getrandom!` with a `--cfg` and a
+# `no_mangle` symbol. Moving is a change to make when the stack above
+# moves, not before.
+getrandom = { version = "0.2", default-features = false, features = [
+    "custom",
+], optional = true }
 
 [dev-dependencies]
 # The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
@@ -53,6 +85,22 @@ rpi-hal = { version = "0.6.0", features = ["bcm2837"] }
 # which static-storage crate an application uses is its own choice, and
 # this crate only ever receives the reference.
 static_cell = "2.1.1"
+# So the entropy example can call `getrandom` the way a crypto crate
+# would, which is the half of that module a direct `fill` does not
+# exercise: whether the registration actually resolved. The version must
+# match the optional dependency above -- cargo requires one source per
+# dependency across all build targets.
+#
+# `custom` has to be here as well, and not only for symmetry: without it
+# `getrandom` has no backend for a bare-metal target and refuses to
+# compile at all, which would break the feature-free `--examples` pass
+# even though nothing in it calls the crate. Enabling the feature only
+# defers the choice to a registered symbol -- it does not demand one
+# until something actually calls `getrandom`, which no example does
+# without `entropy`.
+getrandom = { version = "0.2", default-features = false, features = [
+    "custom",
+] }
 
 [features]
 # Nothing is on by default, and that is the crate's whole arrangement: a
@@ -69,13 +117,49 @@ default = []
 # never logs should not have to supply one.
 console = ["dep:critical-section"]
 
-# Auto-discovery covers `hello`, which needs no features. This one needs
-# an entry so it can declare `required-features` -- without it a plain
+# Hardware entropy and the `getrandom` backend (src/entropy.rs).
+#
+# Unlike `console`, this one needs a chip: it reaches `rpi_hal::rng`,
+# whose register block sits at a `PERIPHERAL_BASE` offset, and `rpi-hal`
+# rejects a build with no chip feature outright. A consumer's own
+# `rpi-hal` line usually supplies it; one of the three below does
+# otherwise.
+entropy = ["dep:rpi-hal", "dep:getrandom", "dep:critical-section"]
+
+# The chip, forwarded to `rpi-hal`'s feature of the same name. None is a
+# default, so a board says which it is -- and says it once, since cargo
+# unifies this with whatever its own `rpi-hal` line asks for.
+#
+# `rpi-hal?/` rather than `rpi-hal/`: the plain form would make naming a
+# chip quietly *enable* the optional dependency, so a board using nothing
+# but `console` would acquire a HAL it has no use for. With `?` these say
+# "if `rpi-hal` is in the build, tell it which chip", which is all they
+# are for.
+#
+# They are not mutually exclusive as cargo features -- nothing can make
+# them be -- so turning on two resolves by `rpi-hal`'s precedence rather
+# than failing. That is why nothing in this repository builds with
+# `--all-features`; see the Makefile.
+bcm2835 = ["rpi-hal?/bcm2835"]
+bcm2837 = ["rpi-hal?/bcm2837"]
+bcm2711 = ["rpi-hal?/bcm2711"]
+
+# Auto-discovery covers `hello`, which needs no features. These need
+# entries so they can declare `required-features` -- without one a plain
 # `cargo build --examples` would fail on an example whose module is not
 # compiled.
 [[example]]
 name = "console"
 required-features = ["console"]
+
+# The chip is named here as well as the feature, because an example is a
+# whole image and has no application manifest above it to supply one.
+[[example]]
+name = "entropy"
+# `console` as well, because this example reports through `logln!`. Every
+# example from here on will want it for the same reason, which is a fair
+# sign of what a real board's feature list looks like.
+required-features = ["entropy", "console", "bcm2837"]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding
