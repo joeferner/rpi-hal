@@ -175,6 +175,13 @@ fn fill_l2(table: &Table, region: usize) {
 /// `base` must be 2MB-aligned and inside the regions [`L2`] covers, and
 /// the block it names must hold nothing: it becomes unreachable. Must be
 /// called before the MMU is enabled, per the reasoning above.
+///
+/// `rt`-gated because `crate::mmu::install_stack_guard` is its only
+/// caller and needs that feature's linker script for the symbols naming
+/// the region. Without the gate a `mmu`-without-`rt` build carries this
+/// as dead code and says so, which rpi-hal's own checks do not see --
+/// every one of them has `rt` on.
+#[cfg(feature = "rt")]
 pub(super) unsafe fn invalidate_block(base: u32) {
     let base = u64::from(base);
     let region = (base / BLOCK_1GB) as usize;
