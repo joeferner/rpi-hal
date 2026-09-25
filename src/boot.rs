@@ -16,3 +16,12 @@ core::arch::global_asm!(include_str!("boot64.s"));
 core::arch::global_asm!(include_str!("mmu_fallback.s"));
 #[cfg(all(not(feature = "mmu"), target_arch = "aarch64"))]
 core::arch::global_asm!(include_str!("mmu_fallback64.s"));
+
+// The strong `__unhandled_exception` behind the `fault-report` feature,
+// overriding the weak one in vectors.s/vectors64.s. Each is the entry
+// stub for `fault.rs`: see those files for why the capture has to happen
+// in assembly rather than in the Rust function they tail-call.
+#[cfg(all(feature = "fault-report", target_arch = "arm"))]
+core::arch::global_asm!(include_str!("fault.s"));
+#[cfg(all(feature = "fault-report", target_arch = "aarch64"))]
+core::arch::global_asm!(include_str!("fault64.s"));

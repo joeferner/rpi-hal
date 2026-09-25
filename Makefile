@@ -69,6 +69,13 @@ examples:
 	# controller between them. Its own line because it needs
 	# `resident-fat` on top of the set above.
 	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,resident-fat --example sdhost_read
+	# And the fault reporter, gated on `fault-report`. Built on both
+	# architectures because the handler is the one piece of this crate
+	# with a genuinely separate implementation per architecture -- a
+	# different entry stub, different fault registers, and a stack switch
+	# on one of them and not the other.
+	cargo build --release --features bcm2837,fault-report --example fault_report
+	cargo build --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,fault-report --example fault_report
 
 fmt:
 	cargo fmt
@@ -98,6 +105,10 @@ clippy:
 	cargo clippy --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,resident-fat --example sdhost_read -- -D warnings
 	# Same again for the v3d examples, gated on `v3d` (BCM2837-only).
 	cargo clippy --release --features bcm2837,v3d --example v3d_probe --example gpu_cube -- -D warnings
+	# Same again for the fault reporter -- see `examples` for why it is
+	# linted on both architectures.
+	cargo clippy --release --features bcm2837,fault-report --example fault_report -- -D warnings
+	cargo clippy --release --target armv6-none-eabi --no-default-features --features bcm2835,rt,mmu,fault-report --example fault_report -- -D warnings
 	# And for the video decoder, the audio renderer, and the VCHIQ/MMAL
 	# stack under them, gated on `mmal` -- none of which a plain lint
 	# compiles either.
