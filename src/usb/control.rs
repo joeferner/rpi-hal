@@ -13,8 +13,11 @@
 //! requests ([`set_port_power`](crate::usb::control::set_port_power),
 //! [`get_port_status`](crate::usb::control::get_port_status),
 //! [`set_port_reset`](crate::usb::control::set_port_reset),
-//! [`clear_port_feature`](crate::usb::control::clear_port_feature))
-//! address the hub directly.
+//! [`clear_port_feature`](crate::usb::control::clear_port_feature)) are
+//! addressed to the hub itself, so they too take the hub's
+//! [`ControlEndpoint`] — which is what lets them reach a hub that is
+//! plugged into another hub and so is behind a transaction translator
+//! of its own.
 
 use crate::timer::Timer;
 use crate::usb::descriptor::DeviceDescriptor;
@@ -686,26 +689,22 @@ pub fn set_idle(
     control_no_data(channel, timer, device, setup)
 }
 
-/// Powers on downstream `port` (1-based) of the hub at `hub_address`
-/// via SET_FEATURE(PORT_POWER) (USB 2.0 spec §11.24.2.13) — a no-data
+/// Powers on downstream `port` (1-based) of `hub` via
+/// SET_FEATURE(PORT_POWER) (USB 2.0 spec §11.24.2.13) — a no-data
 /// class request addressed to the port ("other" recipient). After
 /// powering a port, wait the hub descriptor's `bPwrOn2PwrGood` time
-/// before the port's status is meaningful. `low_speed` should reflect
-/// `Dwc2Host::port_speed() == 2` for the hub itself.
+/// before the port's status is meaningful.
+///
+/// `hub` is the hub's own addressed endpoint 0, not the port's device:
+/// a hub is reached like any other device, so a hub that is itself
+/// plugged into another hub carries that parent's split target here and
+/// its requests go through the parent's transaction translator.
 pub fn set_port_power(
     channel: &mut Channel,
     timer: &Timer,
-    hub_address: u8,
+    hub: ControlEndpoint,
     port: u8,
-    low_speed: bool,
 ) -> Result<(), TransferError> {
-    let endpoint = ControlEndpoint {
-        address: hub_address,
-        low_speed,
-        // No data stage; 8 is the safe endpoint-0 default.
-        max_packet_size: 8,
-        split: None,
-    };
     // bmRequestType=0x23: host-to-device, class, recipient=other (port).
     let setup = Setup {
         request_type: 0x23,
@@ -714,7 +713,7 @@ pub fn set_port_power(
         index: port as u16,
         length: 0,
     };
-    control_no_data(channel, timer, endpoint, setup)
+    control_no_data(channel, timer, hub, setup)
 }
 
 /// Reads downstream `port`'s status via GET_STATUS (USB 2.0 spec
@@ -725,22 +724,14 @@ pub fn set_port_power(
 /// powered, bit 9 = a low-speed device is attached, bit 10 = a
 /// high-speed device (neither 9 nor 10 set means full speed).
 /// `wPortChange`'s bits flag status changes to acknowledge with
-/// CLEAR_FEATURE. `low_speed` should reflect `Dwc2Host::port_speed() ==
-/// 2` for the hub itself.
+/// CLEAR_FEATURE. `hub` is the hub's own addressed endpoint 0 — see
+/// [`set_port_power`].
 pub fn get_port_status(
     channel: &mut Channel,
     timer: &Timer,
-    hub_address: u8,
+    hub: ControlEndpoint,
     port: u8,
-    low_speed: bool,
 ) -> Result<(u16, u16), TransferError> {
-    let endpoint = ControlEndpoint {
-        address: hub_address,
-        low_speed,
-        // 4-byte reply fits comfortably in the endpoint-0 default of 8.
-        max_packet_size: 8,
-        split: None,
-    };
     // bmRequestType=0xA3: device-to-host, class, recipient=other (port).
     let setup = Setup {
         request_type: 0xA3,
@@ -750,35 +741,28 @@ pub fn get_port_status(
         length: 4,
     };
     let mut status = [0u8; 4];
-    control_in(channel, timer, endpoint, setup, &mut status)?;
+    control_in(channel, timer, hub, setup, &mut status)?;
     Ok((
         u16::from_le_bytes([status[0], status[1]]),
         u16::from_le_bytes([status[2], status[3]]),
     ))
 }
 
-/// Resets downstream `port` of the hub at `hub_address` via
+/// Resets downstream `port` of `hub` via
 /// SET_FEATURE(PORT_RESET) (USB 2.0 spec §11.24.2.13) — a no-data class
 /// request to the port. The hub drives USB reset signaling and, when
 /// done, enables the port and sets its C_PORT_RESET change bit; poll
 /// [`get_port_status`] for PORT_ENABLE (and the now-valid speed bits),
 /// then acknowledge with [`clear_port_feature`] and
 /// [`PORT_FEATURE_C_RESET`]. Only meaningful once the port reports a
-/// device connected. `low_speed` should reflect `Dwc2Host::port_speed()
-/// == 2` for the hub itself.
+/// device connected. `hub` is the hub's own addressed endpoint 0 — see
+/// [`set_port_power`].
 pub fn set_port_reset(
     channel: &mut Channel,
     timer: &Timer,
-    hub_address: u8,
+    hub: ControlEndpoint,
     port: u8,
-    low_speed: bool,
 ) -> Result<(), TransferError> {
-    let endpoint = ControlEndpoint {
-        address: hub_address,
-        low_speed,
-        max_packet_size: 8,
-        split: None,
-    };
     // bmRequestType=0x23: host-to-device, class, recipient=other (port).
     let setup = Setup {
         request_type: 0x23,
@@ -787,29 +771,22 @@ pub fn set_port_reset(
         index: port as u16,
         length: 0,
     };
-    control_no_data(channel, timer, endpoint, setup)
+    control_no_data(channel, timer, hub, setup)
 }
 
-/// Clears `feature` on downstream `port` of the hub at `hub_address`
+/// Clears `feature` on downstream `port` of `hub`
 /// via CLEAR_FEATURE (USB 2.0 spec §11.24.2.2) — used to acknowledge a
 /// port status change (the `PORT_FEATURE_C_*` selectors, e.g.
 /// [`PORT_FEATURE_C_CONNECTION`]/[`PORT_FEATURE_C_RESET`]). A no-data
-/// class request to the port. `low_speed` should reflect
-/// `Dwc2Host::port_speed() == 2` for the hub itself.
+/// class request to the port. `hub` is the hub's own addressed endpoint
+/// 0 — see [`set_port_power`].
 pub fn clear_port_feature(
     channel: &mut Channel,
     timer: &Timer,
-    hub_address: u8,
+    hub: ControlEndpoint,
     port: u8,
     feature: u16,
-    low_speed: bool,
 ) -> Result<(), TransferError> {
-    let endpoint = ControlEndpoint {
-        address: hub_address,
-        low_speed,
-        max_packet_size: 8,
-        split: None,
-    };
     // bmRequestType=0x23: host-to-device, class, recipient=other (port).
     let setup = Setup {
         request_type: 0x23,
@@ -818,5 +795,5 @@ pub fn clear_port_feature(
         index: port as u16,
         length: 0,
     };
-    control_no_data(channel, timer, endpoint, setup)
+    control_no_data(channel, timer, hub, setup)
 }
