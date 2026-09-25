@@ -109,8 +109,9 @@ and a bare `0.2.0` silently does nothing at all. It must also match
 gh run watch
 ```
 
-The release job re-runs `make package`, then publishes. If you set up the
-required reviewer, approve it in the Actions UI when it parks.
+The release job re-runs `make package`, creates the GitHub release from
+this version's changelog section, and only then publishes. If you set up
+the required reviewer, approve it in the Actions UI when it parks.
 
 ### 7. Verify the publish
 
@@ -126,29 +127,20 @@ that page shows a failure, that section is where to look. A successful
 build shows "Available on crate feature …" badges on the feature-gated
 items, which confirms the `--cfg docsrs` path worked.
 
-### 8. Create the GitHub release
+### 8. Check the release page reads right
 
-Not decoration: `CHANGELOG.md`'s version links point at
-`/releases/tag/v<version>`, which only resolves once a release object
+The release itself is not a step: `release.yml` creates it from this
+version's changelog section, before publishing, and `CHANGELOG.md`'s
+version links point at `/releases/tag/v<version>`, which resolves once it
 exists.
 
-```sh
-gh release create v<version> \
-  --title "v<version>" \
-  --notes-file <(awk -v v="## [<version>]" '
-    index($0, v) == 1 { inside = 1; next }
-    inside && /^## \[/ { exit }
-    inside { print }
-  ' CHANGELOG.md)
-```
-
-The range has to end at the *next* `## [` heading, which is why this is
-`awk` and not the obvious `sed -n '/## \[<version>\]/,/^\[<version>\]:/p'`.
-That closing address matches the link reference at the bottom of the file,
-not anything near the section, so the range runs past every older heading
-and the "notes" become the entire changelog. It fails silently — `gh`
-accepts whatever it is handed — so the only symptom is an over-long
-release page nobody rereads.
+What is worth a glance is that the notes are the section and not the whole
+file. The extraction ends at the *next* `## [` heading, which is why the
+workflow uses `awk` and not the obvious
+`sed -n '/## \[<version>\]/,/^\[<version>\]:/p'`: that closing address
+matches the link reference at the bottom of the file rather than anything
+near the section, so the range runs past every older heading. It fails
+silently, so the only symptom is an over-long release page nobody rereads.
 
 That's the release. Nothing further is required.
 
@@ -174,7 +166,7 @@ released version between releases, and step 2 is where it moves.
 | Guard | Where | Symptom if it trips |
 | --- | --- | --- |
 | Tag matches `Cargo.toml` version | `release.yml` | Release job fails before publishing |
-| Changelog is dated | `release.yml` | Same |
+| Changelog has a dated section for the version | `release.yml` | Same — and it has to exist, since the release notes are written from it |
 | Packaged tarball actually builds | `make package`, in both CI and the release job | Same |
 | A chip feature is selected | `lib.rs`'s `compile_error!` | `cargo package`/`publish` with no `--features` aborts, because the verification build uses *default* features and no chip is a default. `make package` passes `bcm2837` for exactly this reason |
 | PRs required on `main` | Repository ruleset | Direct pushes rejected |
@@ -184,6 +176,12 @@ matched against the **job names** in `ci.yml`. Renaming a job there leaves
 the ruleset waiting on a name that never reports, and every PR blocks until
 the ruleset is updated too. It fails closed, which is the safe direction,
 but it is a puzzling half hour if you have forgotten why.
+
+The release job is written to be re-runnable: the release notes are
+rewritten rather than appended, and the publish step first asks the
+crates.io index whether the version exists — otherwise a re-run would die
+on "crate version already uploaded" and never reach whatever it was re-run
+for.
 
 ## If something goes wrong
 
