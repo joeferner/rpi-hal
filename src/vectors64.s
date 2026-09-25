@@ -16,46 +16,96 @@
 .section ".text.vectors"
 .align 11
 .global __vectors
+// Each slot carries its own index into `__unhandled_exception` (in x0),
+// because `ESR_EL1` cannot supply it. ESR is written by *synchronous*
+// exceptions and by SError; an IRQ or an FIQ arriving here leaves it
+// holding whatever the last synchronous exception put there, which reads
+// as a confident and completely wrong diagnosis. The slot number is the
+// only thing that distinguishes "an interrupt fired with no handler"
+// from "a load faulted", and they are not the same bug.
+//
+// `b`, never `bl`: `ELR_EL1` is where the faulting address lives on this
+// architecture, so nothing here needs `x30` -- but leaving it alone
+// means the faulting context's link register is still readable, which is
+// one frame of backtrace for free.
 __vectors:
     // Current EL with SP_EL0 (unused: this kernel runs at EL1h).
     .align 7
-    b       __unhandled_exception       // Synchronous
+    b       __fault_el0_sync
     .align 7
-    b       __unhandled_exception       // IRQ
+    b       __fault_el0_irq
     .align 7
-    b       __unhandled_exception       // FIQ
+    b       __fault_el0_fiq
     .align 7
-    b       __unhandled_exception       // SError
+    b       __fault_el0_serror
 
     // Current EL with SP_ELx (EL1h -- this kernel).
     .align 7
-    b       __unhandled_exception       // Synchronous
+    b       __fault_elx_sync
     .align 7
     b       __irq_trampoline            // IRQ
     .align 7
-    b       __unhandled_exception       // FIQ
+    b       __fault_elx_fiq
     .align 7
-    b       __unhandled_exception       // SError
+    b       __fault_elx_serror
 
     // Lower EL using AArch64 (unused: no EL0 code).
     .align 7
-    b       __unhandled_exception       // Synchronous
+    b       __fault_lower64_sync
     .align 7
-    b       __unhandled_exception       // IRQ
+    b       __fault_lower64_irq
     .align 7
-    b       __unhandled_exception       // FIQ
+    b       __fault_lower64_fiq
     .align 7
-    b       __unhandled_exception       // SError
+    b       __fault_lower64_serror
 
     // Lower EL using AArch32 (unused).
     .align 7
-    b       __unhandled_exception       // Synchronous
+    b       __fault_lower32_sync
     .align 7
-    b       __unhandled_exception       // IRQ
+    b       __fault_lower32_irq
     .align 7
-    b       __unhandled_exception       // FIQ
+    b       __fault_lower32_fiq
     .align 7
-    b       __unhandled_exception       // SError
+    b       __fault_lower32_serror
+
+// The stubs the table above branches to, outside it because a vector
+// slot is 128 bytes and these would otherwise have to fit inside one.
+// `kind` is `group << 2 | type`, with group 0-3 in the table's own order
+// (current SP_EL0, current SP_ELx, lower AArch64, lower AArch32) and
+// type 0 synchronous, 1 IRQ, 2 FIQ, 3 SError. Group 1 is where this
+// kernel runs, so a report naming any other group is a kernel that got
+// somewhere it has no code for.
+__fault_el0_sync:       mov     x0, #0
+                        b       __unhandled_exception
+__fault_el0_irq:        mov     x0, #1
+                        b       __unhandled_exception
+__fault_el0_fiq:        mov     x0, #2
+                        b       __unhandled_exception
+__fault_el0_serror:     mov     x0, #3
+                        b       __unhandled_exception
+__fault_elx_sync:       mov     x0, #4
+                        b       __unhandled_exception
+__fault_elx_fiq:        mov     x0, #6
+                        b       __unhandled_exception
+__fault_elx_serror:     mov     x0, #7
+                        b       __unhandled_exception
+__fault_lower64_sync:   mov     x0, #8
+                        b       __unhandled_exception
+__fault_lower64_irq:    mov     x0, #9
+                        b       __unhandled_exception
+__fault_lower64_fiq:    mov     x0, #10
+                        b       __unhandled_exception
+__fault_lower64_serror: mov     x0, #11
+                        b       __unhandled_exception
+__fault_lower32_sync:   mov     x0, #12
+                        b       __unhandled_exception
+__fault_lower32_irq:    mov     x0, #13
+                        b       __unhandled_exception
+__fault_lower32_fiq:    mov     x0, #14
+                        b       __unhandled_exception
+__fault_lower32_serror: mov     x0, #15
+                        b       __unhandled_exception
 
 // Weak, for the same reason `__irq_handler` below is: a fault that
 // parks silently is indistinguishable from a hang in a driver, a
@@ -66,13 +116,23 @@ __vectors:
 // this and can print what happened: `ESR_EL1` gives the exception class
 // and `FAR_EL1` the faulting address, with `ELR_EL1` the instruction.
 //
-// Every slot in the table above shares this one symbol, so an override
-// reads `ESR_EL1` to tell which exception it is. Unlike AArch32 there
-// are no banked stacks to prepare -- an override runs on the same
-// `SP_EL1` the faulting code was using, which is worth knowing if the
-// fault was a stack overflow: the report needs the room the overflow
-// just ran out of, so a handler that must survive that case should
-// switch `sp` itself before doing real work.
+// Every slot in the table above reaches this one symbol through a stub
+// that numbers it, so an override is `extern "C" fn(kind: u32)` -- see
+// those stubs for the encoding, and `ESR_EL1`/`FAR_EL1`/`ELR_EL1` for
+// what happened within a kind.
+//
+// Unlike AArch32 there are no banked stacks to prepare: an override runs
+// on the same `SP_EL1` the faulting code was using. That matters most in
+// the case most worth reporting -- a stack overflow faults with `sp`
+// already past the end of the region, so a handler that pushes anything
+// faults again, and the second fault is silent. A handler that wants to
+// survive that has to move `sp` somewhere safe before doing real work.
+// `rpi-hal`'s own, behind the `fault-report` feature, does exactly that
+// in `fault64.s`.
+//
+// Enabling that feature *and* defining this symbol is a duplicate
+// definition and fails to link, which is the intended way to find out
+// that both were asked for.
 .weak __unhandled_exception
 __unhandled_exception:
     wfe

@@ -39,6 +39,10 @@ mod critical_section;
 /// Blocking driver for the DMA controller.
 pub mod dma;
 mod emmc;
+// Installs `__unhandled_exception` rather than offering an API, so there
+// is nothing here to make public -- see the module's own documentation.
+#[cfg(feature = "fault-report")]
+mod fault;
 /// Enabling the hardware floating-point / SIMD unit (VFP + NEON).
 pub mod fpu;
 /// Per-core ARM generic (architected) timer: monotonic counter, blocking

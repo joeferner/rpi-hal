@@ -208,6 +208,23 @@ mmu = []
 # see boot.rs -- since they're inert (cores just spin forever, same as
 # today) until something actually calls `multicore::spawn`.
 multicore = ["mmu"]
+# A `__unhandled_exception` that says what happened before it parks
+# (src/fault.rs), replacing the weak one in the vector table that parks
+# silently.
+#
+# Off by default, and the reason is not cost -- it is a few hundred bytes
+# of `.text` and a 4 KiB `.bss` stack on AArch64. It is that the symbol
+# is a definition, not a hook: an application that already has its own
+# `__unhandled_exception` and enables this gets a duplicate-symbol link
+# error, and there is no sensible way for the crate to guess which of the
+# two was meant. Opting in is how an application says it has no handler
+# of its own.
+#
+# Implies `rt`, which is what supplies the vector table this overrides a
+# slot of, and `stack`, which is what makes the report able to say that a
+# faulting address is below the stack -- the one diagnosis a register
+# dump cannot reach on its own.
+fault-report = ["rt"]
 # Chip selection: exactly one of `bcm2837`/`bcm2711`/`bcm2835` must be
 # enabled -- none is in `default`, since there's no sensible default
 # target chip. Each pulls in that chip's PAC as `pac` (see the
@@ -313,6 +330,14 @@ required-features = ["resident-fat"]
 # mounts a filesystem, so it needs the same FAT layer as the example above.
 name = "sdhost_read"
 required-features = ["resident-fat"]
+
+[[example]]
+# Faults on purpose. Needs the feature whose output it demonstrates --
+# without it the example still builds and still faults, but the vector
+# table's weak handler parks the core silently and there is nothing to
+# see, so a plain `--examples` build skipping this one is correct.
+name = "fault_report"
+required-features = ["fault-report"]
 
 [[example]]
 name = "i2s_wav_player"

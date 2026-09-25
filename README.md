@@ -729,6 +729,12 @@ has what's left.
   MMU/cacheable-RAM setup `mmu` provides to behave correctly on this
   core — without it, `ldrex`/`strex` are architecturally
   UNPREDICTABLE.
+- **`fault-report`** (off by default, implies `rt`): replaces the vector
+  table's weak `__unhandled_exception`, which parks the core in silence,
+  with one that first says what happened — the exception, the faulting
+  instruction, the address and direction of the access, the decoded
+  fault status, and the extent of the main stack. See "Reporting a
+  fault" below.
 - **`async`** (off by default): adds async counterparts to the blocking
   trait implementations, from `embedded-hal-async` and
   `embedded-io-async` — one capability spanning the two trait crates,
@@ -887,6 +893,57 @@ has what's left.
   plain example), so it depends on this crate with default features
   left on, getting `rt`'s boot sequence for free rather than writing
   its own.
+
+### Reporting a fault
+
+A data abort, a prefetch abort or an undefined instruction lands in
+`__unhandled_exception`. The vector table's own definition of that symbol
+is weak and parks the core with `wfe`, which produces no output at all —
+and a board that has gone quiet looks exactly like one wedged in a driver
+or deadlocked on a lock, which is a different bug investigated in a
+different direction.
+
+The `fault-report` feature replaces it with one that prints first:
+
+```text
+FAULT: data abort on core 0
+  pc     0x0008a41c
+  addr   0x000ffff8  write
+  cause  permission fault, second level
+  dfsr   0x0000080f   spsr 0x600001d3
+  stack  0x00100000..0x00200000
+  *** past the bottom of the stack: this is a stack overflow
+```
+
+`pc` is the faulting instruction with the per-exception bias already
+subtracted, so it can go straight into `objdump`.
+
+The last line needs a caveat: it only appears if the overflow *faults*,
+and on these boards it does not yet. `mmu` identity-maps all of RAM, so
+`sp` descending past `__stack_bottom` walks into the `__stack_slack`
+region the linker script reserves below it and then into `.text`, with
+the hardware raising nothing — an overflow today is silent corruption,
+not a report. That slack is sized and 2 MiB-aligned so the `mmu` feature
+can leave it as an invalid descriptor, which would make an overflow fault
+at the instruction that causes it; the check here is already right for
+when it does.
+
+`examples/fault_report.rs` raises one on purpose.
+
+Turn it on only if the application does *not* define
+`__unhandled_exception` itself. Both are definitions of the same symbol,
+so asking for both is a duplicate-symbol link error rather than one
+silently winning.
+
+An application that wants its own can still have the fault identified for
+it. Each vector slot passes its index, so the handler is
+`extern "C" fn(kind: u32)` — 1 undefined, 2 supervisor call, 3 prefetch
+abort, 4 data abort, 7 FIQ on AArch32, and `group << 2 | type` on
+AArch64. That number is not otherwise recoverable: on AArch32 a data
+abort and a prefetch abort arrive in the same CPU mode, and on AArch64
+`ESR_EL1` is not written at all by an IRQ or an FIQ. A handler written
+before this existed, taking no argument and reading `lr` itself, still
+links and still works.
 
 ### Supplying your own MMU table
 
