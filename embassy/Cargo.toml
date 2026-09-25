@@ -211,6 +211,36 @@ bcm2835 = ["rpi-hal/bcm2835"]
 # selection above, without which the library does not build at all.
 multicore = ["rpi-hal/multicore"]
 
+# `rpi-hal`'s interrupt-driven driver methods, forwarded.
+#
+# Named here rather than left to the application to enable on rpi-hal
+# directly, because `irq::dispatch` has to know whether those drivers are
+# in the build: their wakers are what it would be servicing, and a
+# dispatcher that called into them regardless would be reaching for
+# entry points that are not compiled. A feature of this crate is the only
+# thing a `cfg` here can test.
+#
+# Off by default. rpi-hal's `async` costs every one of those drivers a
+# waker slot, and an application with nothing parked on them -- a board
+# whose only interrupt is the timer -- should not pay for it.
+async = ["rpi-hal/async"]
+
+# A `__irq_handler` that services every source this crate and rpi-hal
+# know about (src/irq.rs), for an application that has none of its own.
+#
+# Off by default, and the reason is not cost -- it is a handful of
+# `if`s. It is that the symbol is a definition rather than a hook: an
+# application with its own `__irq_handler` that enables this gets a
+# duplicate-symbol link error. Opting in is how an application says it
+# has no handler of its own; one that does composes with `irq::dispatch`
+# instead, which needs no feature.
+#
+# Worth knowing what the alternative to either is: rpi-hal's default
+# `__irq_handler` is a weak no-op, so forgetting one entirely links,
+# boots, and livelocks at the first `embassy-time` deadline. There is no
+# error for it and it looks exactly like a hang somewhere else.
+irq-dispatch = []
+
 # The `embassy-net` adapter over rpi-hal's LAN9514 USB-Ethernet driver
 # (src/lan9514.rs).
 #
@@ -222,7 +252,13 @@ embassy-net-driver = [
     "dep:embassy-net-driver",
     "dep:embassy-net-driver-channel",
     "dep:embassy-futures",
+    # Both, and they are not the same statement: the first is what the
+    # adapter needs to compile, the second is what lets `irq::dispatch`
+    # see that it is there and service the USB interrupt the runner is
+    # parked on. Enabling only the first builds an adapter whose
+    # transfers nothing wakes.
     "rpi-hal/async",
+    "async",
 ]
 
 # The `embassy-net` adapter over rpi-hal's Wi-Fi driver (src/wifi.rs).
@@ -248,6 +284,15 @@ wifi = [
 # `cargo build --examples` from failing on them and lets
 # `scripts/build-example.sh` pick the feature up from `cargo metadata`
 # rather than hardcoding a list.
+[[example]]
+# The one example that does not write its own `__irq_handler`, because it
+# is what `irq-dispatch` is for -- see the note where that handler used to
+# be. Without the feature it builds and then livelocks at the first
+# deadline, which is precisely the mistake the feature removes, so it is
+# named here rather than left to a plain `--examples` build.
+name = "embassy_blink"
+required-features = ["irq-dispatch"]
+
 [[example]]
 name = "embassy_multicore"
 required-features = ["multicore"]

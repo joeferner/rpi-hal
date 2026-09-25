@@ -69,15 +69,17 @@ jobs:
       # covered by the steps above, whose target comes from
       # .cargo/config.toml.
       #
-      # `--all-features` on the second examples build for the same reason
-      # `make examples` runs twice: an example whose `required-features` are
-      # unmet is skipped silently, so without it the `multicore` one is
-      # never compiled for this architecture.
+      # Deliberately `make` rather than the `cargo` lines these used to be:
+      # which features sweep the examples is a fact about this crate, and
+      # the Makefile is where it lives. Written out here as well, the two
+      # drifted the moment `irq-dispatch` arrived -- the Makefile dropped
+      # `--all-features` for an explicit set, this step kept it, and the
+      # build failed here on a duplicate `__irq_handler` after passing
+      # locally.
       - name: Build for AArch64 as well
         run: |
-          cargo build --release --target aarch64-unknown-none-softfloat
-          cargo build --release --examples --target aarch64-unknown-none-softfloat
-          cargo build --release --examples --all-features --target aarch64-unknown-none-softfloat
+          make build-aarch64
+          make examples-aarch64
 
   # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
   # a comment that rots the first time a dependency or a `core` API moves.

@@ -4,8 +4,9 @@
 # repeating flags here. Build the other architecture with
 # `--target aarch64-unknown-none-softfloat`.
 
-.PHONY: build build-armv6 examples examples-armv6 fmt fmt-check clippy \
-	clippy-armv6 doc package pre-commit clean
+.PHONY: build build-armv6 build-aarch64 examples examples-armv6 \
+	examples-aarch64 fmt fmt-check clippy clippy-armv6 doc package \
+	pre-commit clean
 
 # The ARMv6 (BCM2835) invocation, shared by the three recipes below so the
 # flags cannot drift apart between building and linting. Four things it
@@ -36,17 +37,42 @@ build:
 build-armv6:
 	cargo +nightly build $(ARMV6)
 
-# Twice over, because the feature set changes which examples exist: the
-# default build is what a consumer taking this crate plainly would get, and
-# `--all-features` is the only way the `multicore`-gated example gets
-# compiled at all -- cargo silently skips a target whose
-# `required-features` are unmet rather than reporting it.
+# The feature set changes which examples exist -- cargo silently skips a
+# target whose `required-features` are unmet rather than reporting it --
+# so a plain build is not full coverage. `EXAMPLE_FEATURES` is every
+# feature *except* `irq-dispatch`, which cannot be in a sweep: it defines
+# `__irq_handler`, and every example but one defines its own, so building
+# them together is a duplicate symbol. That example is named on its own
+# line below, which is also the only place the feature is exercised.
+EXAMPLE_FEATURES := multicore,async,embassy-net-driver,wifi
+
 examples:
 	cargo build --release --examples
-	cargo build --release --examples --all-features
+	cargo build --release --examples --features $(EXAMPLE_FEATURES)
+	cargo build --release --features irq-dispatch --example embassy_blink
 
 examples-armv6:
 	cargo +nightly build $(ARMV6) --examples
+
+# The other architecture. The examples are the only thing that links, and
+# linking is where a missing `rpi-link.x` or a stray RUSTFLAGS shows up --
+# so this is worth having even though the source is shared.
+#
+# These recipes exist rather than the equivalent `cargo` lines living in
+# `ci.yml` so that `EXAMPLE_FEATURES` above is the only place that knows
+# which features sweep the examples. When it was written out in both, the
+# two drifted the moment `irq-dispatch` was added: the Makefile learned to
+# stop using `--all-features` and the workflow did not, so `make
+# pre-commit` passed and CI failed on a duplicate `__irq_handler`.
+AARCH64 := --release --target aarch64-unknown-none-softfloat
+
+build-aarch64:
+	cargo build $(AARCH64)
+
+examples-aarch64:
+	cargo build $(AARCH64) --examples
+	cargo build $(AARCH64) --examples --features $(EXAMPLE_FEATURES)
+	cargo build $(AARCH64) --features irq-dispatch --example embassy_blink
 
 fmt:
 	cargo fmt
@@ -56,7 +82,9 @@ fmt-check:
 
 clippy:
 	cargo clippy --release --examples -- -D warnings
-	cargo clippy --release --examples --all-features -- -D warnings
+	cargo clippy --release --examples --features $(EXAMPLE_FEATURES) -- -D warnings
+	# Separate for the same reason as in `examples` above.
+	cargo clippy --release --features irq-dispatch --example embassy_blink -- -D warnings
 
 clippy-armv6:
 	cargo +nightly clippy $(ARMV6) --examples -- -D warnings
@@ -87,7 +115,13 @@ doc:
 package:
 	CARGO_TARGET_DIR=target/verify cargo package
 
-pre-commit: fmt clippy clippy-armv6 build build-armv6 examples examples-armv6 doc
+# AArch64 is in here rather than left to CI because it is the one
+# architecture whose linking this cannot otherwise prove: the ARMv6 and
+# ARMv7 builds above share a linker script and a feature set, and AArch64
+# is where the two example sweeps differ. Leaving it out is what let a
+# duplicate-symbol failure reach CI green-locally.
+pre-commit: fmt clippy clippy-armv6 build build-armv6 build-aarch64 examples \
+	examples-armv6 examples-aarch64 doc
 
 clean:
 	cargo clean

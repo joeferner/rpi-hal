@@ -31,6 +31,10 @@
 /// Thread-mode executor for AArch32 and AArch64 — see the module's own
 /// documentation for why this isn't one of `embassy-executor`'s backends.
 pub mod executor;
+/// Getting interrupts to the code waiting on them — see [`irq::dispatch`],
+/// and the `irq-dispatch` feature for the case where an application has no
+/// sources of its own.
+pub mod irq;
 /// `embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver —
 /// see the module's own documentation for the interrupt wiring an
 /// application must provide.

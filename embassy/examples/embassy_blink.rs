@@ -136,13 +136,12 @@ pub extern "C" fn kmain() -> ! {
     });
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn __irq_handler() {
-    let peripherals = unsafe { pac::Peripherals::steal() };
-    let lic = Lic::new(peripherals.LIC);
-
-    if lic.is_timer1_pending() {
-        // Acknowledges the match itself; nothing else here may clear it.
-        time_driver::on_timer_irq();
-    }
-}
+// No `__irq_handler` here, and that is the point of the `irq-dispatch`
+// feature this example is built with: the timer interrupt still has to
+// be serviced -- without it the first `Timer::after` livelocks the core
+// -- and the feature defines the handler so there is nothing to forget.
+//
+// The other examples write it out by hand, which is what an application
+// with interrupt sources of its own has to do. Those compose with
+// `rpi_hal_embassy::irq::dispatch()` rather than repeating what it
+// covers; see that function.

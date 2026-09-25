@@ -83,8 +83,11 @@ HAL, doesn't apply here — `rpi-hal` is the HAL.
   queue uses atomic compare-exchange, and `ldrex`/`strex` are
   UNPREDICTABLE until RAM is mapped as cacheable Normal memory.
 - **Interrupt dispatch.** `rpi-hal` leaves `__irq_handler` to the
-  application, so this crate can't claim it. The application routes the
-  System Timer's interrupt here from its own handler.
+  application. Either turn on the **`irq-dispatch`** feature, which
+  defines it for you, or write one and call `irq::dispatch()` from it —
+  see "Interrupts" below. Getting this wrong has no error: the default
+  handler is a weak no-op, so a program with neither links, boots, and
+  livelocks at its first deadline.
 - **A linker script**, providing `_start`, `__bss_start` and `__bss_end`
   for `rpi-hal`'s boot code. `rpi-hal` publishes one on the linker search
   path, so the application only has to name it — one `-T` line in
@@ -180,9 +183,46 @@ pub extern "C" fn __irq_handler() {
 `unsafe(no_mangle)` is the edition 2024 spelling; on edition 2021 write
 `#[no_mangle]`.
 
-An application with other interrupt sources adds them to the same
-`__irq_handler`, checking each `Lic::is_*_pending` independently — more
-than one can be pending in a single entry.
+## Interrupts
+
+The handler above is written out to show what it does. Most applications
+should not write it at all.
+
+**With no interrupt sources of its own**, turn on `irq-dispatch` and
+delete the handler. The feature defines `__irq_handler`, and it services
+the System Timer plus — under `async` — every interrupt-driven driver
+`rpi-hal` has: USB, GPIO edges, I2C, UART and the SD controller.
+`examples/embassy_blink.rs` is built that way.
+
+**With sources of its own**, leave the feature off and compose, which is
+the only way to reach something neither crate has heard of:
+
+```rust
+#[unsafe(no_mangle)]
+pub extern "C" fn __irq_handler() {
+    rpi_hal_embassy::irq::dispatch();
+
+    let lic = Lic::new(unsafe { pac::Peripherals::steal() }.LIC);
+    if lic.is_uart_pending() {
+        my_uart_handler();
+    }
+}
+```
+
+Either way, check each `Lic::is_*_pending` independently rather than as
+an `else if` chain — more than one can be pending in a single entry, and
+a handler that stops at the first leaves the rest asserting, which is the
+same livelock as having no handler at all.
+
+Turning the feature on *and* defining `__irq_handler` is a duplicate
+definition and fails to link. That is deliberate: the feature is a
+definition, not a hook, and there is no sensible way to guess which of
+the two was meant.
+
+Why the feature is not on by default, given that forgetting the handler
+is the more likely mistake: an application that has its own would get a
+link error out of a plain `cargo add`, with nothing pointing at the
+feature that caused it.
 
 ## Timebase
 

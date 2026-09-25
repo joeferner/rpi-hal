@@ -56,6 +56,40 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wants `embassy-time` for its ticker and has no use for `rpi-hal/async`,
   and that one is the other way round.
 
+- **`irq::dispatch`, which services every interrupt source this crate and
+  `rpi-hal` know about**, and an `irq-dispatch` feature that installs it
+  as `__irq_handler` outright.
+
+  `rpi-hal`'s default `__irq_handler` is a weak `bx lr`, so an
+  application that never defines one links and boots. The first
+  `embassy-time` deadline then fires, nothing acknowledges the System
+  Timer's Compare 1 match, the controller goes on asserting, and the core
+  re-enters the handler forever. Every task stops at that instant, with no
+  error anywhere and a symptom indistinguishable from a hang in whatever
+  ran last. Every example here carried the handler by hand, and so does
+  every application built on this crate.
+
+  `dispatch` is the composable half: the System Timer always, and under
+  the new `async` feature the interrupt-driven drivers — USB, GPIO edges,
+  I2C, UART, SD. Each is gated on its own pending bit, and each entry
+  point is harmless when there is nothing to do, so it is safe to call
+  from a handler that goes on to check sources of its own. That needs no
+  feature.
+
+  `irq-dispatch` is for an application with no sources of its own. Off by
+  default, and not for cost — it is a handful of `if`s. It is that the
+  symbol is a definition rather than a hook, so an application that has
+  its own and enables this gets a duplicate-symbol link error. Leaving it
+  off means a plain `cargo add` cannot produce that error out of nowhere;
+  opting in is how an application says it has no handler.
+
+- **An `async` feature**, which forwards `rpi-hal/async` and tells
+  `dispatch` those drivers are in the build — a `cfg` can only test this
+  crate's own features, not a dependency's. `embassy-net-driver` implies
+  it as well as `rpi-hal/async`, and the two are different statements: the
+  first is what the adapter needs to compile, the second is what wakes the
+  USB transfers its runner parks on.
+
 ### Changed
 
 - **Requires `rpi-hal` 0.7.0**, which is what makes the Wi-Fi adapter
@@ -65,6 +99,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carried a `[patch.crates-io]` pointing at a working copy and did not
   build from a clean checkout. 0.7.0 carries them, so the patch comes out
   and the version moves.
+
+- **The Makefile names the examples it builds** rather than sweeping them
+  with `--all-features --examples`, which now fails to link: ten examples
+  over, each defines the `__irq_handler` that `irq-dispatch` also defines.
+  `examples/embassy_blink.rs` drops its hand-written handler and is built
+  with the feature, which is the only place it is exercised — and the
+  reason it cannot be part of a sweep. This is the shape `rpi-hal`'s
+  Makefile already uses, for the same reason.
 
 ## [0.6.0] - 2026-09-20
 
