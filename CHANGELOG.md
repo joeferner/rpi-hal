@@ -4,7 +4,7 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-09-25
 
 ### Added
 
@@ -163,6 +163,144 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anyway. `Wifi::new` asks at bring-up and ignores the answer; this is
   public so a caller can see what the firmware said.
 
+- **`fault-report`, an optional handler that says what the fault was
+  instead of parking silently.** The vector table's
+  `__unhandled_exception` is weak and its default body is `wfe; b .`, so
+  an unhandled data abort stops the core and prints nothing. On a console
+  that is indistinguishable from a hang in a driver, a deadlock, or a
+  wedged peripheral — three bugs investigated in three different
+  directions, and the one that produces no evidence is the one you get.
+
+  ```text
+  FAULT: data abort on core 0
+    pc     0x00008364
+    addr   0xf0000000  read
+    cause  translation fault, first level
+    dfsr   0x00000005   spsr 0x600001d3
+    stack  0x00400000..0x00500000
+  ```
+
+  `pc` has the per-exception bias already subtracted (8 for a data abort,
+  4 for the rest on AArch32; none on AArch64, where `ELR_EL1` is exact),
+  so it goes straight into a disassembly rather than being adjusted by
+  hand, correctly, by whoever is reading at the time.
+
+  Off by default, and the reason is not cost — it is a few hundred bytes
+  of `.text` and a 4 KiB `.bss` stack on AArch64. It is that the symbol is
+  a definition rather than a hook: an application that already has its own
+  and enables this gets a duplicate-symbol link error, and there is no
+  sensible way to guess which was meant. Opting in is how an application
+  says it has none.
+
+  Each vector slot now passes its index, so a handler is
+  `extern "C" fn(kind: u32)`. Both architectures need that number and for
+  different reasons: on AArch32 a data abort and a prefetch abort share a
+  CPSR mode and differ in which register pair holds the answer, and on
+  AArch64 `ESR_EL1` is not written by an IRQ or an FIQ at all, so reading
+  it for those prints whatever the last synchronous exception left — a
+  confident wrong diagnosis. The stubs branch rather than call, so `lr`
+  still holds the faulting address and a handler written against the older
+  no-argument shape keeps working.
+
+- **A stack overflow now faults where it happens**, under `mmu` with
+  `rt`. `linker.ld` has reserved `__stack_slack` below the main stack
+  since the stacks moved out of low memory, against the day the MMU could
+  leave that block unmapped. Until now an overflow was not an error at
+  all: the map is an identity map of everything below the peripheral base,
+  so `sp` descending past `__stack_bottom` crossed nothing the hardware
+  objected to — it walked the margin, reached `.data` and `.text`, and
+  overwrote the running program. What that looks like from outside is not
+  a fault but a board that behaves strangely and later stops, arbitrarily
+  far from the call that went too deep.
+
+  The descriptors lying entirely within the margin are now cleared, from
+  `rpi_hal_mmu_init` after the table is built and before the MMU is
+  enabled — which is what makes it free of cache and TLB maintenance: the
+  write reaches RAM with the caches off, and there is no stale translation
+  to shoot down for an address that has never been translated. Writing the
+  same zeroes on every core is why a secondary core calling it again is
+  harmless.
+
+  The region is rounded inward, so a margin overridden to something that
+  is not a multiple of a descriptor gives up only the descriptors inside
+  it, and one smaller than a descriptor yields no guard rather than an
+  approximate one. It covers the main stack of the boot core and nothing
+  else: the AArch32 exception-mode stacks are above `__stack_top`, and a
+  secondary core's is a `multicore::Stack` in `.bss`, both with their
+  neighbours right below them as this one used to have.
+
+  With `fault-report` on, the report names it:
+
+  ```text
+  FAULT: data abort on core 0
+    pc     0x00009a5c
+    addr   0x003fffa8  write
+    cause  translation fault, first level
+    *** past the bottom of the stack: this is a stack overflow
+  ```
+
+  `pc` there is inside `__aeabi_memclr4`, zeroing a frame that no longer
+  fits, rather than in the function that recursed — the address is the
+  half worth reading.
+
+- **`mem`, which says where free memory starts and stops.**
+  `mem::heap_region` answers the range from the end of `.bss` up to the
+  top of the ARM side of the memory split, with the top asked of the
+  firmware rather than hardcoded, so one image is right whatever `gpu_mem`
+  a board is set to. `mem::image_end` is the lower bound on its own, for a
+  program placing something other than a heap up there. What stays in the
+  binary is the `#[global_allocator]` — which has to, since a program may
+  have only one and a HAL must not choose it.
+
+  Three things the hand-written copies of this had wrong or left implicit.
+  `__bss_end` is raised to a multiple of 8: the linker script promises
+  only word alignment, which is all the boot code's `.bss` zeroing needs,
+  while an allocator hands out blocks aligned for `u64` — 8 even on
+  AArch32 where a pointer is 4. It has not bitten, because `.bss` has so
+  far ended 8-aligned by luck, and is one byte away from not. The upper
+  bound is computed in `u64`, since both fields the firmware reports are
+  `u32` and a board reporting memory up to the top of the address space
+  would wrap the sum to zero — turning "all of it" into "none of it". And
+  an empty region is `Error::NoRoom` carrying both addresses rather than a
+  zero-length range: which of the two is surprising is the whole
+  diagnosis, a large `image_end` being a kernel that has grown and a small
+  `memory_end` a `gpu_mem` that has been raised.
+
+- **`Mailbox::select_display` and `Mailbox::display_mode`**, the two
+  things every framebuffer consumer has to do before it can allocate —
+  both of them about firmware behaviour rather than about what the program
+  wants to draw.
+
+  `select_display` takes a preference list, most preferred first, and
+  points the framebuffer tags at the first display attached. Which display
+  the firmware enumerates as number 0 is not stable from boot to boot, so
+  a board with two attached and no preference gets a coin toss.
+
+  `display_mode` answers the size to allocate so the picture is not
+  scaled. That is more than one query, because the firmware keeps a blank
+  overscan border, "Get Physical Width/Height" reports the image inside
+  it, and clearing the border does not resize a framebuffer already made —
+  so the border has to be read first and added back arithmetically. Get it
+  wrong and the firmware stretches the buffer to the mode by a different
+  factor per axis, which is what a logo drawn round and shown oval means.
+
+  Neither logs, because this crate has no console. Everything worth saying
+  comes back instead: `Selection` carries what was found and under which
+  numbers, what was taken, and an `Outcome` saying whether that was the
+  preference, the firmware's own choice, or a fallback — four cases rather
+  than a bool, since only the caller knows whether an unmet preference is
+  worth saying loudly. `DisplayMode` carries the border it found and
+  whether it managed to clear it, which is the difference between "the
+  full mode" and "the inside of a border the firmware would not give up".
+
+  `Selection::reported_count` exists because the hardware asked for it.
+  With a panel and HDMI both plugged in, this still reported one display,
+  and `Outcome::Sole` could not say whether the firmware did not know the
+  tag or knew it and meant it. Those want different fixes, and the second
+  one is `max_framebuffers`, which is 1 by default in `config.txt` and
+  caps what the firmware will enumerate however much is plugged in.
+  Without the count that reads as a cabling problem.
+
 ### Fixed
 
 - **`Rng::new` handed out words the generator had queued before it was
@@ -267,6 +405,40 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to reboot exactly once and what it did was hang with a fault report.
   `rng` would have done the same on the first random number asked of it.
 
+- **`__unhandled_exception` had two definitions, not a weak one and an
+  override.** `vectors.s` declared the symbol `.weak` and parked, and
+  `fault.s` under `fault-report` defined it `.global` and reported. Both
+  are `global_asm!` in this crate, which is one stream of assembly to the
+  assembler rather than two objects for the linker to resolve between — so
+  that is a duplicate definition.
+
+  It assembled anyway, which is the part worth recording: whether the two
+  landed in the same codegen unit decided whether anyone noticed. Adding a
+  call from `mmu32`/`mmu64` into `mmu.rs` was enough to merge them, and
+  the build that had worked all along stopped working, several commits
+  away from anything to do with faults.
+
+  The default now lives in its own file, included only when
+  `fault-report` is off — the shape `mmu_fallback.s` already uses for
+  `rpi_hal_mmu_init`, and for the same reason. Exactly one definition is
+  compiled either way, and the weak binding stays on the fallback so an
+  application can still supply its own when the feature is off.
+
+- **A `mmu`-without-`rt` build warned about dead code.** The stack
+  guard's `invalidate_block` helper is reachable only from code that is
+  `rt`-gated, because it needs that feature's linker script for the
+  symbols naming the region; the helper was not gated, so the combination
+  compiled it as unreachable and said so.
+
+  Nothing here saw it: every line of the Makefile has `rt` on — it is a
+  default feature — and the one combination that turns it off was not
+  linted. The warning surfaced in a downstream crate's doc build instead,
+  which is a poor way to find out, so that combination is linted now. It
+  is not a hypothetical target: `mmu` is documented as independent of `rt`
+  at the Cargo level precisely so a consumer with its own boot sequence
+  can take this crate's translation tables, and that consumer is the one
+  who was seeing this.
+
 ### Changed
 
 - **`wifi::Error::BadFrame` carries `len`, `len_check` and `channel`.**
@@ -281,6 +453,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stream and was not — `!0x3620 == 0xC9DF`, a valid complement, on
   channel 3. That is a coalesced frame, which is now read rather than
   refused (above).
+
+- **`mailbox::Error` has a new variant, `NoDisplayMode`**, for a firmware
+  that answers a display-size query with zero. Breaking for an exhaustive
+  `match` on that enum. It is separate from the protocol errors beside it
+  because it is the firmware answering rather than failing, and what to do
+  about it stays with the caller — a fallback resolution is a policy, not
+  a fact about the hardware.
 
 ## [0.6.0] - 2026-09-20
 
@@ -906,6 +1085,7 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.7.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.7.0
 [0.6.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.6.0
 [0.5.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.4.0
