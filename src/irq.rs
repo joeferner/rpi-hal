@@ -93,6 +93,32 @@ core::arch::global_asm!(".arch armv6k", include_str!("vectors.s"));
 #[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(include_str!("vectors64.s"));
 
+// `__unhandled_exception`, the symbol every faulting slot of the table
+// above branches to. Exactly one definition is compiled in: this crate's
+// reporting one under `fault-report`, or a weak do-nothing otherwise.
+//
+// One or the other, never both. They are the same symbol, and both would
+// land in this crate's single stream of `global_asm!` -- where a `.weak`
+// and a `.global` definition are a duplicate to the assembler rather
+// than something for the linker to resolve. The same reasoning, and the
+// same shape, as `mmu_fallback.s` in `boot.rs`.
+#[cfg(all(feature = "fault-report", target_arch = "arm", not(armv6)))]
+core::arch::global_asm!(include_str!("fault.s"));
+#[cfg(all(feature = "fault-report", armv6))]
+core::arch::global_asm!(".arch armv6k", include_str!("fault.s"));
+#[cfg(all(feature = "fault-report", target_arch = "aarch64"))]
+core::arch::global_asm!(include_str!("fault64.s"));
+
+// The `wfe` in these is an ARMv6K instruction, and the assembler
+// defaults to plain ARMv6 for `armv6-none-eabi` and rejects it -- the
+// same directive the vector table above needs, for the same reason.
+#[cfg(all(not(feature = "fault-report"), target_arch = "arm", not(armv6)))]
+core::arch::global_asm!(include_str!("fault_fallback.s"));
+#[cfg(all(not(feature = "fault-report"), armv6))]
+core::arch::global_asm!(".arch armv6k", include_str!("fault_fallback.s"));
+#[cfg(all(not(feature = "fault-report"), target_arch = "aarch64"))]
+core::arch::global_asm!(include_str!("fault_fallback64.s"));
+
 /// Unmasks IRQ at the CPU level (the CPSR `I` bit on AArch32, `PSTATE.I`
 /// via `DAIF` on AArch64).
 ///
