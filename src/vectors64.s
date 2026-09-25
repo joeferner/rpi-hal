@@ -116,27 +116,26 @@ __fault_lower32_serror: mov     x0, #15
 // this and can print what happened: `ESR_EL1` gives the exception class
 // and `FAR_EL1` the faulting address, with `ELR_EL1` the instruction.
 //
-// Every slot in the table above reaches this one symbol through a stub
-// that numbers it, so an override is `extern "C" fn(kind: u32)` -- see
-// those stubs for the encoding, and `ESR_EL1`/`FAR_EL1`/`ELR_EL1` for
-// what happened within a kind.
+// Every slot in the table above reaches `__unhandled_exception` through
+// a stub that numbers it, so a handler is `extern "C" fn(kind: u32)` --
+// see those stubs for the encoding, and `ESR_EL1`/`FAR_EL1`/`ELR_EL1`
+// for what happened within a kind.
 //
-// Unlike AArch32 there are no banked stacks to prepare: an override runs
+// Unlike AArch32 there are no banked stacks to prepare: a handler runs
 // on the same `SP_EL1` the faulting code was using. That matters most in
 // the case most worth reporting -- a stack overflow faults with `sp`
 // already past the end of the region, so a handler that pushes anything
-// faults again, and the second fault is silent. A handler that wants to
+// faults again, and the second fault is silent. One that wants to
 // survive that has to move `sp` somewhere safe before doing real work.
-// `rpi-hal`'s own, behind the `fault-report` feature, does exactly that
-// in `fault64.s`.
 //
-// Enabling that feature *and* defining this symbol is a duplicate
-// definition and fails to link, which is the intended way to find out
-// that both were asked for.
-.weak __unhandled_exception
-__unhandled_exception:
-    wfe
-    b       __unhandled_exception
+// The symbol itself is defined elsewhere, and exactly one definition is
+// in any build: `fault64.s` under the `fault-report` feature, which
+// moves `sp` for exactly that reason and then reports, or
+// `fault_fallback64.s` without it, which is weak and parks silently so
+// an application can override it. They are separate files rather than a
+// weak default here and a strong override there because both would be in
+// this crate's single stream of `global_asm!`, where the assembler sees
+// a duplicate definition rather than a resolvable weak symbol.
 
 .global __irq_trampoline
 __irq_trampoline:

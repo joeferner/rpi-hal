@@ -61,38 +61,28 @@ __fault_fiq:
     mov     r0, #7
     b       __unhandled_exception
 
-// Weak, for the same reason `__irq_handler` below is: a fault that
-// parks silently is indistinguishable from a hang in a driver, a
-// deadlock, or a wedged peripheral. A stack overflow is the common way
-// to get here -- it runs off the end of the reserved region and takes a
-// data abort -- and finding that out has cost this project a debugging
-// session that ruled out three peripherals first. An application that
-// defines its own `#[no_mangle] extern "C" fn __unhandled_exception()`
-// overrides this and can print what happened: `lr` is the faulting
-// address (biased by the exception type), and `DFAR`/`DFSR` (data
-// abort) or `IFAR`/`IFSR` (prefetch abort) say where and why.
-//
-// Every slot in the table above shares this one symbol, reached through
-// the stubs that number it -- so an override is
+// `__unhandled_exception` is where every faulting slot above ends up,
+// reached through the stubs that number it -- so a handler is
 // `extern "C" fn(kind: u32)`, with `kind` the vector index (1 undefined,
-// 2 supervisor call, 3 prefetch abort, 4 data abort, 7 FIQ). An override
-// written against the older signature, taking nothing and reading `lr`,
-// still links and still works; see the stubs for why.
+// 2 supervisor call, 3 prefetch abort, 4 data abort, 7 FIQ). One written
+// against the older signature, taking nothing and reading `lr`, still
+// links and still works; see the stubs for why.
 //
-// `boot.s` gives ABT/UND/FIQ real stacks so that an override can be an
+// The symbol itself is defined elsewhere, and exactly one definition is
+// in any build: `fault.s` under the `fault-report` feature, which
+// reports and halts, or `fault_fallback.s` without it, which is weak and
+// parks silently so an application can override it. They are separate
+// files rather than a weak default here and a strong override there
+// because both would be in this crate's single stream of `global_asm!`,
+// where the assembler sees a duplicate definition rather than a
+// resolvable weak symbol -- and whether it noticed came down to which
+// codegen unit each landed in.
+//
+// `boot.s` gives ABT/UND/FIQ real stacks so that a handler can be an
 // ordinary Rust function rather than something that has to avoid
 // pushing. Those three are shared by every core rather than per-core
 // (see boot.s), so two cores faulting at once would overwrite each
 // other's frame -- the report of the second is the one to trust.
-//
-// `rpi-hal`'s own implementation is behind its `fault-report` feature.
-// Enabling that *and* defining this symbol is a duplicate definition and
-// fails to link, which is the intended way to find out that both were
-// asked for.
-.weak __unhandled_exception
-__unhandled_exception:
-    wfe
-    b       __unhandled_exception
 
 .global __irq_trampoline
 __irq_trampoline:
