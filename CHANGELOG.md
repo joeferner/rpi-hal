@@ -8,6 +8,63 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`usb::Bus`, which keeps the bus state a walk used to throw away** —
+  so a device that attaches after startup can still be brought up, and one
+  that is unplugged is reported rather than silently left addressed
+  ([issue #102](https://github.com/joeferner/rpi-hal/issues/102)).
+
+  `enumerate` is a snapshot, and the reason it could not be anything else
+  is that it owned the two things bringing a device up requires and then
+  dropped them: the next free address, and the hub topology every split
+  target is derived from. A caller that later noticed a connection had
+  neither. `Bus` holds both across calls, so `Bus::poll` does what
+  `Bus::enumerate` did, later and for one port.
+
+  `poll` reads every port of every tracked hub with GET_PORT_STATUS and
+  compares what the hub reports against what it last recorded there. A
+  port that has gained a device gets the full bring-up, including being
+  walked in turn if it is a hub with devices already on it; a port that
+  has lost one reports every device that was behind it, deepest first, and
+  frees their addresses. The comparison is against the port's present
+  state rather than its change bits, so a missed sweep is harmless where a
+  missed edge would not be.
+
+  A hub's status-change endpoint would name just the ports that moved, and
+  that is what a full host polls. It is deliberately not used here. This
+  crate's DWC2 driver cannot yet schedule high-speed periodic transfers
+  reliably, and on the bench that endpoint both returned `FrameOverrun`
+  and — worse — completed *successfully* with an all-zero bitmap while the
+  hub's own port status showed a connection change outstanding, so a
+  device plugged into that hub was never seen at all. Reading the ports
+  says the same thing over transfers that work. Linux arranges the same
+  safety net from the other side: its hub driver runs on that endpoint,
+  but `hub_activate()` reads every port directly on init, resume and
+  reset, and ten consecutive endpoint errors force exactly that reset.
+  `Hub::status_endpoint` is exposed for a caller who wants it, and for
+  `poll` to build on once the periodic scheduling is fixed — which would
+  not change what `poll` promises.
+
+  A port whose device fails to come up is tried once and then left until
+  the port's connection changes again, so a device this can't talk to
+  costs one attempt rather than a port reset on every sweep.
+
+  This is what a late device needs, and no amount of waiting substitutes:
+  on a Pi 3B+ the soldered LAN7800 Ethernet attaches seconds after
+  power-on, long after any debounce, and a snapshot taken at boot simply
+  does not contain it.
+
+  Addresses are now a 128-bit bitmap rather than a counter, because they
+  come back when a device is unplugged and a bus that is replugged all day
+  would otherwise run out. A freed address can be reused immediately,
+  which is why `Event::Detached` carries it — a driver still talking to it
+  afterwards is talking to whatever arrived next.
+
+  `usb::enumerate` is unchanged and now a thin wrapper over
+  `Bus::enumerate`, so nothing that only needs the one-shot walk has to
+  move. `usb::hub::Hub` gained `status_endpoint` (located while
+  `configure` was already reading the configuration descriptor) and is now
+  `Copy`.
+
 - **`usb::enumerate` walks hubs plugged into hubs.** It used to stop one
   level down: a hub in one of the board's ports was reported as a device
   and everything behind it was invisible, so a keyboard on a hub simply

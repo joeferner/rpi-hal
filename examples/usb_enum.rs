@@ -38,11 +38,17 @@ use rpi_hal::usb;
 use rpi_hal::usb::control::{get_device_descriptor, get_hub_descriptor, get_port_status};
 use rpi_hal::usb::descriptor::DeviceDescriptor;
 use rpi_hal::usb::dwc2::{Channel, ControlEndpoint, Dwc2Host};
+use rpi_hal::usb::{Bus, Event};
 
-/// How many hubs the port dump at the end keeps track of. Four covers
-/// the board's own hub(s) plus one or two plugged into them, which is
-/// what the dump is for.
+/// How many hubs the port dump keeps track of. Four covers the board's
+/// own hub(s) plus one or two plugged into them, which is what the dump
+/// is for.
 const MAX_HUBS: usize = 4;
+
+/// How long to wait between `Bus::poll` sweeps. A quarter-second is well
+/// inside what a person notices when plugging something in, and a sweep
+/// is one control transfer per port on the bus.
+const POLL_INTERVAL_MS: u32 = 250;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -89,62 +95,16 @@ pub extern "C" fn kmain() -> ! {
     let mut count = 0u32;
     let mut hubs = [None::<ControlEndpoint>; MAX_HUBS];
     let mut hub_count = 0usize;
-    let result = usb::enumerate(&dwc2, &timer, |_channel, _timer, device| {
-        count += 1;
-        if device.descriptor.device_class == 9 && hub_count < hubs.len() {
-            hubs[hub_count] = Some(device.endpoint);
-            hub_count += 1;
-        }
-
-        // One level of indent per hub below the root hub, so the bus
-        // reads as the tree it is. `depth` is bounded by USB's own
-        // five-hub limit, so this can't run away.
-        for _ in 0..device.depth {
-            let _ = write!(uart, "  ");
-        }
-
-        let _ = write!(
-            uart,
-            "hub {} port {}: {:04x}:{:04x} class={} -> address {} ({})",
-            device.hub_address,
-            device.port,
-            device.descriptor.vendor_id,
-            device.descriptor.product_id,
-            device.descriptor.device_class,
-            device.endpoint.address,
-            // The endpoint records only whether the device is low speed,
-            // since that is the one bit a transfer puts on the wire -- but
-            // the split target separates the other two, because a device
-            // needs a transaction translator exactly when it is slower
-            // than the high-speed bus above it. The one case this reads
-            // wrong is a full-speed device on a full-speed root port,
-            // which needs no translator either; the board's root hub
-            // enumerates at high speed, so that doesn't arise here.
-            if device.endpoint.low_speed {
-                "low speed"
-            } else if device.endpoint.split.is_some() {
-                "full speed"
-            } else {
-                "high speed"
-            },
-        );
-        match device.endpoint.split {
-            // Whose translator this is, rather than just "split": for a
-            // device more than one hub down these are what show the
-            // routing, since the translator is the nearest high-speed hub
-            // above the device and not necessarily its parent.
-            Some(split) => {
-                let _ = writeln!(
-                    uart,
-                    ", split through hub {} port {}",
-                    split.hub_address, split.port
-                );
-            }
-            None => {
-                let _ = writeln!(uart, ", direct");
+    let mut bus = Bus::new(&dwc2);
+    let result = bus.enumerate(&timer, |_channel, _timer, event| {
+        if let Event::Attached(device) = event {
+            count += 1;
+            if device.descriptor.device_class == 9 && hub_count < hubs.len() {
+                hubs[hub_count] = Some(device.endpoint);
+                hub_count += 1;
             }
         }
-
+        report(&mut uart, event);
         ControlFlow::Continue(())
     });
     match result {
@@ -162,6 +122,7 @@ pub extern "C" fn kmain() -> ! {
     // no trace of itself otherwise -- and a hub that answers nothing at
     // all here says the problem is the hub, not its ports. Both of those
     // are invisible in the tree, which only ever shows what succeeded.
+    let mut root = None;
     if let Some(mut channel) = dwc2.alloc_channel() {
         // The root hub first, which the tree above never shows: enumeration
         // configures it rather than reporting it, so it is the one hub on
@@ -182,27 +143,110 @@ pub extern "C" fn kmain() -> ! {
                     "root hub: {:04x}:{:04x}",
                     descriptor.vendor_id, descriptor.product_id
                 );
-                dump_hub_ports(
-                    &mut channel,
-                    &timer,
-                    &mut uart,
-                    ControlEndpoint {
-                        max_packet_size: descriptor.max_packet_size0 as u16,
-                        ..probe
-                    },
-                );
+                root = Some(ControlEndpoint {
+                    max_packet_size: descriptor.max_packet_size0 as u16,
+                    ..probe
+                });
             }
             Err(e) => {
                 let _ = writeln!(uart, "root hub: device descriptor read failed: {e:?}");
             }
         }
 
-        for hub in hubs.iter().flatten() {
+        for hub in root.iter().chain(hubs.iter().flatten()) {
             dump_hub_ports(&mut channel, &timer, &mut uart, *hub);
         }
     }
 
-    halt();
+    // And then keep watching. The walk above is a snapshot, and a bus is
+    // not a still thing: devices are plugged and pulled, and some that are
+    // soldered on take seconds to announce themselves and so are simply
+    // absent from any snapshot taken at boot. `Bus::poll` rereads every
+    // hub's ports and reports what has changed since the last look.
+    let _ = writeln!(uart, "watching for changes...");
+
+    loop {
+        let result = bus.poll(&timer, |_channel, _timer, event| {
+            report(&mut uart, event);
+            ControlFlow::Continue(())
+        });
+        // Printed and carried on with rather than fatal: a hub that fails
+        // one sweep may answer the next, and stopping here would throw
+        // away the rest of the bus over one of them.
+        if let Err(e) = result {
+            let _ = writeln!(uart, "poll failed: {e:?}");
+        }
+        timer.delay_ms(POLL_INTERVAL_MS);
+    }
+}
+
+/// Prints one bus event: an attached device as a line of the tree,
+/// indented by how many hubs deep it sits, or a departure as the address
+/// that has gone.
+fn report(uart: &mut Uart, event: Event) {
+    let device = match event {
+        Event::Attached(device) => device,
+        Event::Detached {
+            hub_address,
+            port,
+            address,
+        } => {
+            let _ = writeln!(
+                uart,
+                "hub {hub_address} port {port}: address {address} gone"
+            );
+            return;
+        }
+    };
+
+    // One level of indent per hub below the root hub, so the bus reads as
+    // the tree it is. `depth` is bounded by USB's own five-hub limit, so
+    // this can't run away.
+    for _ in 0..device.depth {
+        let _ = write!(uart, "  ");
+    }
+
+    let _ = write!(
+        uart,
+        "hub {} port {}: {:04x}:{:04x} class={} -> address {} ({})",
+        device.hub_address,
+        device.port,
+        device.descriptor.vendor_id,
+        device.descriptor.product_id,
+        device.descriptor.device_class,
+        device.endpoint.address,
+        // The endpoint records only whether the device is low speed, since
+        // that is the one bit a transfer puts on the wire -- but the split
+        // target separates the other two, because a device needs a
+        // transaction translator exactly when it is slower than the
+        // high-speed bus above it. The one case this reads wrong is a
+        // full-speed device on a full-speed root port, which needs no
+        // translator either; the board's root hub enumerates at high
+        // speed, so that doesn't arise here.
+        if device.endpoint.low_speed {
+            "low speed"
+        } else if device.endpoint.split.is_some() {
+            "full speed"
+        } else {
+            "high speed"
+        },
+    );
+    match device.endpoint.split {
+        // Whose translator this is, rather than just "split": for a device
+        // more than one hub down these are what show the routing, since
+        // the translator is the nearest high-speed hub above the device
+        // and not necessarily its parent.
+        Some(split) => {
+            let _ = writeln!(
+                uart,
+                ", split through hub {} port {}",
+                split.hub_address, split.port
+            );
+        }
+        None => {
+            let _ = writeln!(uart, ", direct");
+        }
+    }
 }
 
 /// Prints `hub`'s class descriptor and the raw status of every one of its
