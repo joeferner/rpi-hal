@@ -1,0 +1,53 @@
+[package]
+name = "rpi-kickstart"
+version = "0.1.0"
+edition = "2024"
+description = "Application scaffolding for bare-metal Raspberry Pi boards: console, config, storage, web and the rest of the bring-up that is the same on every board, on top of rpi-hal"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joeferner/rpi-kickstart"
+documentation = "https://docs.rs/rpi-kickstart"
+readme = "README.md"
+keywords = ["raspberry-pi", "bare-metal", "no-std", "embedded", "bcm2837"]
+categories = ["embedded", "no-std"]
+# Edition 2024 puts the floor at 1.85 on its own; 1.88 is where `rpi-hal`
+# and `rpi-hal-embassy` already sit, and this crate is only ever used with
+# them, so nothing is gained by claiming a lower one.
+rust-version = "1.88"
+
+# docs.rs builds for a host target by default. Nothing here needs one yet,
+# but the moment this crate depends on `rpi-hal` it will not compile for a
+# host at all -- so the targets are named now rather than discovered on the
+# first release that turns the published page into a build failure. Both
+# architectures are listed because the crate supports both.
+[package.metadata.docs.rs]
+default-target = "armv7a-none-eabi"
+targets = ["aarch64-unknown-none-softfloat"]
+
+# No `[dependencies]` yet. This crate's whole reason to exist is the layer
+# above `rpi-hal`, so an edge to it is coming with the first module; adding
+# it before there is a line of code that uses it would only be a
+# dependency the compiler has to resolve and nothing has to justify.
+
+[dev-dependencies]
+# The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
+# to real peripherals, which the library itself does not yet do. Keeping
+# this to a dev edge is what stops the examples' needs -- a boot sequence,
+# a particular chip -- from becoming requirements this crate imposes on
+# every consumer.
+#
+# `rt` and `mmu` arrive as `rpi-hal`'s defaults. `bcm2837` does not (none
+# of its chip features are on by default) and has to be named: the PAC is
+# what `Uart::init` reaches through. Pi 2/3 because that is what the
+# examples are written for; a consumer selects its own chip and is not
+# affected by this line.
+rpi-hal = { version = "0.6.0", features = ["bcm2837"] }
+
+# A fault on a bare-metal target has nowhere to unwind to -- there is no
+# runtime to catch a panic and no thread to kill -- and the unwinding
+# tables cost image size for a path that can never be taken. `abort` in
+# both profiles so a debug build fails the same way a release one does.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
