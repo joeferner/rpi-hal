@@ -101,6 +101,9 @@ pub mod hid;
 /// Driving a hub's downstream ports (bring-up, port reset, speed/split
 /// detection) — see [`hub::Hub`].
 pub mod hub;
+/// The LAN7800 USB-Ethernet controller, the Ethernet half of a Pi 3B+'s
+/// LAN7515 — see [`lan7800::Lan7800`].
+pub mod lan7800;
 /// The on-board LAN9514 USB-Ethernet controller — see
 /// [`lan9514::Lan9514`].
 pub mod lan9514;
