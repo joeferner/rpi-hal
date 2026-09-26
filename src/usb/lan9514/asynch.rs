@@ -422,3 +422,64 @@ impl Lan9514 {
         Ok(())
     }
 }
+
+impl crate::usb::ethernet::EthernetAsync for Lan9514 {
+    type Rx<'a> = Lan9514Rx<'a>;
+    type Tx<'a> = Lan9514Tx<'a>;
+
+    fn split(&mut self) -> (Self::Rx<'_>, Self::Tx<'_>) {
+        Lan9514::split(self)
+    }
+
+    async fn start_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        mac: [u8; 6],
+    ) -> Result<(), TransferError> {
+        Lan9514::start_async(self, channel, timer, mac).await
+    }
+
+    async fn is_link_up_async(
+        &self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<bool, TransferError> {
+        Lan9514::is_link_up_async(self, channel, timer).await
+    }
+
+    async fn set_all_multicast_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        Lan9514::set_all_multicast_async(self, channel, timer, pass).await
+    }
+}
+
+impl crate::usb::ethernet::EthernetRx for Lan9514Rx<'_> {
+    type Frames<'a>
+        = Frames<'a>
+    where
+        Self: 'a;
+
+    async fn receive_frames_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<Self::Frames<'_>, TransferError> {
+        Lan9514Rx::receive_frames_async(self, channel, timer).await
+    }
+}
+
+impl crate::usb::ethernet::EthernetTx for Lan9514Tx<'_> {
+    async fn send_frame_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        frame: &[u8],
+    ) -> Result<(), TransferError> {
+        Lan9514Tx::send_frame_async(self, channel, timer, frame).await
+    }
+}

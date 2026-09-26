@@ -641,3 +641,64 @@ impl Lan7800 {
         }
     }
 }
+
+impl crate::usb::ethernet::EthernetAsync for Lan7800 {
+    type Rx<'a> = Lan7800Rx<'a>;
+    type Tx<'a> = Lan7800Tx<'a>;
+
+    fn split(&mut self) -> (Self::Rx<'_>, Self::Tx<'_>) {
+        Lan7800::split(self)
+    }
+
+    async fn start_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        mac: [u8; 6],
+    ) -> Result<(), TransferError> {
+        Lan7800::start_async(self, channel, timer, mac).await
+    }
+
+    async fn is_link_up_async(
+        &self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<bool, TransferError> {
+        Lan7800::is_link_up_async(self, channel, timer).await
+    }
+
+    async fn set_all_multicast_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        Lan7800::set_all_multicast_async(self, channel, timer, pass).await
+    }
+}
+
+impl crate::usb::ethernet::EthernetRx for Lan7800Rx<'_> {
+    type Frames<'a>
+        = Frames<'a>
+    where
+        Self: 'a;
+
+    async fn receive_frames_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<Self::Frames<'_>, TransferError> {
+        Lan7800Rx::receive_frames_async(self, channel, timer).await
+    }
+}
+
+impl crate::usb::ethernet::EthernetTx for Lan7800Tx<'_> {
+    async fn send_frame_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        frame: &[u8],
+    ) -> Result<(), TransferError> {
+        Lan7800Tx::send_frame_async(self, channel, timer, frame).await
+    }
+}

@@ -130,3 +130,138 @@ pub trait Ethernet {
         timer: &Timer,
     ) -> Result<Self::Frames<'_>, TransferError>;
 }
+
+/// The `async` half of an Ethernet controller: the two frame directions
+/// borrowed apart, so each can be driven independently.
+///
+/// Separate from [`Ethernet`] rather than part of it, because the two are
+/// not the same promise. [`Ethernet`] describes a chip that can move
+/// frames; this describes one whose transfers can be *awaited*, which
+/// needs the `async` feature and the interrupt wiring that goes with it
+/// (see [`crate::usb::dwc2::asynch`]).
+///
+/// The split is the reason this exists. Both halves' methods take
+/// `&mut self`, so with the driver whole a transmit can only happen by
+/// cancelling a parked receive — dropping a transfer the chip may be
+/// part-way through answering, and losing the frame with it. The two bulk
+/// endpoints are separate pipes and the controller has host channels to
+/// spare; this is what lets a caller use them that way, and it is what an
+/// `embassy-net` adapter is built on.
+///
+/// Register access needs the driver whole, so the methods here that reach
+/// registers are on the driver rather than on either half, and happen
+/// either side of a split rather than during one.
+///
+/// # Which bring-up to use
+///
+/// **Use [`Self::start_async`], not [`Ethernet::start`], with the methods
+/// here.** A driver may configure the chip's answer to a bulk IN with no
+/// frame waiting differently between the two — parking an idle receive
+/// needs the chip to NAK, while a blocking poll needs it not to — and the
+/// mismatch is neither a compile error nor a failure. It is a receive
+/// future that resolves immediately with nothing, forever, and a caller
+/// looping on it spinning its executor instead of sleeping. See
+/// [`lan7800::Lan7800::reset_async`](crate::usb::lan7800::Lan7800::reset_async),
+/// where that is decided for one of the two chips.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[allow(
+    async_fn_in_trait,
+    reason = "the futures are polled on the core that owns the host channel, so \
+              there is nothing for a `Send` bound to buy and adding one would \
+              exclude the drivers that hold a raw peripheral handle"
+)]
+pub trait EthernetAsync: Ethernet {
+    /// The receive direction, borrowed from the driver by
+    /// [`Self::split`].
+    type Rx<'a>: EthernetRx
+    where
+        Self: 'a;
+
+    /// The transmit direction — the counterpart to [`Self::Rx`].
+    type Tx<'a>: EthernetTx
+    where
+        Self: 'a;
+
+    /// Borrows the two frame directions apart.
+    fn split(&mut self) -> (Self::Rx<'_>, Self::Tx<'_>);
+
+    /// Programs `mac` into the chip and opens the data paths, configured
+    /// for the awaited transfers here rather than the blocking ones —
+    /// see this trait's note on which bring-up to use.
+    async fn start_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        mac: [u8; 6],
+    ) -> Result<(), TransferError>;
+
+    /// Whether the Ethernet link is up, read from the PHY.
+    async fn is_link_up_async(
+        &self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<bool, TransferError>;
+
+    /// Whether to pass every multicast frame up to the host — see
+    /// [`Ethernet::set_all_multicast`] for why the chip's default is not a
+    /// neutral one.
+    async fn set_all_multicast_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError>;
+}
+
+/// The receive direction of an [`EthernetAsync`] driver.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[allow(
+    async_fn_in_trait,
+    reason = "see `EthernetAsync`: no executor here moves these futures between cores"
+)]
+pub trait EthernetRx {
+    /// The received frames one transfer carried, borrowing this half's
+    /// buffer — the same arrangement as [`Ethernet::Frames`], and
+    /// separate from it because this borrows the half rather than the
+    /// whole driver.
+    type Frames<'a>: Iterator<Item = &'a [u8]>
+    where
+        Self: 'a;
+
+    /// Awaits received frames, parking until the chip has one rather than
+    /// returning empty — which is the whole difference from
+    /// [`Ethernet::receive_frames`], and depends on the bring-up this
+    /// trait's note describes.
+    ///
+    /// **Drain the iterator**, for the reason
+    /// [`Ethernet::receive_frames`] gives.
+    ///
+    /// No timeout: this waits indefinitely on an idle link. Impose a
+    /// deadline by dropping the future, which aborts the channel safely
+    /// but loses a frame the chip was part-way through handing over.
+    async fn receive_frames_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+    ) -> Result<Self::Frames<'_>, TransferError>;
+}
+
+/// The transmit direction of an [`EthernetAsync`] driver.
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[allow(
+    async_fn_in_trait,
+    reason = "see `EthernetAsync`: no executor here moves these futures between cores"
+)]
+pub trait EthernetTx {
+    /// Sends one Ethernet frame — destination MAC through payload,
+    /// without the CRC, which the chip appends.
+    async fn send_frame_async(
+        &mut self,
+        channel: &mut Channel<'_>,
+        timer: &Timer,
+        frame: &[u8],
+    ) -> Result<(), TransferError>;
+}

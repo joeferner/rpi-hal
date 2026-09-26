@@ -8,6 +8,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`usb::ethernet::EthernetAsync`**, with `EthernetRx`/`EthernetTx` for
+  the two halves — the `async` counterpart to `Ethernet`, carrying
+  `split()` and the awaited bring-up. Behind the `async` feature.
+
+  Separate from `Ethernet` rather than part of it, because they are not
+  the same promise: one says a chip can move frames, the other that its
+  transfers can be *awaited*, which needs the interrupt wiring
+  `usb::dwc2::asynch` documents. Splitting them is also what let the
+  blocking trait land while only one driver had an async half.
+
+  The hazard the trait documents is worth repeating here: `Ethernet::start`
+  followed by `EthernetRx::receive_frames_async` is neither a compile error
+  nor a failure. A driver may configure the chip's empty-receive answer
+  differently between the two bring-ups — parking needs a NAK, polling
+  needs not-a-NAK — and the mismatch is a receive future that resolves
+  immediately with nothing, forever. Making the drivers interchangeable
+  makes that easier to reach by accident, so it is stated on the trait
+  rather than only per-driver.
+
+  `examples/usb_ethernet_async.rs` now claims either chip and runs generic
+  over the trait, holding the split halves for the whole session the way an
+  `embassy-net` adapter does.
+
 - **`usb::lan7800`'s `async` half** — the interrupt-driven twins of its
   transfer methods, and `split()` into borrow-disjoint receive and
   transmit halves, matching what `usb::lan9514` has had. Behind the
