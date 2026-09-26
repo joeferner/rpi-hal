@@ -4,6 +4,55 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ethernet`, one `embassy-net` adapter for both USB-Ethernet chips.**
+  Generic over `rpi-hal`'s `usb::ethernet::EthernetAsync`, so the same
+  adapter serves a Pi 2B/3B's LAN9514 and a 3B+'s LAN7800 — which share
+  nothing below that trait. A 3B+ previously had no `embassy-net`
+  interface at all.
+
+  `lan9514` is now that module under its old name: type aliases and a
+  one-line forward, so a board naming its chip keeps compiling.
+
+  The queues stay sized by a fixed `MTU` of 1514 rather than each driver's
+  own, because `ch::State` takes it as a const generic and `E::MTU` is not
+  usable in that position on stable Rust. `new` asserts the two agree, so
+  a future chip with a different frame size fails loudly instead of
+  quietly truncating. That shared value is also what would let one
+  interface replace another under a live stack later.
+
+### Changed
+
+- **The adapter brings the chip up itself, so `new` takes an *unstarted*
+  driver and an `EthernetConfig`.** Breaking: callers used to call `start`
+  first and pass a `mac`.
+
+  This exists to make a whole class of bug unreachable. A driver may
+  configure the chip's answer to an empty bulk IN differently between its
+  blocking and awaited bring-ups — parking a receive needs a NAK, polling
+  one needs the opposite — so starting it with `Ethernet::start` and then
+  running it here was neither a compile error nor a failure. It was a
+  receive that never parks, and a runner spinning the executor for the
+  life of the interface while every frame still arrived. Owning the
+  bring-up means the two can no longer disagree.
+
+  `EthernetConfig` carries what the caller used to set on the driver
+  beforehand and can no longer reach: the MAC, and whether to pass all
+  multicast. That second one is worth reading before leaving at its
+  default — the chip drops multicast before the stack sees it, DHCP is
+  broadcast so the interface looks entirely healthy, and mDNS is what
+  silently never works.
+
+  It is `EthernetConfig` and not `Config` because every consumer of this
+  adapter also imports `embassy_net::Config`.
+
+  A bring-up that fails parks with the link reported down rather than
+  retrying: retrying needs a delay, and `embassy-time` is deliberately
+  kept off this path. `ethernet::start_error` says why it failed.
+
 ## [0.7.0] - 2026-09-25
 
 ### Added

@@ -3,22 +3,32 @@
 
 // A TCP/IP stack on the on-board Ethernet, driven by `embassy-net` — the
 // async counterpart to rpi-hal's `usb_ethernet_smoltcp.rs`, and the thing
-// this crate's `lan9514` adapter exists for.
+// this crate's `ethernet` adapter exists for.
 //
-// Bring-up is identical to that example: power the USB controller, start
-// DWC2, enumerate the bus, find the LAN9514, program the firmware MAC and
-// enable RX/TX. From there this hands the chip to `embassy-net` instead of
-// running a `smoltcp` poll loop by hand.
+// Whichever Ethernet chip the board has. A Pi 2B/3B has an SMSC LAN9514
+// (hub and Ethernet in one); a 3B+ has a Microchip LAN7515, which is two
+// cascaded hubs with a LAN7800 Ethernet behind the second. Each driver
+// declines a device that is not its own, so offering every enumerated
+// device to both is how the board identifies itself, and everything past
+// that point is written against `EthernetAsync` and never learns which it
+// got.
+//
+// Bring-up: power the USB controller, start DWC2, walk the bus, claim the
+// Ethernet function, then hand it to `embassy-net`. The chip is *not*
+// started here — the adapter's runner does that, for the reason
+// `rpi_hal_embassy::ethernet::new` gives.
 //
 // Three tasks:
 //
 // - `net_task` runs `embassy-net`'s own runner, which owns the stack and
 //   serves it from the adapter's queues.
-// - `lan9514_task` runs the adapter's runner, which moves frames between
-//   those queues and the chip's two bulk endpoints. It awaits the USB
-//   controller's interrupt rather than polling, so there is no ticker
-//   here and no poll interval for the application to pick — which is why
-//   `__irq_handler` below has to dispatch that interrupt.
+// - `lan9514_task`/`lan7800_task` run the adapter's runner, which brings
+//   the chip up and then moves frames between those queues and its two
+//   bulk endpoints. It awaits the USB controller's interrupt rather than
+//   polling, so there is no ticker here and no poll interval for the
+//   application to pick — which is why `__irq_handler` below has to
+//   dispatch that interrupt. There are two of them only because
+//   `#[embassy_executor::task]` cannot be generic; the code is identical.
 // - `echo_task` waits for DHCP, prints the lease, then serves TCP echo on
 //   port 7 (RFC 862).
 //
@@ -29,14 +39,18 @@
 
 use core::fmt::Write as _;
 
+use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, StackResources};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::rng::Rng;
 use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
+use rpi_hal::usb::ethernet::EthernetAsync;
+use rpi_hal::usb::lan7800::Lan7800;
 use rpi_hal::usb::lan9514::Lan9514;
+use rpi_hal::usb::{Bus, Event};
 use rpi_hal::{halt, irq, lic::Lic, pac, timer::Timer, uart::Uart, usb};
-use rpi_hal_embassy::lan9514::{Lan9514Driver, Lan9514Runner, Lan9514State};
+use rpi_hal_embassy::ethernet::{EthernetConfig, EthernetDriver, EthernetRunner, EthernetState};
 use rpi_hal_embassy::{Executor, time_driver};
 
 /// Frames the adapter may hold queued inbound. Four absorbs a small burst
@@ -71,12 +85,22 @@ unsafe fn make_static<T>(t: &mut T) -> &'static mut T {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, Lan9514Driver<'static>>) -> ! {
+async fn net_task(mut runner: embassy_net::Runner<'static, EthernetDriver<'static>>) -> ! {
+    runner.run().await
+}
+
+// One task per chip, and not because the code differs — it is identical.
+// `#[embassy_executor::task]` allocates a pool of the future's concrete
+// type, so a generic task has no size to allocate and the attribute will
+// not take one. The generic part is everything else; only the spawn has to
+// know which it got, and `run` takes a closure to do it (see there).
+#[embassy_executor::task]
+async fn lan9514_task(runner: EthernetRunner<'static, 'static, Lan9514>) -> ! {
     runner.run().await
 }
 
 #[embassy_executor::task]
-async fn lan9514_task(runner: Lan9514Runner<'static, 'static>) -> ! {
+async fn lan7800_task(runner: EthernetRunner<'static, 'static, Lan7800>) -> ! {
     runner.run().await
 }
 
@@ -198,45 +222,123 @@ pub extern "C" fn kmain() -> ! {
     }
     let _ = writeln!(uart, "hub detected after {waited_ms}ms");
 
+    // `Bus` rather than `usb::enumerate`, and it has to be. A Pi 3B+'s
+    // LAN7800 sits behind two cascaded hubs and attaches *seconds* after
+    // power-on, so a one-shot walk finishes before it exists and reports
+    // an empty bus. On a 2B/3B the LAN9514 is there from the start and the
+    // first walk finds it, so the poll loop below never runs.
+    let mut bus = Bus::new(dwc2);
     let mut uart = Some(uart);
-    let result = usb::enumerate(dwc2, &timer, |channel, timer, device| {
-        match Lan9514::from_device(channel, timer, device) {
-            Ok(Some(lan9514)) => {
-                // The stack needs two channels of its own, one per
-                // direction — see the adapter's documentation for why it
-                // is two. `channel` belongs to enumeration and is gone
-                // once this callback returns, while the runner below
-                // keeps moving frames forever.
-                let (Some(rx_channel), Some(tx_channel)) =
-                    (dwc2.alloc_channel(), dwc2.alloc_channel())
-                else {
-                    let _ = writeln!(
-                        uart.as_mut().unwrap(),
-                        "no free host channels for the stack"
-                    );
-                    return core::ops::ControlFlow::Break(());
-                };
-                // Diverges, so enumeration never resumes — and so the
-                // borrows widened inside really do last forever.
-                run(
-                    uart.take().unwrap(),
-                    rx_channel,
-                    tx_channel,
-                    timer,
-                    lan9514,
-                    mac,
-                )
-            }
-            _ => core::ops::ControlFlow::Continue(()),
-        }
-    });
+    let mut found = None;
 
-    // Only reachable when the LAN9514 never turned up, since `run`
-    // diverges. Say so rather than halting silently.
-    if let Some(mut uart) = uart {
-        let _ = writeln!(uart, "no LAN9514 on the bus (enumerate: {result:?})");
+    let result = bus.enumerate(&timer, |channel, timer, event| {
+        found = claim(uart.as_mut().unwrap(), channel, timer, event);
+        break_when_found(&found)
+    });
+    if let Err(e) = result {
+        let _ = writeln!(uart.as_mut().unwrap(), "enumeration failed: {e:?}");
+        halt();
     }
-    halt();
+    if found.is_none() {
+        let _ = writeln!(
+            uart.as_mut().unwrap(),
+            "waiting for an Ethernet function to attach..."
+        );
+    }
+    while found.is_none() {
+        let result = bus.poll(&timer, |channel, timer, event| {
+            found = claim(uart.as_mut().unwrap(), channel, timer, event);
+            break_when_found(&found)
+        });
+        if let Err(e) = result {
+            let _ = writeln!(uart.as_mut().unwrap(), "poll failed: {e:?}");
+        }
+        timer.delay_ms(250);
+    }
+
+    // The stack needs two channels of its own, one per direction — see the
+    // adapter's documentation for why it is two. The walk's own channel is
+    // gone with it, while the runner below keeps moving frames forever.
+    let (Some(rx_channel), Some(tx_channel)) = (dwc2.alloc_channel(), dwc2.alloc_channel()) else {
+        let _ = writeln!(
+            uart.as_mut().unwrap(),
+            "no free host channels for the stack"
+        );
+        halt();
+    };
+    let uart = uart.take().unwrap();
+
+    // The only place either chip is named. `run` is generic over
+    // `EthernetAsync`; all this decides is which task function gets
+    // spawned, because that is the one thing that cannot be.
+    match found.expect("the loop above only exits once it is set") {
+        Board::Lan9514(dev) => run(uart, rx_channel, tx_channel, &timer, dev, mac, |s, r| {
+            s.spawn(lan9514_task(r).unwrap())
+        }),
+        Board::Lan7800(dev) => run(uart, rx_channel, tx_channel, &timer, dev, mac, |s, r| {
+            s.spawn(lan7800_task(r).unwrap())
+        }),
+    }
+}
+
+/// Whichever Ethernet chip this board turned out to have.
+enum Board {
+    /// A Pi 2B/3B's LAN9514 — hub and Ethernet in one chip.
+    Lan9514(Lan9514),
+    /// A Pi 3B+'s LAN7800, behind the LAN7515's two hubs.
+    Lan7800(Lan7800),
+}
+
+/// Stops the walk once something has been claimed.
+fn break_when_found(found: &Option<Board>) -> core::ops::ControlFlow<()> {
+    if found.is_some() {
+        core::ops::ControlFlow::Break(())
+    } else {
+        core::ops::ControlFlow::Continue(())
+    }
+}
+
+/// Takes `event`'s device as whichever Ethernet chip it is.
+///
+/// Each driver declines a device that is not its own by vendor/product ID,
+/// so offering it to both in turn is how the board identifies itself —
+/// nothing here has to know which Pi it is running on.
+fn claim(uart: &mut Uart, channel: &mut Channel, timer: &Timer, event: Event) -> Option<Board> {
+    let Event::Attached(device) = event else {
+        return None;
+    };
+
+    match Lan9514::from_device(channel, timer, device) {
+        Ok(Some(dev)) => {
+            let _ = writeln!(
+                uart,
+                "LAN9514 on hub {} port {}",
+                device.hub_address, device.port
+            );
+            return Some(Board::Lan9514(dev));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            let _ = writeln!(uart, "LAN9514 setup failed: {e:?}");
+            return None;
+        }
+    }
+
+    match Lan7800::from_device(channel, timer, device) {
+        Ok(Some(dev)) => {
+            let _ = writeln!(
+                uart,
+                "LAN7800 on hub {} port {}",
+                device.hub_address, device.port
+            );
+            Some(Board::Lan7800(dev))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            let _ = writeln!(uart, "LAN7800 setup failed: {e:?}");
+            None
+        }
+    }
 }
 
 /// Services the interrupts the executor and the Ethernet adapter depend
@@ -267,23 +369,33 @@ pub extern "C" fn __irq_handler() {
     }
 }
 
-/// Brings the chip up and hands it to `embassy-net`. Never returns.
-fn run(
+/// Hands the chip to `embassy-net` and runs forever, generic over
+/// [`EthernetAsync`] so a LAN9514 and a LAN7800 take the same path.
+///
+/// `spawn_eth` exists because that genericity stops at the spawn:
+/// `#[embassy_executor::task]` needs a concrete future type for its pool,
+/// so the runner's task cannot be generic. A closure is what carries the
+/// one chip-specific line in without this function having to name the
+/// opaque `SpawnToken` type it returns.
+fn run<E, F>(
     mut uart: Uart,
-    mut rx_channel: Channel<'static>,
+    rx_channel: Channel<'static>,
     tx_channel: Channel<'static>,
     timer: &Timer,
-    mut lan9514: Lan9514,
+    ethernet: E,
     mac: [u8; 6],
-) -> ! {
-    // Started over the receive channel, on endpoint 0 — bring-up is
-    // control transfers, and happens before either channel takes up its
-    // frame duties.
-    if let Err(e) = lan9514.start(&mut rx_channel, timer, mac) {
-        let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
-        halt();
-    }
-    let _ = writeln!(uart, "LAN9514 started, handing it to embassy-net");
+    spawn_eth: F,
+) -> !
+where
+    E: EthernetAsync + 'static,
+    F: FnOnce(Spawner, EthernetRunner<'static, 'static, E>),
+{
+    // Not started here: the adapter's runner does it, on the receive
+    // channel and before either channel takes up its frame duties. The
+    // bring-up and the awaited frame path have to agree about how the chip
+    // answers an empty receive, and having one owner is what makes that
+    // impossible to get wrong — see `rpi_hal_embassy::ethernet::new`.
+    let _ = writeln!(uart, "handing the interface to embassy-net");
 
     // The time driver needs the System Timer, but `timer` here is only
     // borrowed from `kmain`; steal a second handle rather than restructure
@@ -294,19 +406,27 @@ fn run(
     time_driver::init(Timer::new(peripherals.SYSTMR), &lic);
 
     // The adapter's transfers complete on this interrupt and on nothing
-    // else. Enabled after `start`, deliberately: bring-up above ran on
-    // the blocking methods, which poll their own `HCINT` and would race
-    // the handler for it.
+    // else — including the bring-up, which now happens inside the runner
+    // and is awaited like everything after it. Enabled before the executor
+    // starts rather than after the chip is up, which is the order that
+    // changed when the adapter took bring-up over: there are no blocking
+    // transfers left here to race the handler for `HCINT`.
     lic.enable_usb_irq();
     irq::enable_irq();
 
     // Everything below outlives `run`, which never returns.
     let timer: &'static Timer = unsafe { &*(timer as *const Timer) };
 
-    let mut state = Lan9514State::<RX_QUEUE, TX_QUEUE>::new();
+    let mut state = EthernetState::<RX_QUEUE, TX_QUEUE>::new();
     let state = unsafe { make_static(&mut state) };
-    let (driver, lan9514_runner) =
-        rpi_hal_embassy::lan9514::new(state, lan9514, rx_channel, tx_channel, timer, mac);
+    let (driver, eth_runner) = rpi_hal_embassy::ethernet::new(
+        state,
+        ethernet,
+        rx_channel,
+        tx_channel,
+        timer,
+        EthernetConfig::new(mac),
+    );
 
     // A random seed keeps TCP initial sequence numbers and the DHCP
     // transaction ID from repeating across boots. The hardware RNG is
@@ -325,7 +445,7 @@ fn run(
 
     executor.run(|spawner| {
         spawner.spawn(net_task(runner).unwrap());
-        spawner.spawn(lan9514_task(lan9514_runner).unwrap());
+        spawn_eth(spawner, eth_runner);
         spawner.spawn(echo_task(stack, uart).unwrap());
     });
 }

@@ -28,6 +28,11 @@
 #![no_std]
 #![deny(missing_docs)]
 
+/// `embassy-net` adapter over `rpi-hal`'s USB-Ethernet drivers, whichever
+/// chip the board has — see the module's own documentation for the
+/// interrupt wiring an application must provide.
+#[cfg(feature = "embassy-net-driver")]
+pub mod ethernet;
 /// Thread-mode executor for AArch32 and AArch64 — see the module's own
 /// documentation for why this isn't one of `embassy-executor`'s backends.
 pub mod executor;
@@ -35,9 +40,8 @@ pub mod executor;
 /// and the `irq-dispatch` feature for the case where an application has no
 /// sources of its own.
 pub mod irq;
-/// `embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver —
-/// see the module's own documentation for the interrupt wiring an
-/// application must provide.
+/// The LAN9514 spelling of [`ethernet`], kept so existing boards compile
+/// unchanged.
 #[cfg(feature = "embassy-net-driver")]
 pub mod lan9514;
 /// `embassy-time` driver over the BCM System Timer — see the module's own

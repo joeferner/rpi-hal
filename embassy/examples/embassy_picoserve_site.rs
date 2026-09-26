@@ -62,7 +62,7 @@ use rpi_hal::rng::Rng;
 use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
 use rpi_hal::usb::lan9514::Lan9514;
 use rpi_hal::{halt, irq, lic::Lic, pac, timer::Timer, uart::Uart, usb};
-use rpi_hal_embassy::lan9514::{Lan9514Driver, Lan9514Runner, Lan9514State};
+use rpi_hal_embassy::lan9514::{EthernetConfig, Lan9514Driver, Lan9514Runner, Lan9514State};
 use rpi_hal_embassy::{Executor, time_driver};
 
 /// Frames the adapter may hold queued inbound.
@@ -349,10 +349,11 @@ fn run(
     mut lan9514: Lan9514,
     mac: [u8; 6],
 ) -> ! {
-    if let Err(e) = lan9514.start(&mut rx_channel, timer, mac) {
-        let _ = writeln!(uart, "LAN9514 start failed: {e:?}");
-        halt();
-    }
+    // Not started here: the adapter's runner does it, on the receive
+    // channel and before either channel takes up its frame duties. The
+    // bring-up and the awaited frame path have to agree about how the chip
+    // answers an empty receive, and having one owner is what makes that
+    // impossible to get wrong -- see `rpi_hal_embassy::ethernet::new`.
 
     // Wait for auto-negotiation, then program the MAC's duplex to match
     // what it settled on. `start` assumes full duplex because it runs
@@ -399,8 +400,14 @@ fn run(
 
     let mut state = Lan9514State::<RX_QUEUE, TX_QUEUE>::new();
     let state = unsafe { make_static(&mut state) };
-    let (driver, lan9514_runner) =
-        rpi_hal_embassy::lan9514::new(state, lan9514, rx_channel, tx_channel, timer, mac);
+    let (driver, lan9514_runner) = rpi_hal_embassy::lan9514::new(
+        state,
+        lan9514,
+        rx_channel,
+        tx_channel,
+        timer,
+        EthernetConfig::new(mac),
+    );
 
     let mut rng = Rng::new();
     let seed = (u64::from(rng.next_u32()) << 32) | u64::from(rng.next_u32());
