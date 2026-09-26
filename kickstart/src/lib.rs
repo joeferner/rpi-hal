@@ -54,6 +54,15 @@ pub mod entropy;
 /// of the program.
 #[cfg(feature = "heap")]
 pub mod heap;
+/// An mDNS responder for one name — see the module's own documentation
+/// for the half of the multicast plumbing the board still has to do.
+#[cfg(feature = "mdns")]
+pub mod mdns;
+/// Getting a board onto the network, whichever way it can — see the
+/// module's own documentation for why "is Ethernet available" is two
+/// questions and both are deadlines.
+#[cfg(feature = "net")]
+pub mod net;
 
 // The rest of the modules this crate is being assembled from -- clock,
 // heap, storage, config, site, web, metrics, mdns, ota -- arrive one at a

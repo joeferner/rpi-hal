@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "bcm2837"]
+features = ["console", "entropy", "heap", "mdns", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -52,7 +52,7 @@ critical-section = { version = "1.2.0", default-features = false, optional = tru
 # silently rather than failing. In practice an application's own `rpi-hal`
 # line already names one and cargo unifies it; the forwarding features
 # below exist for builds of *this* crate, which have no such line.
-rpi-hal = { version = "0.7.0", default-features = false, optional = true }
+rpi-hal = { version = "0.8.0", default-features = false, optional = true }
 
 # The randomness interface the RustCrypto primitives under `rustls` reach
 # through. `custom` is the feature that lets a target with no OS supply
@@ -75,6 +75,48 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
     "tlsf",
 ], optional = true }
 
+# The network stack and the time API behind `mdns`, taken *directly*
+# rather than through `rpi-hal-embassy`.
+#
+# That is the answer to a question this crate deferred twice: everything
+# here wants `embassy-net` and `embassy-time` for their API, and nothing
+# wants the drivers behind them. `rpi-hal-embassy` supplies an
+# `embassy-time` driver and an `embassy-net` adapter, both installed by
+# linkage and both single-choice -- so depending on it would decide, for
+# every consumer, whose time driver and whose interface they use. Taking
+# the API crates leaves that with the board, which is the same
+# pluggability rule the rest of this crate follows one level up.
+#
+# Three features, none of them optional for this module. `multicast` is
+# what provides `Stack::join_multicast_group`, without which smoltcp
+# drops a packet addressed to a group it has not joined before any socket
+# sees it. `udp` is the socket itself. `proto-ipv4` is what makes an
+# IPv4 address a type at all -- smoltcp's address and socket enums are
+# empty with no protocol selected, and the crate does not compile.
+#
+# Everything else -- `dhcpv4`, `tcp`, `dns` -- is the application's to
+# choose and is unioned in.
+# `medium-ethernet` is a floor rather than a choice: smoltcp refuses to
+# build a socket with no medium selected at all, and every interface a
+# Pi presents to `embassy-net` -- USB Ethernet, the Wi-Fi adapter -- is
+# this one. Features are additive, so a board on some other medium adds
+# it alongside rather than being excluded by this.
+embassy-net = { version = "0.9.1", default-features = false, features = [
+    "udp",
+    "multicast",
+    "proto-ipv4",
+    "medium-ethernet",
+], optional = true }
+embassy-time = { version = "0.5.1", default-features = false, optional = true }
+# Fixed-capacity `Vec` for building a response without the heap: `mdns`
+# is useful on a board that has no `heap` feature, and a responder that
+# allocated per packet would be the one module here forcing one.
+#
+# 0.8 rather than 0.9 to match `picoserve`, which implements its
+# `Content` trait for *its* `heapless::String`. With two majors in one
+# graph those are unrelated types, and the error names neither version.
+heapless = { version = "0.8", default-features = false, optional = true }
+
 [dev-dependencies]
 # The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
 # to real peripherals, which the library itself does not yet do. Keeping
@@ -87,7 +129,7 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
 # what `Uart::init` reaches through. Pi 2/3 because that is what the
 # examples are written for; a consumer selects its own chip and is not
 # affected by this line.
-rpi-hal = { version = "0.7.0", features = ["bcm2837"] }
+rpi-hal = { version = "0.8.0", features = ["bcm2837"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -109,6 +151,29 @@ static_cell = "2.1.1"
 getrandom = { version = "0.2", default-features = false, features = [
     "custom",
 ] }
+# The Embassy platform pieces the `mdns` example needs, and the reason
+# they are *here* rather than in [dependencies]: the library is written
+# against `embassy-net`'s API and does not care whose time driver or
+# whose interface is underneath, but an example is a whole image and has
+# to pick both.
+#
+# `embassy-net-driver` is the LAN9514 adapter; `irq-dispatch` defines the
+# `__irq_handler` that services the System Timer and USB, without which
+# the first `embassy-time` deadline livelocks the core. None of the other
+# examples defines one, so there is nothing for it to collide with.
+rpi-hal-embassy = { version = "0.8.0", features = [
+    "embassy-net-driver",
+    "irq-dispatch",
+] }
+embassy-executor = "0.10.0"
+# `dhcpv4` is an application choice, which is exactly why it is on this
+# side; the library's own `embassy-net` features union in with it.
+embassy-net = { version = "0.9.1", default-features = false, features = [
+    "dhcpv4",
+] }
+# For the console's clock in that example, which is the form a board on
+# Embassy actually uses.
+embassy-time = { version = "0.5.1", default-features = false }
 
 [features]
 # Nothing is on by default, and that is the crate's whole arrangement: a
@@ -154,6 +219,38 @@ entropy = ["dep:rpi-hal", "dep:getrandom", "dep:critical-section"]
 # module.
 heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:embedded-alloc"]
 
+# An mDNS responder for one name (src/mdns.rs).
+#
+# Needs no chip and nothing from `rpi-hal`: it is written against
+# `embassy-net`'s `Stack`, so which interface is underneath -- USB
+# Ethernet, Wi-Fi, something this crate has never heard of -- is the
+# board's business.
+#
+# Implies `console`, which is the first module here to do so. It reports
+# what it announced and what it could not bind, and those lines are the
+# only evidence a responder is working: the failure mode is a name that
+# silently does not resolve. A module whose whole output is log lines
+# should not be able to be built without somewhere to put them.
+mdns = ["dep:embassy-net", "dep:embassy-time", "dep:heapless", "console"]
+
+# Finding an interface and getting the board onto the network
+# (src/net.rs).
+#
+# Needs a chip, unlike `mdns`: this one reaches the USB host controller and
+# the Ethernet drivers, all of which sit at a `PERIPHERAL_BASE` offset that
+# `rpi-hal` refuses to guess.
+#
+# Implies `console` for the same reason `mdns` does, and more so. Choosing
+# an interface is a sequence of deadlines expiring, and which one expired
+# is the whole diagnosis when a board comes up with no network — "no
+# ethernet chip within 5000ms" and "no link within 5000ms" are different
+# faults with different fixes, and neither is visible from outside.
+#
+# `ethernet` is not yet a feature of its own, because it is the only
+# interface implemented; when Wi-Fi lands the two become separate toggles
+# so a board pays only for what it lists.
+net = ["dep:rpi-hal", "console"]
+
 # The chip, forwarded to `rpi-hal`'s feature of the same name. None is a
 # default, so a board says which it is -- and says it once, since cargo
 # unifies this with whatever its own `rpi-hal` line asks for.
@@ -192,6 +289,10 @@ required-features = ["entropy", "console", "bcm2837"]
 [[example]]
 name = "heap"
 required-features = ["heap", "console", "bcm2837"]
+
+[[example]]
+name = "mdns"
+required-features = ["mdns", "net", "console", "bcm2837"]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding

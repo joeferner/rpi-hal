@@ -8,6 +8,43 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`net`, which gets the board onto the network whichever way it can.**
+  A board states what it is willing to use and in what order —
+  `connection = ["ethernet", "wifi"]` — and `net::discover` takes the
+  first that is actually there. Nothing above it learns which it got.
+
+  Ethernet covers both chips: a Pi 2B/3B's LAN9514 and a 3B+'s LAN7800.
+  Each driver declines a device that is not its own, so offering every
+  enumerated device to both is how the board identifies itself.
+
+  **"Ethernet is not available" is two questions, and both are
+  deadlines.** *No chip* — which on a 3B+ cannot be decided quickly,
+  because its LAN7800 sits behind two cascaded hubs and attaches seconds
+  after power-on, so "absent" and "not here yet" are indistinguishable
+  until `chip_timeout_ms` expires. *No cable* — auto-negotiation takes a
+  second or three even when one is in, hence `link_timeout_ms`. They are
+  separate settings because they fail differently: a short chip timeout
+  misses a 3B+ entirely, a short link timeout loses to a slow switch port.
+
+  Answering the second question costs a spare chip reset. The PHY reports
+  nothing until it has been powered and released, so `discover` starts the
+  chip to ask — and `rpi-hal-embassy`'s adapter, which owns bring-up for
+  the network stack, then resets it and starts it its own way. A fraction
+  of a second against having no way to ask at all.
+
+  **It picks once, at startup.** A cable pulled an hour later does not
+  move the board to Wi-Fi; that needs swapping which runner is attached to
+  a live queue pair, which is why `rpi-hal-embassy` now lets a board own
+  that pair, and is not built.
+
+  **Wi-Fi is not implemented.** The variant exists so the configuration
+  shape is settled, and naming it is reported rather than silently skipped
+  — an interface quietly passed over looks exactly like one that was tried
+  and failed.
+
+- **`mdns`**, an mDNS responder for one name, and the `mdns` example that
+  puts it on a real link.
+
 - **The global heap**, behind a `heap` feature: `heap::init` sizes the
   region with `rpi_hal::mem::heap_region` and hands it to an
   `embedded-alloc` TLSF allocator declared here as the
