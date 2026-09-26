@@ -12,10 +12,17 @@
 // only then is the controller handed to the SDIO/Wi-Fi driver -- driving
 // Wi-Fi gives up the SD slot.
 //
-// In a `wifi` directory on the boot partition, under 8.3 names:
+// The blobs go in a `wifi` directory on the boot partition, under a
+// subdirectory named for the radio and 8.3 filenames -- so one card boots
+// any Pi, and the chip picks its own set. A 3B/Zero W wants `wifi/43430`:
+//
 //   FW.BIN    -- Broadcom's brcmfmac43430-sdio.bin
 //   NVRAM.TXT -- the matching nvram (brcmfmac43430-sdio.txt)
 //   CLM.DAT   -- the CLM regulatory blob (cyfmac43430-sdio.clm_blob)
+//
+// and a 3B+/Pi 4 `wifi/43455`, with the 43455 files of the same names --
+// including the board-specific nvram
+// (brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt for a 3B+).
 
 use core::fmt::Write;
 use core::ptr::{addr_of, addr_of_mut};
@@ -24,22 +31,73 @@ use rpi_hal::halt;
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::pac;
 use rpi_hal::sd::{Sd, SdCard, SdCardError};
-use rpi_hal::sdio::{Sdio, BCM43438_CHIP_ID};
+use rpi_hal::sdio::Sdio;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::wifi::Wifi;
 
-/// Directory on the FAT boot partition holding the firmware files.
+/// Directory on the FAT boot partition holding the firmware files, one
+/// subdirectory per radio — see [`firmware_subdir`].
 const WIFI_DIR: &str = "WIFI";
-/// Firmware image, within [`WIFI_DIR`] (8.3 name).
+/// Firmware image, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const FIRMWARE_FILE: &str = "FW.BIN";
-/// Raw nvram config, within [`WIFI_DIR`] (8.3 name).
+/// Raw nvram config, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const NVRAM_FILE: &str = "NVRAM.TXT";
-/// CLM (regulatory) blob, within [`WIFI_DIR`] (8.3 name).
+/// CLM (regulatory) blob, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const CLM_FILE: &str = "CLM.DAT";
 
-/// Buffer for the firmware image (the 43430's is ~420KB); zeroed BSS.
-static mut FW_BUF: [u8; 512 * 1024] = [0; 512 * 1024];
+/// Which subdirectory of [`WIFI_DIR`] this board's blobs are in, and the
+/// chip id they are for. `None` for a board with no radio this drives.
+///
+/// A directory per radio rather than one set of files, so that one card
+/// boots any Pi: a 3B and a 3B+ carry different silicon and each refuses
+/// the other's image, and swapping three files by hand every time the
+/// card moves is the sort of step that gets forgotten once and then
+/// debugged for an hour. The names are the part numbers the firmware
+/// files are published under, not the chip ids — a directory somebody
+/// has to copy files into should be named the way the files are.
+///
+/// # Why the board and not the chip
+///
+/// Asking the radio what it is would need no table and never go stale,
+/// and it does not work. The chip id is only readable over the
+/// backplane, the backplane only once the one EMMC controller has been
+/// muxed off the card, and the card is where the firmware is — so it
+/// would mean bringing SDIO up, asking, reading the card, and bringing
+/// SDIO up a second time. The radio does not answer `CMD5` on that
+/// second pass: re-asserting an already-high `WL_ON` is not the power
+/// cycle it needs to enumerate again.
+///
+/// So this guesses from the board and the caller *verifies* against the
+/// chip id once SDIO is up — before any firmware is written. A wrong
+/// entry below is then one clear line naming both numbers rather than a
+/// download that fails several steps later for no visible reason.
+fn radio(board_revision: u32) -> Option<(&'static str, u32)> {
+    // Old-style revision codes are Pi 1s and have no radio at all. Worth
+    // rejecting rather than shifting: the fields below do not exist in
+    // them, so the bits would decode to a board at random.
+    if board_revision & (1 << 23) == 0 {
+        return None;
+    }
+    // Bits 4..11 of a new-style code are the board type.
+    match (board_revision >> 4) & 0xff {
+        // 3B, Zero W.
+        0x08 | 0x0c => Some(("43430", rpi_hal::sdio::BCM43438_CHIP_ID)),
+        // 3B+, 3A+, 4B.
+        0x0d | 0x0e | 0x11 => Some(("43455", rpi_hal::sdio::BCM43455_CHIP_ID)),
+        _ => None,
+    }
+}
+
+/// Buffer for the firmware image; zeroed BSS.
+///
+/// Sized for the largest image this drives rather than for the 43430's
+/// ~400KB, because a file that does not fit is read as far as the buffer
+/// goes and its truncated length reported — so an image half a megabyte
+/// short downloads, starts, and simply never answers, with nothing
+/// reported anywhere. A 43455's is over 600KB, so a megabyte is the size
+/// that keeps this from being a trap.
+static mut FW_BUF: [u8; 1024 * 1024] = [0; 1024 * 1024];
 /// Buffer for the raw nvram text.
 static mut NV_BUF: [u8; 4096] = [0; 4096];
 /// Buffer for the CLM regulatory blob (~5KB).
@@ -76,12 +134,17 @@ impl TimeSource for FixedTime {
 /// returns.
 fn load_files(
     sd: Sd,
+    subdir: &str,
     timer: &Timer,
 ) -> Result<(usize, usize, usize), embedded_sdmmc::Error<SdCardError>> {
     let volume_mgr = VolumeManager::new(SdCard::new(sd, timer), FixedTime);
     let volume = volume_mgr.open_volume(VolumeIdx(0))?;
     let root = volume.open_root_dir()?;
-    let wifi = root.open_dir(WIFI_DIR)?;
+    // Two bindings rather than one chained expression: the intermediate
+    // `Directory` borrows the volume manager, so a temporary would be
+    // dropped at the end of the statement while `wifi` still holds it.
+    let wifi_root = root.open_dir(WIFI_DIR)?;
+    let wifi = wifi_root.open_dir(subdir)?;
 
     // Safety: single-threaded bare-metal; these buffers are touched only
     // here and, after this returns, read-only in `kmain`.
@@ -121,6 +184,30 @@ pub extern "C" fn kmain() -> ! {
     let timer = Timer::new(peripherals.SYSTMR);
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
+    // Which firmware this board needs, from the revision code the
+    // firmware mailbox reports -- which costs nothing and, unlike asking
+    // the radio, does not need the card given up first. Checked against
+    // the chip id further down, once SDIO is up and before anything is
+    // written.
+    let board_revision = match mailbox.board_revision() {
+        Ok(revision) => revision,
+        Err(e) => {
+            let _ = writeln!(uart, "board revision read failed: {e:?}");
+            halt();
+        }
+    };
+    let Some((subdir, expected_chip_id)) = radio(board_revision) else {
+        let _ = writeln!(
+            uart,
+            "board revision {board_revision:#010x} has no radio this drives"
+        );
+        halt();
+    };
+    let _ = writeln!(
+        uart,
+        "board revision {board_revision:#010x} -> {WIFI_DIR}/{subdir}/"
+    );
+
     // Read the firmware blobs off the SD card first (this owns EMMC).
     let _ = writeln!(uart, "reading firmware from SD card...");
     let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, &timer) {
@@ -130,7 +217,7 @@ pub extern "C" fn kmain() -> ! {
             halt();
         }
     };
-    let (fw_len, nv_len, clm_len) = match load_files(sd, &timer) {
+    let (fw_len, nv_len, clm_len) = match load_files(sd, subdir, &timer) {
         Ok(lengths) => lengths,
         Err(e) => {
             let _ = writeln!(uart, "reading Wi-Fi files failed: {e:?}");
@@ -139,7 +226,7 @@ pub extern "C" fn kmain() -> ! {
     };
     let _ = writeln!(
         uart,
-        "  {WIFI_DIR}/{FIRMWARE_FILE}: {fw_len} bytes, {WIFI_DIR}/{NVRAM_FILE}: {nv_len} bytes"
+        "  {FIRMWARE_FILE}: {fw_len} bytes, {NVRAM_FILE}: {nv_len} bytes, {CLM_FILE}: {clm_len} bytes"
     );
 
     // Reclaim the EMMC controller for Wi-Fi (the SD driver is dropped, so
@@ -154,14 +241,22 @@ pub extern "C" fn kmain() -> ! {
         }
     };
 
-    // Bus liveness check: read the ChipCommon ID over the backplane before
-    // loading firmware. 0xa9a6 is a Pi 3 B's BCM43438 answering.
+    // Bus liveness check, and the check on the guess `radio` made from
+    // the board revision. Halting on a mismatch rather than warning: the
+    // blobs in hand are for another chip, and the download would either
+    // fail obscurely or -- worse -- appear to work.
     match sdio.chip_id(&timer) {
-        Ok(id) if id == BCM43438_CHIP_ID => {
-            let _ = writeln!(uart, "SDIO link up; chip id {id:#06x} (BCM43438)");
+        Ok(id) if id == expected_chip_id => {
+            let _ = writeln!(uart, "SDIO link up; chip id {id:#06x}");
         }
         Ok(id) => {
-            let _ = writeln!(uart, "SDIO link up; unexpected chip id {id:#06x}");
+            let _ = writeln!(
+                uart,
+                "chip id {id:#06x}, but board revision {board_revision:#010x} \
+                 said to load {WIFI_DIR}/{subdir}/ (for {expected_chip_id:#06x}) \
+                 -- the board table in `radio` is wrong for this Pi"
+            );
+            halt();
         }
         Err(e) => {
             let _ = writeln!(uart, "chip id read failed: {e:?}");

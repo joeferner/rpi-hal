@@ -6,7 +6,62 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sd::Sd::init` after `sdio::Sdio::init` reported an empty slot.** The
+  two drivers share one controller and mux it between two pin groups, and
+  only one of them was tidying up: `Sdio::init` routes GPIO48-53 off the
+  controller so it drives the wireless pins alone, while `Sd::init`
+  routed GPIO48-53 on without taking GPIO34-39 off. Both groups on one
+  controller is the radio and the card driving the same `CMD`/`DAT`
+  lines, so the card never answered and the slot read as empty with a
+  card in it — `Error::NoCard`.
+
+  Only reachable in that order, which is why it had not been seen: every
+  path so far read the card first and then gave it up for good. Asking
+  the chip what it is *before* going to the card for its firmware is what
+  found it.
+
 ### Added
+
+- **`sdio` drives the BCM43455 as well as the BCM43430**, which is the
+  radio on a Pi 3 `B+` and a Pi 4. Before this, `load_firmware` on one of
+  those stopped at `CoreNotFound` before a byte was written.
+
+  It was not a chip id to accept. `scan_cores` looked for an ARM Cortex-M3
+  and a SOCRAM core, and a 43455 has neither: its CPU is an ARM CR4 with
+  the RAM tightly coupled inside it. The walk was reading the enumeration
+  ROM perfectly correctly and rejecting a chip for not being the one it
+  knew.
+
+  So `ChipCores` now carries a `Cpu`, and that one enum is what the whole
+  download hangs off. Four things differ between the families and they are
+  not independent: where the image is written (zero, against a
+  chip-specific base far up the address space), whether anything has to be
+  brought out of reset before RAM is writable (SOCRAM, against nothing),
+  how RAM is measured (two different register maps that agree on the idea
+  and on no offset, mask or field width), and how the CPU is started. A
+  CR4 also needs its reset vector copied down to address 0 by hand, since
+  its image does not land where it fetches that from — the one step with
+  no counterpart at all on the older part.
+
+  `UnsupportedChip { chip_id }` is new and deliberately not
+  `CoreNotFound`: it means the chip was read correctly and every core
+  found, and what is missing is a RAM-base constant. That is a much
+  shorter thing to go and fix, and the two should not present alike.
+
+  The Cortex-M3 path is unchanged, including where it is arguably
+  incomplete — the SDIO core's `intstatus` is cleared only on the new
+  path. Adding a step to a sequence that is verified on hardware, to no
+  end, is not a trade worth taking while the new one is unproven.
+
+  A Zero 2 W's 43436 is a third case and is not covered.
+
+  The Wi-Fi examples' firmware buffers went from 512KB to 1MB with it.
+  Not a detail: a 43455's image is over 600KB, and a file that does not
+  fit is read as far as the buffer goes and its truncated length
+  reported — so a short image downloads, starts, and never answers, with
+  nothing reported anywhere.
 
 - **`usb::ethernet::EthernetAsync`**, with `EthernetRx`/`EthernetTx` for
   the two halves — the `async` counterpart to `Ethernet`, carrying

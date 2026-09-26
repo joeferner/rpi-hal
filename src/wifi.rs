@@ -1,5 +1,11 @@
-//! Host-side control protocol for the on-board BCM43430 wireless chip,
-//! on top of the [`crate::sdio`] link once its firmware is running.
+//! Host-side control protocol for the on-board wireless chip, on top of
+//! the [`crate::sdio`] link once its firmware is running.
+//!
+//! Chip-independent, unlike the download below it: the framing and the
+//! command set are the firmware's, so a BCM43430 and a BCM43455 look the
+//! same from here. Where a difference shows through it is the firmware
+//! version's rather than the silicon's, and the notes below say which
+//! version a measurement came from.
 //!
 //! A [`Sdio`](crate::sdio::Sdio) that has completed
 //! [`load_firmware`](crate::sdio::Sdio::load_firmware) is wrapped in a
