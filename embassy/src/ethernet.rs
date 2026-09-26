@@ -61,6 +61,14 @@ use rpi_hal::timer::Timer;
 use rpi_hal::usb::dwc2::{Channel, TransferError};
 use rpi_hal::usb::ethernet::{EthernetAsync, EthernetRx, EthernetTx};
 
+/// How long the runner waits for the link after bringing the chip up,
+/// in microseconds, before telling the stack it has one anyway.
+///
+/// Five seconds: auto-negotiation from a reset is two or three, and the
+/// cost of overrunning is only that a board with no cable takes this long
+/// to start failing DHCP — which it was going to do regardless.
+const LINK_WAIT_US: u64 = 5_000_000;
+
 /// Largest Ethernet frame the queues carry, in bytes.
 ///
 /// Fixed here rather than taken from each driver's
@@ -317,15 +325,51 @@ impl<E: EthernetAsync> EthernetRunner<'_, '_, E> {
             }
         }
 
-        // Reported up once and left there. The real state is readable —
-        // `EthernetAsync::is_link_up_async` asks the PHY over MII — but that
-        // costs a pair of USB control transfers, and `embassy-net` would
-        // want it on every pass of its runner. The consequence is that an
-        // unplugged cable surfaces as transfers failing rather than as a
-        // link-down transition, and `Stack::wait_link_up` returns
-        // immediately. An application that needs better calls
-        // `is_link_up_async` on its own schedule, which is also the only
+        // Wait for the link before telling the stack it has one.
+        //
+        // The bring-up above reset the chip, which takes the link down and
+        // costs a fresh auto-negotiation — two or three seconds. Reporting
+        // `Up` immediately, as this used to, hands `embassy-net` an
+        // interface it believes is ready: it sends a DHCP DISCOVER into a
+        // link that is still negotiating, hears nothing, and backs off.
+        // Measured on a Pi 3B+, that turned a lease that arrives in under a
+        // second into one that took eleven, and nothing anywhere reported a
+        // fault — the address simply appeared late.
+        //
+        // Paced by the transfers themselves rather than by a delay: each
+        // check is a pair of USB control transfers that park on the
+        // controller's interrupt, so the core sleeps between them and this
+        // is not a busy loop. The deadline is read from the free-running
+        // System Timer, which is why this needs no `embassy-time` (kept off
+        // this path deliberately — see Cargo.toml).
+        let deadline = timer.now_micros() + LINK_WAIT_US;
+        loop {
+            match ethernet.is_link_up_async(&mut rx_channel, timer).await {
+                Ok(true) => break,
+                // A chip that cannot answer about its own PHY is not going
+                // to be diagnosed here; let the frame loops report it.
+                Err(_) => break,
+                Ok(false) => {}
+            }
+            if timer.now_micros() >= deadline {
+                break;
+            }
+        }
+
+        // Reported up once and left there, however the wait above ended.
+        // The real state stays readable — `is_link_up_async` asks the PHY
+        // over MII — but `embassy-net` would want it on every pass of its
+        // runner, and register access needs the driver whole, which it is
+        // not once the two directions are split below. So a cable unplugged
+        // *later* surfaces as transfers failing rather than as a link-down
+        // transition, and an application that needs better calls
+        // `is_link_up_async` on its own schedule — which is also the only
         // place that knows how often is often enough.
+        //
+        // Up rather than down when the wait timed out, because nothing
+        // revisits this: reporting down would leave the stack permanently
+        // convinced there is no interface, where reporting up costs only
+        // the DHCP retries that were the old behaviour anyway.
         state_runner.set_link_state(LinkState::Up);
 
         let (rx, tx) = ethernet.split();

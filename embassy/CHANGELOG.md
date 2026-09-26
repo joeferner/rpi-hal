@@ -41,6 +41,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stack across a change of interface; one that lets each adapter build its
   own would have to tear the stack down and lose every socket with it.
 
+### Fixed
+
+- **The runner waits for the link before reporting one**, which took a
+  DHCP lease on a Pi 3B+ from eleven seconds to under two.
+
+  Bring-up resets the chip, so the link drops and has to auto-negotiate
+  again — two or three seconds. Reporting `Up` immediately handed
+  `embassy-net` an interface it believed was ready: it sent a DHCP
+  DISCOVER into a still-negotiating link, heard nothing, and backed off.
+  Nothing reported a fault. The address simply arrived late, which is the
+  kind of thing that gets blamed on the DHCP server.
+
+  Paced by the transfers themselves rather than by a delay — each check is
+  a pair of USB control transfers that park on the controller's interrupt,
+  so the core sleeps between them — and bounded by the free-running System
+  Timer, so this still needs no `embassy-time` on the Ethernet path.
+
+  It reports `Up` anyway if the wait times out, because nothing revisits
+  link state afterwards: reporting `Down` would leave the stack
+  permanently convinced there is no interface, where timing out costs only
+  the retries that were the old behaviour.
+
 ### Changed
 
 - **The adapter brings the chip up itself, so `new` takes an *unstarted*
