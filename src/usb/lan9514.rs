@@ -214,16 +214,13 @@ struct BulkEndpoint {
     toggle: bool,
 }
 
-/// The LAN9514's `ID_REV` register, split into the chip ID and silicon
-/// revision it packs into one 32-bit word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IdRevision {
-    /// Chip ID (the register's high 16 bits) — `0xEC00` for the LAN951x
-    /// family.
-    pub id: u16,
-    /// Silicon revision (the register's low 16 bits).
-    pub revision: u16,
-}
+/// The LAN9514's `ID_REV` register, split into the chip ID (`0xEC00` for
+/// this family) and silicon revision it packs into one 32-bit word.
+///
+/// Re-exported from [`crate::usb::ethernet`], where it is shared with the
+/// other Ethernet driver: it is the same two numbers in the same places,
+/// and only the ID that means a working part differs.
+pub use crate::usb::ethernet::IdRevision;
 
 /// The receive half of a [`Lan9514`]: the bulk IN endpoint and the DMA
 /// buffer frames land in.
@@ -1092,5 +1089,62 @@ impl TxToken for Lan9514TxToken<'_, '_> {
             .lan9514
             .send_frame(self.channel, self.timer, &self.scratch[..len]);
         result
+    }
+}
+
+impl crate::usb::ethernet::Ethernet for Lan9514 {
+    type Frames<'a> = Frames<'a>;
+
+    const MTU: usize = MTU;
+
+    fn id_revision(
+        &self,
+        channel: &mut Channel,
+        timer: &Timer,
+    ) -> Result<IdRevision, TransferError> {
+        Lan9514::id_revision(self, channel, timer)
+    }
+
+    fn start(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        mac: [u8; 6],
+    ) -> Result<(), TransferError> {
+        Lan9514::start(self, channel, timer, mac)
+    }
+
+    fn is_link_up(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
+        Lan9514::is_link_up(self, channel, timer)
+    }
+
+    fn is_full_duplex(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
+        Lan9514::is_full_duplex(self, channel, timer)
+    }
+
+    fn set_all_multicast(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        Lan9514::set_all_multicast(self, channel, timer, pass)
+    }
+
+    fn send_frame(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        frame: &[u8],
+    ) -> Result<(), TransferError> {
+        Lan9514::send_frame(self, channel, timer, frame)
+    }
+
+    fn receive_frames(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+    ) -> Result<Self::Frames<'_>, TransferError> {
+        Lan9514::receive_frames(self, channel, timer)
     }
 }

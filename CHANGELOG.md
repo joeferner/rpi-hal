@@ -8,6 +8,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`usb::ethernet::Ethernet`, one description both Ethernet drivers
+  answer to.** `usb::lan9514` and `usb::lan7800` were written to the same
+  surface on purpose so that a consumer ports between them by changing a
+  type name; this makes that a type rather than a convention, so code can
+  be written once and compiled for either board without being told which.
+
+  The receive iterator is what needed it. Each driver returns its own
+  `Frames` — the same item type, different types — so a function handling
+  both had nothing it could return and had to consume the frames where it
+  produced them. A generic associated type (`type Frames<'a>`) removes
+  that, and `examples/usb_ethernet.rs` lost 208 lines of per-method
+  dispatch to it: `run_ethernet` is now generic over the trait and its
+  receive loop reads like either driver's own.
+
+  `IdRevision` moved here and is re-exported from both drivers, since it
+  is the same two numbers in the same places and only the ID that means a
+  working part differs. `usb::lan9514::IdRevision` still resolves.
+
+  This is the blocking surface only. The split into borrow-disjoint halves
+  that an executor needs will be a separate `EthernetAsync` extension —
+  it is not here because only one of the two drivers has an async half so
+  far, and a trait with one implementation would be guessing at the shape.
+
 - **`usb::lan7800`, a driver for the Pi 3B+'s Ethernet** — the Microchip
   LAN7800 half of the LAN7515 that board carries in place of a Pi 2B/3B's
   SMSC LAN9514 ([issue #101](https://github.com/joeferner/rpi-hal/issues/101)).
