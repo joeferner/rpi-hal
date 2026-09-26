@@ -94,6 +94,9 @@ pub mod descriptor;
 /// DMA-mode control-transfer channel primitives — see
 /// [`dwc2::Dwc2Host`].
 pub mod dwc2;
+/// What a USB Ethernet controller looks like from above, whichever one a
+/// board has — see [`ethernet::Ethernet`].
+pub mod ethernet;
 /// HID class drivers built on the enumeration above — boot-protocol
 /// keyboard and mouse (see [`hid::keyboard::Keyboard`]) plus a
 /// report-descriptor-driven gamepad (see [`hid::gamepad::Gamepad`]).

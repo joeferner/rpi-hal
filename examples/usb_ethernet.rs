@@ -37,10 +37,11 @@ use rpi_hal::pac;
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
 use rpi_hal::usb;
-use rpi_hal::usb::dwc2::{Channel, Dwc2Host, TransferError};
+use rpi_hal::usb::dwc2::{Channel, Dwc2Host};
+use rpi_hal::usb::ethernet::Ethernet;
 use rpi_hal::usb::lan7800::Lan7800;
 use rpi_hal::usb::lan9514::Lan9514;
-use rpi_hal::usb::{Bus, Event};
+use rpi_hal::usb::{Bus, Device, Event};
 
 /// How long to wait between `Bus::poll` sweeps while waiting for an
 /// Ethernet function to attach.
@@ -56,96 +57,23 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 /// Whichever Ethernet chip this board turned out to have.
 ///
-/// The two drivers have the same surface but not the same type, so the
-/// choice is made once here and everything downstream is written against
-/// this. A trait would do the same job and is the obvious next step if a
-/// third chip ever appears; with two, an enum keeps the dispatch visible
-/// and costs nothing.
-enum Ethernet {
+/// Both implement [`Ethernet`], so this exists only to carry the choice
+/// from the bus walk — where the chip is discovered — to the one place
+/// that acts on it. Everything after that point is written against the
+/// trait and never learns which this was.
+enum Board {
     /// A Pi 2B/3B's LAN9514 — hub and Ethernet in one chip.
     Lan9514(Lan9514),
     /// A Pi 3B+'s LAN7800, behind the LAN7515's two hubs.
     Lan7800(Lan7800),
 }
 
-impl Ethernet {
+impl Board {
     /// What to call it in a log line.
     fn name(&self) -> &'static str {
         match self {
-            Ethernet::Lan9514(_) => "LAN9514",
-            Ethernet::Lan7800(_) => "LAN7800",
-        }
-    }
-
-    /// Programs the MAC and opens the data paths.
-    fn start(
-        &mut self,
-        channel: &mut Channel,
-        timer: &Timer,
-        mac: [u8; 6],
-    ) -> Result<(), TransferError> {
-        match self {
-            Ethernet::Lan9514(dev) => dev.start(channel, timer, mac),
-            Ethernet::Lan7800(dev) => dev.start(channel, timer, mac),
-        }
-    }
-
-    /// Whether the Ethernet link is up.
-    fn is_link_up(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
-        match self {
-            Ethernet::Lan9514(dev) => dev.is_link_up(channel, timer),
-            Ethernet::Lan7800(dev) => dev.is_link_up(channel, timer),
-        }
-    }
-
-    /// Whether auto-negotiation settled on full duplex.
-    fn is_full_duplex(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
-        match self {
-            Ethernet::Lan9514(dev) => dev.is_full_duplex(channel, timer),
-            Ethernet::Lan7800(dev) => dev.is_full_duplex(channel, timer),
-        }
-    }
-
-    /// Sends one Ethernet frame, without its CRC.
-    fn send_frame(
-        &mut self,
-        channel: &mut Channel,
-        timer: &Timer,
-        frame: &[u8],
-    ) -> Result<(), TransferError> {
-        match self {
-            Ethernet::Lan9514(dev) => dev.send_frame(channel, timer, frame),
-            Ethernet::Lan7800(dev) => dev.send_frame(channel, timer, frame),
-        }
-    }
-
-    /// Polls for received frames and prints a summary of each.
-    ///
-    /// The printing happens in here rather than in the caller because the
-    /// two drivers return their own `Frames` iterators: same item type,
-    /// different types, so there is nothing to hand back without boxing.
-    /// Draining each one where it is produced is also the behaviour that
-    /// matters — a transfer can carry several frames, and taking only the
-    /// first discards the rest silently.
-    fn receive(&mut self, uart: &mut Uart, channel: &mut Channel, timer: &Timer) {
-        let result = match self {
-            Ethernet::Lan9514(dev) => dev.receive_frames(channel, timer).map(|frames| {
-                for frame in frames {
-                    print_frame(uart, frame);
-                }
-            }),
-            Ethernet::Lan7800(dev) => dev.receive_frames(channel, timer).map(|frames| {
-                for frame in frames {
-                    print_frame(uart, frame);
-                }
-            }),
-        };
-        if let Err(e) = result {
-            let _ = writeln!(
-                uart,
-                "receive error: {e:?} (hcint=0x{:08x})",
-                channel.last_interrupt()
-            );
+            Board::Lan9514(_) => "LAN9514",
+            Board::Lan7800(_) => "LAN7800",
         }
     }
 }
@@ -225,19 +153,31 @@ pub extern "C" fn kmain() -> ! {
         timer.delay_ms(POLL_INTERVAL_MS);
     }
 
-    let mut ethernet = found.expect("the loop above only exits once it is set");
+    let board = found.expect("the loop above only exits once it is set");
 
     // The walk's own channel goes away with it, so take one to keep.
     let Some(mut channel) = dwc2.alloc_channel() else {
         let _ = writeln!(uart, "no free host channel");
         halt();
     };
-    run_ethernet(&mut uart, &mut channel, &timer, &mut ethernet, board_mac);
+
+    // The only place the chip is named. `run_ethernet` is generic over
+    // `Ethernet`, so this match is the whole cost of supporting both: two
+    // instantiations of one function rather than two of everything.
+    let name = board.name();
+    match board {
+        Board::Lan9514(mut dev) => {
+            run_ethernet(&mut uart, &mut channel, &timer, &mut dev, name, board_mac)
+        }
+        Board::Lan7800(mut dev) => {
+            run_ethernet(&mut uart, &mut channel, &timer, &mut dev, name, board_mac)
+        }
+    }
     halt();
 }
 
 /// Stops the walk once something has been claimed.
-fn break_when_found(found: &Option<Ethernet>) -> ControlFlow<()> {
+fn break_when_found(found: &Option<Board>) -> ControlFlow<()> {
     if found.is_some() {
         ControlFlow::Break(())
     } else {
@@ -251,64 +191,77 @@ fn break_when_found(found: &Option<Ethernet>) -> ControlFlow<()> {
 /// Each driver declines a device that isn't its own by vendor/product ID,
 /// so offering the device to both in turn is how the board is identified —
 /// nothing here has to know which Pi it is running on.
-fn claim(uart: &mut Uart, channel: &mut Channel, timer: &Timer, event: Event) -> Option<Ethernet> {
+fn claim(uart: &mut Uart, channel: &mut Channel, timer: &Timer, event: Event) -> Option<Board> {
     let Event::Attached(device) = event else {
         return None;
     };
 
-    let ethernet = match Lan9514::from_device(channel, timer, device) {
-        Ok(Some(dev)) => Some(Ethernet::Lan9514(dev)),
-        Ok(None) => None,
+    match Lan9514::from_device(channel, timer, device) {
+        Ok(Some(dev)) => {
+            return announce(uart, channel, timer, "LAN9514", &dev, device)
+                .then_some(Board::Lan9514(dev));
+        }
+        Ok(None) => {}
         Err(e) => {
             let _ = writeln!(uart, "LAN9514 setup failed: {e:?}");
             return None;
         }
-    };
-    let ethernet = match ethernet {
-        Some(ethernet) => ethernet,
-        None => match Lan7800::from_device(channel, timer, device) {
-            Ok(Some(dev)) => Ethernet::Lan7800(dev),
-            Ok(None) => return None,
-            Err(e) => {
-                let _ = writeln!(uart, "LAN7800 setup failed: {e:?}");
-                return None;
-            }
-        },
-    };
+    }
 
-    let id = match &ethernet {
-        Ethernet::Lan9514(dev) => dev.id_revision(channel, timer).map(|i| (i.id, i.revision)),
-        Ethernet::Lan7800(dev) => dev.id_revision(channel, timer).map(|i| (i.id, i.revision)),
-    };
-    match id {
-        Ok((id, revision)) => {
-            let _ = writeln!(
-                uart,
-                "{} on hub {} port {}: id=0x{id:04x} revision=0x{revision:04x}",
-                ethernet.name(),
-                device.hub_address,
-                device.port,
-            );
+    match Lan7800::from_device(channel, timer, device) {
+        Ok(Some(dev)) => {
+            announce(uart, channel, timer, "LAN7800", &dev, device).then_some(Board::Lan7800(dev))
         }
+        Ok(None) => None,
         Err(e) => {
-            let _ = writeln!(uart, "{} id read failed: {e:?}", ethernet.name());
-            return None;
+            let _ = writeln!(uart, "LAN7800 setup failed: {e:?}");
+            None
         }
     }
-    Some(ethernet)
+}
+
+/// Prints what was found and where, reading the chip's ID register as the
+/// confirmation that register access reaches it. `false` if it doesn't,
+/// which is a device to leave alone rather than drive.
+///
+/// Generic over [`Ethernet`], so it is written once for both chips — the
+/// first thing the trait buys that the enum could not.
+fn announce<E: Ethernet>(
+    uart: &mut Uart,
+    channel: &mut Channel,
+    timer: &Timer,
+    name: &str,
+    ethernet: &E,
+    device: Device,
+) -> bool {
+    match ethernet.id_revision(channel, timer) {
+        Ok(id) => {
+            let _ = writeln!(
+                uart,
+                "{name} on hub {} port {}: id=0x{:04x} revision=0x{:04x}",
+                device.hub_address, device.port, id.id, id.revision,
+            );
+            true
+        }
+        Err(e) => {
+            let _ = writeln!(uart, "{name} id read failed: {e:?}");
+            false
+        }
+    }
 }
 
 /// Enables the interface, waits for link, sends one broadcast frame, then
 /// prints a summary of each received frame forever.
-fn run_ethernet(
+fn run_ethernet<E: Ethernet>(
     uart: &mut Uart,
     channel: &mut Channel,
     timer: &Timer,
-    ethernet: &mut Ethernet,
+    ethernet: &mut E,
+    name: &str,
     mac: [u8; 6],
 ) {
     if let Err(e) = ethernet.start(channel, timer, mac) {
-        let _ = writeln!(uart, "{} start failed: {e:?}", ethernet.name());
+        let _ = writeln!(uart, "{name} start failed: {e:?}");
         return;
     }
     // Auto-negotiation takes a second or three, so this is not instant
@@ -357,7 +310,24 @@ fn run_ethernet(
     loop {
         // Pace polls -- bulk endpoints mustn't be hammered back to back.
         timer.delay_ms(10);
-        ethernet.receive(uart, channel, timer);
+
+        // Every frame the transfer carried, not just the first: a transfer
+        // can arrive holding several, and taking the head of that discards
+        // the rest with nothing to report it.
+        match ethernet.receive_frames(channel, timer) {
+            Ok(frames) => {
+                for frame in frames {
+                    print_frame(uart, frame);
+                }
+            }
+            Err(e) => {
+                let _ = writeln!(
+                    uart,
+                    "receive error: {e:?} (hcint=0x{:08x})",
+                    channel.last_interrupt()
+                );
+            }
+        }
     }
 }
 

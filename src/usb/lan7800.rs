@@ -276,15 +276,12 @@ struct BulkEndpoint {
     toggle: bool,
 }
 
-/// The LAN7800's `ID_REV` register, split into the chip ID and silicon
-/// revision it packs into one 32-bit word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IdRevision {
-    /// Chip ID (the register's high 16 bits) — `0x7800` for this part.
-    pub id: u16,
-    /// Silicon revision (the register's low 16 bits).
-    pub revision: u16,
-}
+/// The LAN7800's `ID_REV` register, split into the chip ID (`0x7800` for
+/// this part) and silicon revision it packs into one 32-bit word.
+///
+/// Re-exported from [`crate::usb::ethernet`], where it is shared with the
+/// other Ethernet driver.
+pub use crate::usb::ethernet::IdRevision;
 
 /// The receive half of a [`Lan7800`]: the bulk IN endpoint and the DMA
 /// buffer frames land in. Split from the transmit half so the two
@@ -1046,5 +1043,62 @@ impl Lan7800 {
                 return Err(TransferError::Timeout);
             }
         }
+    }
+}
+
+impl crate::usb::ethernet::Ethernet for Lan7800 {
+    type Frames<'a> = Frames<'a>;
+
+    const MTU: usize = MTU;
+
+    fn id_revision(
+        &self,
+        channel: &mut Channel,
+        timer: &Timer,
+    ) -> Result<IdRevision, TransferError> {
+        Lan7800::id_revision(self, channel, timer)
+    }
+
+    fn start(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        mac: [u8; 6],
+    ) -> Result<(), TransferError> {
+        Lan7800::start(self, channel, timer, mac)
+    }
+
+    fn is_link_up(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
+        Lan7800::is_link_up(self, channel, timer)
+    }
+
+    fn is_full_duplex(&self, channel: &mut Channel, timer: &Timer) -> Result<bool, TransferError> {
+        Lan7800::is_full_duplex(self, channel, timer)
+    }
+
+    fn set_all_multicast(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        pass: bool,
+    ) -> Result<(), TransferError> {
+        Lan7800::set_all_multicast(self, channel, timer, pass)
+    }
+
+    fn send_frame(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+        frame: &[u8],
+    ) -> Result<(), TransferError> {
+        Lan7800::send_frame(self, channel, timer, frame)
+    }
+
+    fn receive_frames(
+        &mut self,
+        channel: &mut Channel,
+        timer: &Timer,
+    ) -> Result<Self::Frames<'_>, TransferError> {
+        Lan7800::receive_frames(self, channel, timer)
     }
 }
