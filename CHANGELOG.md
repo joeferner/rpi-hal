@@ -8,6 +8,51 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`usb::lan7800`, a driver for the Pi 3B+'s Ethernet** — the Microchip
+  LAN7800 half of the LAN7515 that board carries in place of a Pi 2B/3B's
+  SMSC LAN9514 ([issue #101](https://github.com/joeferner/rpi-hal/issues/101)).
+  Until now a 3B+ had no wired network under this crate at all.
+
+  The same surface as `usb::lan9514` — `from_device`, `start`,
+  `is_link_up`, `set_all_multicast`, `send_frame`, `receive_frames` — so a
+  consumer ports between them by changing a type name. The contents share
+  nothing: a different register map, a different PHY bring-up, an 8-byte
+  transmit header against the LAN9514's, and a 10-byte receive header whose
+  padding is computed on the frame length *plus two* rather than on the
+  length alone. That last one is worth knowing, because getting it wrong
+  doesn't lose one frame, it loses every frame behind it in the transfer.
+
+  `examples/usb_ethernet.rs` now drives whichever chip the board has,
+  offering each enumerated device to both drivers and taking the one that
+  claims it, so a single image covers a 2B/3B and a 3B+. It also walks the
+  bus with `usb::Bus` rather than `usb::enumerate`, and has to: on a 3B+
+  the LAN7800 sits behind two cascaded hubs and attaches seconds after
+  power-on, so a one-shot walk finishes before it exists.
+
+  `set_promiscuous` is here and has no LAN9514 counterpart yet, because
+  this chip filters unicast against a perfect-address table by default and
+  the bit to turn that off is a natural pair with `set_all_multicast`.
+
+  **The link is 100BASE-TX, not gigabit, and that is deliberate.** Left
+  advertising 1000BASE-T, the link never comes up at all: base pages
+  exchange and the partner acknowledges them, there is no parallel-detect
+  or master/slave fault, but 1000BASE-T training never converges — the
+  remote-receiver-OK bit never sets — so negotiation restarts and fails
+  indefinitely without ever falling back. Training needs analogue setup
+  particular to this PHY; Linux gets gigabit because phylib binds
+  `drivers/net/phy/microchip.c` to the LAN88xx core inside the chip, which
+  programs DSP and MDIX registers `lan78xx.c` never mentions. Withdrawing
+  gigabit costs little here, since the chip reaches the host over USB 2.0
+  and a gigabit line could not be filled through it anyway.
+
+  Two things caught only on hardware, both recorded in the code. The
+  receive header's padding is computed on the frame length *plus two*, not
+  on the length alone. And `USB_CFG0.BIR` has the opposite sense to the
+  LAN9514 bit of the same name: here setting it selects NAK and clearing
+  it selects the zero-length reply, so carrying the polarity across left
+  every idle poll blocked in a NAK'd transfer until it timed out, dropping
+  most of the traffic that arrived meanwhile.
+
 - **`usb::Bus`, which keeps the bus state a walk used to throw away** —
   so a device that attaches after startup can still be brought up, and one
   that is unplugged is reported rather than silently left addressed
