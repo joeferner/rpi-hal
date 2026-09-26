@@ -424,6 +424,10 @@ name = "usb_irq"
 required-features = ["async"]
 
 [[example]]
+name = "usb_ethernet_async"
+required-features = ["async"]
+
+[[example]]
 name = "sd_async"
 required-features = ["async"]
 

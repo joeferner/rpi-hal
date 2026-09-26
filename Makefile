@@ -57,7 +57,7 @@ examples:
 	cargo build --release --features bcm2837,mmal --example hdmi_audio
 	# And the interrupt-driven examples, gated on `async` -- the feature is
 	# off by default, so a plain --examples build skips both.
-	cargo build --release --features bcm2837,async --example usb_irq --example sd_async
+	cargo build --release --features bcm2837,async --example usb_irq --example sd_async --example usb_ethernet_async
 	# And the ARMv6 examples, on their own target and feature set (see
 	# `build-bcm2835`). Named rather than `--examples`, because that would
 	# sweep in ones resting on hardware this chip doesn't have -- the ARM

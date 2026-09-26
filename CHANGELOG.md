@@ -8,6 +8,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`usb::lan7800`'s `async` half** — the interrupt-driven twins of its
+  transfer methods, and `split()` into borrow-disjoint receive and
+  transmit halves, matching what `usb::lan9514` has had. Behind the
+  `async` feature. This is what an `embassy-net` adapter for the chip
+  needs; without it a Pi 3B+ could move frames but only by spinning.
+
+  **`start_async` configures the chip's empty-receive response the
+  opposite way to `start`, on purpose.** The blocking path clears
+  `USB_CFG0.BIR`, so a bulk IN with no frame waiting is answered at once
+  and an idle poll returns immediately. The async path sets it, so an
+  empty FIFO NAKs — and the DWC2 retries a NAK'd bulk channel in hardware
+  without halting it, which leaves the transfer parked until a frame
+  arrives. That is what makes the receive interrupt-driven rather than
+  polled, and it is why the two bring-ups differ.
+
+  Picking the wrong twin is neither a compile error nor a failure:
+  `start` followed by `receive_frames_async` yields a future that resolves
+  immediately with nothing, every time, and a caller looping on it spins
+  its executor instead of sleeping. Documented at both ends for that
+  reason.
+
+  `examples/usb_ethernet_async.rs` is the test of exactly that. It drives
+  the async path with no pacing delay and counts the receives that come
+  back empty; on hardware the count stayed under ten across a run while
+  real frames arrived, which is parking working rather than being hoped
+  for.
+
 - **`usb::ethernet::Ethernet`, one description both Ethernet drivers
   answer to.** `usb::lan9514` and `usb::lan7800` were written to the same
   surface on purpose so that a consumer ports between them by changing a
