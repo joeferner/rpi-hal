@@ -30,6 +30,13 @@ use crate::usb::descriptor::{ConfigurationDescriptor, Descriptors, EndpointDescr
 use crate::usb::dwc2::{Channel, ControlEndpoint, TransferError};
 use crate::usb::Device;
 
+/// The `async` twins of this driver's transfer methods.
+#[cfg(feature = "async")]
+mod asynch;
+
+#[cfg(feature = "async")]
+pub use asynch::{Lan7800Rx, Lan7800Tx};
+
 /// USB vendor ID of the LAN7800 (Microchip, formerly SMSC) — the value to
 /// match a [`Device`] against before handing it to [`Lan7800::from_device`].
 pub const VENDOR_ID: u16 = 0x0424;

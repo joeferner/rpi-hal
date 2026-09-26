@@ -96,8 +96,22 @@ const REG_MII_ADDR: u16 = 0x114;
 /// `MII_DATA` register — MII (PHY) read/write data.
 const REG_MII_DATA: u16 = 0x118;
 
-/// `HW_CFG.BIR` — make a bulk-IN with no frame available return a
-/// zero-length packet instead of NAKing, so RX polling is deterministic.
+/// `HW_CFG.BIR` — Bulk In Response: how the chip answers a bulk-IN with no
+/// frame waiting. Set means NAK.
+///
+/// Set, and both paths depend on it, in opposite directions. The blocking
+/// [`Lan9514::receive_frames`] must therefore ask `RX_FIFO_INF` whether a
+/// frame is waiting before it issues the transfer at all — the DWC2
+/// retries a NAK'd bulk channel rather than halting it, so an idle poll
+/// would otherwise block for the whole transfer timeout. The async twin
+/// wants exactly that retrying: it leaves the transfer parked until the
+/// chip has something, which is what makes the receive interrupt-driven
+/// and let the `embassy-net` adapter drop its periodic wake.
+///
+/// This comment previously said the bit selected a *zero-length* reply,
+/// which is backwards and contradicted both call sites. The sibling
+/// [`crate::usb::lan7800`] has a bit of the same name and the same sense,
+/// established by measurement there.
 const HW_CFG_BIR: u32 = 0x0000_1000;
 
 /// `HW_CFG.RXDOFF` — bytes of padding the chip puts between a frame's RX
