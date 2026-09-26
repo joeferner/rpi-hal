@@ -217,15 +217,48 @@ pub fn new<'d, 'c, E: EthernetAsync, const N_RX: usize, const N_TX: usize>(
     let (runner, device) = ch::new(&mut state.inner, HardwareAddress::Ethernet(config.mac));
     (
         device,
-        EthernetRunner {
-            runner,
-            ethernet,
-            rx_channel,
-            tx_channel,
-            timer,
-            config,
-        },
+        attach(runner, ethernet, rx_channel, tx_channel, timer, config),
     )
+}
+
+/// Puts a chip behind a queue pair somebody else built, returning the
+/// runner to spawn.
+///
+/// [`new`] is this with the queue pair built for you, and is what a board
+/// with one fixed interface wants. This exists for a board that has more
+/// than one and picks between them — Ethernet if a cable is in, Wi-Fi
+/// otherwise. There the [`EthernetState`] has to outlive any particular
+/// choice, so it is created once, up where the choosing happens, and
+/// whichever interface wins is attached to it.
+///
+/// That matters because the queue pair is where the stack's world ends.
+/// `embassy_net::Stack` is built around the [`EthernetDriver`] half and
+/// holds its sockets and buffers on that side; everything chip-specific is
+/// on this one. A board that owns the pair can therefore keep one stack
+/// across a change of interface, where a board that let each adapter build
+/// its own would have to tear the stack down and lose every socket with
+/// it.
+///
+/// `runner` comes from `embassy_net_driver_channel::new` with the same MAC
+/// [`EthernetConfig::mac`] carries — one is what the stack answers ARP
+/// with, the other is what gets programmed into the chip, and they have to
+/// agree.
+pub fn attach<'d, 'c, E: EthernetAsync>(
+    runner: ch::Runner<'d, MTU>,
+    ethernet: E,
+    rx_channel: Channel<'c>,
+    tx_channel: Channel<'c>,
+    timer: &'d Timer,
+    config: EthernetConfig,
+) -> EthernetRunner<'d, 'c, E> {
+    EthernetRunner {
+        runner,
+        ethernet,
+        rx_channel,
+        tx_channel,
+        timer,
+        config,
+    }
 }
 
 impl<E: EthernetAsync> EthernetRunner<'_, '_, E> {

@@ -214,15 +214,30 @@ pub fn new<'d, const N_RX: usize, const N_TX: usize>(
     mac: [u8; 6],
 ) -> (WifiDriver<'d>, WifiRunner<'d>) {
     let (runner, device) = ch::new(&mut state.inner, HardwareAddress::Ethernet(mac));
-    (
-        device,
-        WifiRunner {
-            runner,
-            wifi,
-            timer,
-            reconnect: None,
-        },
-    )
+    (device, attach(runner, wifi, timer))
+}
+
+/// Puts the radio behind a queue pair somebody else built, returning the
+/// runner to spawn.
+///
+/// [`new`] is this with the queue pair built for you. This exists for the
+/// same reason [`crate::ethernet::attach`] does, and the two are meant to
+/// be used together: a board that falls back from Ethernet to Wi-Fi owns
+/// one `ch::State`, creates the queue pair once, and attaches whichever
+/// interface it settled on. Both adapters hand the stack the same
+/// `ch::Device<'_, 1514>`, so from above there is nothing to choose
+/// between — which is what makes one stack over either interface possible
+/// at all.
+///
+/// `runner` comes from `embassy_net_driver_channel::new` with the radio's
+/// own MAC, the one [`new`] would have passed.
+pub fn attach<'d>(runner: ch::Runner<'d, MTU>, wifi: Wifi, timer: &'d Timer) -> WifiRunner<'d> {
+    WifiRunner {
+        runner,
+        wifi,
+        timer,
+        reconnect: None,
+    }
 }
 
 impl<'d> WifiRunner<'d> {

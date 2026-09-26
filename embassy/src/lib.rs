@@ -56,3 +56,18 @@ pub mod wifi;
 /// `#[embassy_executor::main(executor = "rpi_hal_embassy::Executor")]`
 /// expects to find it at.
 pub use executor::Executor;
+
+/// `embassy-net-driver-channel`, re-exported.
+///
+/// The queue pair both network adapters hand the stack is this crate's
+/// `Device`, and [`ethernet::attach`]/[`wifi::attach`] take its `Runner`.
+/// A board that owns its own queue pair — one that picks between Ethernet
+/// and Wi-Fi at startup, say — needs `channel::State` and `channel::new`
+/// to build it.
+///
+/// Re-exported rather than left for the board to depend on directly, so
+/// there is no way to end up with two incompatible versions of a type that
+/// crosses this crate's API. The version is whatever this crate was built
+/// against.
+#[cfg(any(feature = "embassy-net-driver", feature = "wifi"))]
+pub use embassy_net_driver_channel as channel;

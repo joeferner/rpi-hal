@@ -24,6 +24,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quietly truncating. That shared value is also what would let one
   interface replace another under a live stack later.
 
+- **`ethernet::attach` and `wifi::attach`**, which put a chip behind a
+  queue pair the *caller* built, and `channel` — `embassy-net-driver-channel`
+  re-exported so a caller can build one.
+
+  `new` is still there and is what a board with one fixed interface wants.
+  `attach` is for a board with more than one that picks between them:
+  Ethernet if a cable is in, Wi-Fi otherwise. There the queue pair has to
+  outlive any particular choice, so it is created once where the choosing
+  happens and whichever interface wins is attached to it.
+
+  The queue pair is where the stack's world ends — `embassy_net::Stack`
+  holds its sockets and buffers on the `Device` side, everything
+  chip-specific is on the other, and both adapters hand over the identical
+  `ch::Device<'_, 1514>`. A board that owns the pair can therefore keep one
+  stack across a change of interface; one that lets each adapter build its
+  own would have to tear the stack down and lose every socket with it.
+
 ### Changed
 
 - **The adapter brings the chip up itself, so `new` takes an *unstarted*
