@@ -1,5 +1,13 @@
-//! Blocking driver for the on-board BCM43438 wireless chip's SDIO
-//! interface — the bus the Wi-Fi side of the chip is reached over.
+//! Blocking driver for the on-board wireless chip's SDIO interface — the
+//! bus the Wi-Fi side of the chip is reached over.
+//!
+//! Two chips, and the difference is the firmware download rather than the
+//! bus. A Pi 3 `B` and a Zero W carry a BCM43430, whose CPU is an ARM
+//! Cortex-M3 with a separate SOCRAM core; a Pi 3 `B+` and a Pi 4 carry a
+//! BCM43455, whose CPU is an ARM CR4 with the RAM tightly coupled inside
+//! it. Everything up to and including the backplane window is identical;
+//! from [`prepare_download`](crate::sdio::Sdio::prepare_download) on, the
+//! two diverge — see [`Cpu`](crate::sdio::Cpu).
 //!
 //! This drives the *same* Arasan "EMMC" (SDHCI-compatible) host
 //! controller as [`crate::sd`], but for a different device: where
@@ -8,12 +16,19 @@
 //! wireless chip (GPIO34-39, the "SD1" pin group) and speaks SDIO
 //! (`CMD5`/`CMD52`/`CMD53`). The two uses are therefore mutually
 //! exclusive: the controller can only be muxed to one pin group at a
-//! time, so a program that brings up Wi-Fi over this driver gives up
-//! the SD-card slot (a program needing both concurrently would have to
+//! time, so a program using this driver gives up the SD-card slot for as
+//! long as it does (a program needing both *concurrently* would have to
 //! drive the slot with the separate, simpler "SDHOST" controller
 //! instead — not implemented here). This is exactly the split Linux
 //! makes on a Pi 3, and why `sd.rs` is documented as safe to point at
 //! the slot only because *this* crate doesn't otherwise need SDIO.
+//!
+//! The slot can be taken back, though — [`crate::sd::Sd::init`] routes
+//! these pins away again, so the two may be alternated. That is what
+//! lets a program ask the chip what it is before going to the card for
+//! the matching firmware, which is otherwise a chicken-and-egg: the chip
+//! id is only readable over the backplane, and the backplane only once
+//! the card is gone.
 //!
 //! This gets the chip powered, the SDIO bus enumerated
 //! (`CMD0`/`CMD5`/`CMD3`/`CMD7`) at the ≤400kHz identification clock in
@@ -205,10 +220,18 @@ const CHIPCOMMON_BASE: u32 = 0x1800_0000;
 const CHIP_ID_MASK: u32 = 0x0000_ffff;
 /// The chip id a Pi 3 `B`'s BCM43438 reports. The "43438" on the module
 /// is a marketing number; the silicon's ChipCommon core identifies as
-/// 43430 (`0xA9A6`). A Pi 3 `B+` / Zero 2 W reports a different value
-/// (43436/43455), so callers that want to accept those should read
+/// 43430 (`0xA9A6`). A Pi 3 `B+` / Pi 4 reports [`BCM43455_CHIP_ID`]
+/// instead, and a Zero 2 W a third value (43436) this driver does not
+/// yet handle — so a caller wanting to accept more than one should read
 /// [`Sdio::chip_id`] rather than compare against this.
 pub const BCM43438_CHIP_ID: u32 = 0xa9a6;
+/// The chip id a Pi 3 `B+`'s (and a Pi 4's) BCM43455 reports.
+///
+/// A different family from [`BCM43438_CHIP_ID`], not merely a different
+/// number: this part's CPU is an ARM CR4 with tightly-coupled memory
+/// rather than a Cortex-M3 with a separate SOCRAM core, so the firmware
+/// download takes an entirely separate path — see [`Cpu`].
+pub const BCM43455_CHIP_ID: u32 = 0x4345;
 
 /// ChipCommon register holding the pointer (a backplane address) to the
 /// enumeration ROM (EROM) — the table [`Sdio::scan_cores`] walks to
@@ -219,8 +242,17 @@ const CHIPCOMMON_EROM_PTR: u32 = CHIPCOMMON_BASE + 0xfc;
 /// Core ID of the ARM Cortex-M3 — the CPU on the 43430 that runs the
 /// downloaded firmware; held in reset until the download completes.
 const CORE_ARM_CM3: u16 = 0x82a;
-/// Core ID of the internal RAM (SOCRAM/TCM) the firmware is downloaded
-/// into.
+/// Core ID of the ARM CR4 — the CPU on the 43455, in place of the
+/// 43430's Cortex-M3.
+///
+/// Which of the two a chip has decides the whole download: a CR4 carries
+/// its RAM as tightly-coupled memory inside the CPU core itself, so there
+/// is no [`CORE_SOCRAM`] to find, nothing to bring out of reset before
+/// RAM is writable, and the image lands at a chip-specific base rather
+/// than at zero.
+const CORE_ARM_CR4: u16 = 0x83e;
+/// Core ID of the internal RAM (SOCRAM) the firmware is downloaded into
+/// on a Cortex-M3 part. A CR4 part has no such core.
 const CORE_SOCRAM: u16 = 0x80e;
 /// Core ID of the SDIO device core — its mailbox register carries the
 /// host↔firmware ready handshake once the CPU is running.
@@ -337,6 +369,59 @@ const SOCRAM_COREINFO_BANKS_MASK: u32 = 0xf0;
 /// The 43430's RAM bank whose remap must be disabled during download.
 const SOCRAM_REMAP_BANK: u32 = 3;
 
+/// CR4 register offset: `capability`, carrying the number of tightly-
+/// coupled memory banks in two nibbles — the A banks and the B banks,
+/// which are summed.
+const ARMCR4_CAP: u32 = 0x04;
+/// CR4 register offset: `bankidx`, selecting which bank
+/// [`ARMCR4_BANKINFO`] reports on. The SOCRAM equivalent is
+/// [`SOCRAM_BANKIDX`], at a different offset — the two core types share
+/// the idea and not the register map.
+const ARMCR4_BANKIDX: u32 = 0x40;
+/// CR4 register offset: `bankinfo`, whose low bits give the selected
+/// bank's size in [`ARMCR4_BANK_SIZE_UNIT`] units (minus one).
+const ARMCR4_BANKINFO: u32 = 0x44;
+/// Mask over `capability`'s count of TCM "A" banks.
+const ARMCR4_CAP_BANKS_A_MASK: u32 = 0x0000_000f;
+/// Mask over `capability`'s count of TCM "B" banks, which sit above the
+/// A banks in the same address space and count toward the same total.
+const ARMCR4_CAP_BANKS_B_MASK: u32 = 0x0000_00f0;
+/// Shift for [`ARMCR4_CAP_BANKS_B_MASK`].
+const ARMCR4_CAP_BANKS_B_SHIFT: u32 = 4;
+/// Mask over `bankinfo`'s size field. Six bits, where SOCRAM's is seven.
+const ARMCR4_BANKINFO_SIZE_MASK: u32 = 0x0000_003f;
+/// Byte size of one CR4 `bankinfo` size unit (each bank is `(field + 1)`
+/// of these).
+const ARMCR4_BANK_SIZE_UNIT: u32 = 8192;
+/// CR4 `ioctrl` bit that halts the CPU.
+///
+/// The CR4 has no equivalent of simply holding the Cortex-M3 in reset:
+/// it is reset *with this bit set* to leave it halted for the download,
+/// and reset again with it clear to start it running.
+const ARMCR4_IOCTL_CPUHALT: u32 = 0x20;
+
+/// Backplane address the CR4 fetches its reset vector from.
+///
+/// The one thing a CR4 download needs that a Cortex-M3 one does not. A
+/// CM3's image is written to address 0 and its first word *is* the reset
+/// vector, already in the right place; a CR4's image goes to a base far
+/// up in the address space, so the vector has to be copied down here by
+/// hand.
+const ARMCR4_RESET_VECTOR_ADDR: u32 = 0;
+
+/// Backplane address where the 43455 wants its firmware image.
+///
+/// Chip-specific and not discoverable: the EROM says where the CR4 core's
+/// registers are, not where its memory is mapped. Linux's `brcmfmac`
+/// carries the same value as a `switch` on the chip id, and so does
+/// [`Sdio::scan_cores`].
+const BCM43455_RAM_BASE: u32 = 0x0019_8000;
+
+/// SDIO core register offset: `intstatus`, cleared before a CR4 is
+/// started so the firmware does not come up facing interrupts raised
+/// during the download.
+const SDIO_CORE_INTSTATUS: u32 = 0x20;
+
 /// Errors from [`Sdio::init`] and the register-access methods.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -369,10 +454,27 @@ pub enum Error {
     /// window isn't accessible.
     Function1NotReady,
     /// Walking the enumeration ROM ([`Sdio::scan_cores`]) didn't turn up
-    /// a core the firmware download needs (the ARM CPU, the internal
-    /// RAM, or the SDIO core) — either the EROM read back garbage or the
-    /// walk ran past its bound without finding an end marker.
+    /// a core the firmware download needs — either the EROM read back
+    /// garbage or the walk ran past its bound without finding an end
+    /// marker.
+    ///
+    /// "Needs" depends on what CPU was found. A Cortex-M3 part must also
+    /// produce a SOCRAM core; a CR4 part carries its RAM inside the CPU
+    /// and must not be held to that. Both must produce a D11 and an SDIO
+    /// core, and one CPU or the other.
     CoreNotFound,
+    /// The chip's CPU is an ARM CR4, whose firmware image loads at a
+    /// chip-specific RAM base that is not discoverable from the
+    /// enumeration ROM — and this chip id is not one whose base this
+    /// driver knows.
+    ///
+    /// Distinct from [`Self::CoreNotFound`] on purpose: the chip was read
+    /// correctly and every core was found. What is missing is a constant,
+    /// which is a much shorter thing to go and fix.
+    UnsupportedChip {
+        /// What [`Sdio::chip_id`] reported.
+        chip_id: u32,
+    },
     /// After the download, the SOCRAM core wasn't up when it came time
     /// to release the CPU — the RAM the firmware was written into isn't
     /// reachable, so starting the CPU would be pointless.
@@ -404,24 +506,62 @@ pub enum Error {
 /// reset/clock-control registers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChipCores {
-    /// The ARM Cortex-M3's wrapper base — where its reset/clock control
-    /// lives, used to hold it in reset during download and release it
-    /// afterward. (The CPU has no registers this driver reads, so only
-    /// the wrapper is kept.)
-    pub arm_wrapper: u32,
+    /// The on-chip CPU and the memory it runs the firmware out of, which
+    /// are one question rather than two — see [`Cpu`].
+    pub cpu: Cpu,
     /// The D11 (802.11 MAC) core's wrapper base — for holding it reset
     /// and quiescent during the download.
     pub d11_wrapper: u32,
-    /// The internal RAM (SOCRAM) core's register base — for reading its
-    /// bank layout to size RAM, and the 43430-specific bank remap
-    /// disable.
-    pub socram_base: u32,
-    /// The internal RAM core's wrapper base — for bringing the RAM core
-    /// up out of reset so it's writable.
-    pub socram_wrapper: u32,
     /// The SDIO device core's register base — its mailbox register
     /// carries the firmware-ready handshake.
     pub sdio_base: u32,
+}
+
+/// Which CPU a chip has, and where the firmware goes because of it.
+///
+/// The two variants are not two spellings of the same thing. Where the
+/// image is written, whether anything has to be brought out of reset
+/// before RAM is writable, how RAM is measured, and how the CPU is
+/// started all differ — so this is the branch the whole download hangs
+/// off, and keeping it as one enum is what stops the four decisions
+/// drifting apart into four independent checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cpu {
+    /// An ARM Cortex-M3 with a separate SOCRAM core holding the RAM —
+    /// the BCM43430, so a Pi 3 `B` or a Zero W.
+    ///
+    /// The image is written to address 0 and its first word is already
+    /// the reset vector, so starting the CPU is one core reset and
+    /// nothing else.
+    CortexM3 {
+        /// The CPU's wrapper base — its reset/clock control, used to hold
+        /// the CPU in reset during the download and release it after.
+        /// (The core has no registers this driver reads.)
+        arm_wrapper: u32,
+        /// The SOCRAM core's register base — for reading its bank layout
+        /// to size RAM, and for the 43430's bank-remap disable.
+        socram_base: u32,
+        /// The SOCRAM core's wrapper base — for bringing the RAM core out
+        /// of reset so it is writable.
+        socram_wrapper: u32,
+    },
+    /// An ARM CR4 whose RAM is tightly coupled inside the CPU core — the
+    /// BCM43455, so a Pi 3 `B+` or a Pi 4.
+    ///
+    /// There is no separate RAM core to find or to bring up: the memory
+    /// comes with the CPU. What it costs instead is a chip-specific
+    /// [`ram_base`](Self::Cr4::ram_base) and a reset vector that has to be
+    /// written down to address 0 by hand.
+    Cr4 {
+        /// The CPU's register base — where the TCM bank registers live,
+        /// which is how RAM is sized on this part.
+        arm_base: u32,
+        /// The CPU's wrapper base — its reset/clock control.
+        arm_wrapper: u32,
+        /// Where in the backplane address space this chip's RAM appears,
+        /// from the chip id rather than from the enumeration ROM.
+        ram_base: u32,
+    },
 }
 
 /// A brought-up SDIO link to the wireless chip, with function 1 (the
@@ -617,8 +757,10 @@ impl Sdio {
     }
 
     /// Walks the chip's enumeration ROM (EROM) to discover the backplane
-    /// addresses of the cores the firmware download needs — the ARM CPU
-    /// (Cortex-M3), the internal RAM (SOCRAM), and the SDIO core. The
+    /// addresses of the cores the firmware download needs — the ARM CPU,
+    /// the internal RAM on a part that has it as a separate core, the
+    /// D11 MAC, and the SDIO core. Which CPU turns up is also what
+    /// decides the shape of the download; see [`Cpu`]. The
     /// EROM is a flat table of 32-bit descriptors starting at the
     /// address in ChipCommon's `CHIPCOMMON_EROM_PTR`: a pair of
     /// component-id words introduces each core (carrying its core ID),
@@ -626,18 +768,22 @@ impl Sdio {
     /// base (address type 0) and its reset/clock wrapper base (a
     /// wrapper/master address type).
     ///
-    /// This is the simplified walk that suffices for the 43430, whose
-    /// EROM uses only plain 32-bit, 4KB address descriptors — none of
-    /// the 64-bit or explicitly-sized descriptors that would need extra
-    /// trailing words skipped. Encountering a core ID that isn't one of
-    /// the three needed is fine and ignored; not finding one of the
-    /// three is [`Error::CoreNotFound`].
+    /// The walk handles the descriptor forms these chips actually use:
+    /// plain 32-bit 4KB address descriptors, plus the 64-bit and
+    /// explicitly-sized ones whose trailing words have to be stepped over
+    /// to stay aligned. A descriptor form beyond those would desynchronize
+    /// the walk rather than be ignored, and would surface as
+    /// [`Error::CoreNotFound`] — so would a genuinely missing core, which
+    /// is the more likely of the two. A core ID that is simply not one of
+    /// the ones wanted is fine and skipped.
     pub fn scan_cores(&mut self, timer: &Timer) -> Result<ChipCores, Error> {
         // The EROM pointer register holds a backplane address; its low
         // bits aren't part of the address.
         let mut erom = self.backplane_read32(CHIPCOMMON_EROM_PTR, timer)? & 0xffff_f000;
 
         let mut arm_wrapper = 0;
+        let mut cr4_base = 0;
+        let mut cr4_wrapper = 0;
         let mut d11_wrapper = 0;
         let mut socram_base = 0;
         let mut socram_wrapper = 0;
@@ -679,12 +825,18 @@ impl Sdio {
                         match core_id {
                             CORE_SOCRAM => socram_base = addr,
                             CORE_SDIO => sdio_base = addr,
+                            // Unlike the CM3, this core's own registers
+                            // are read: the TCM bank layout lives in
+                            // them, and it is the only way to size RAM on
+                            // a CR4 part.
+                            CORE_ARM_CR4 => cr4_base = addr,
                             _ => {}
                         }
                     } else if (addr_type == 0x80 || addr_type == 0xc0) && !got_wrapper {
                         got_wrapper = true;
                         match core_id {
                             CORE_ARM_CM3 => arm_wrapper = addr,
+                            CORE_ARM_CR4 => cr4_wrapper = addr,
                             CORE_D11 => d11_wrapper = addr,
                             CORE_SOCRAM => socram_wrapper = addr,
                             _ => {}
@@ -715,34 +867,81 @@ impl Sdio {
             }
         }
 
-        if arm_wrapper == 0
-            || d11_wrapper == 0
-            || socram_base == 0
-            || socram_wrapper == 0
-            || sdio_base == 0
-        {
+        // Which CPU turned up decides what else had to. A CR4 part has no
+        // SOCRAM core at all, so demanding one — as this did before the
+        // 43455 — rejects a chip that was read perfectly correctly.
+        let cpu = if cr4_wrapper != 0 && cr4_base != 0 {
+            Cpu::Cr4 {
+                arm_base: cr4_base,
+                arm_wrapper: cr4_wrapper,
+                // Not in the EROM: the table says where the CPU's
+                // registers are, not where its memory is mapped.
+                ram_base: match self.chip_id(timer)? {
+                    BCM43455_CHIP_ID => BCM43455_RAM_BASE,
+                    chip_id => return Err(Error::UnsupportedChip { chip_id }),
+                },
+            }
+        } else if arm_wrapper != 0 && socram_base != 0 && socram_wrapper != 0 {
+            Cpu::CortexM3 {
+                arm_wrapper,
+                socram_base,
+                socram_wrapper,
+            }
+        } else {
+            return Err(Error::CoreNotFound);
+        };
+
+        if d11_wrapper == 0 || sdio_base == 0 {
             return Err(Error::CoreNotFound);
         }
         Ok(ChipCores {
-            arm_wrapper,
+            cpu,
             d11_wrapper,
-            socram_base,
-            socram_wrapper,
             sdio_base,
         })
     }
 
     /// Brings the chip to the download-ready ("passive") state and
     /// returns its discovered core layout: scans the cores, forces the
-    /// ALP clock on so the backplane RAM is reachable, disables the ARM
-    /// CPU, holds the D11 MAC in reset, and brings the SOCRAM core up so
-    /// RAM is plain, writable memory. The firmware download builds on
-    /// this; it's exposed on its own so RAM access can be exercised
-    /// (written and read back) before the full download exists.
+    /// ALP clock on so the backplane RAM is reachable, stops the ARM CPU,
+    /// and holds the D11 MAC in reset.
+    ///
+    /// On a Cortex-M3 part it also brings the SOCRAM core up so RAM is
+    /// plain, writable memory. A CR4 part needs no such step — its RAM is
+    /// inside the CPU core and is writable once that core is clocked,
+    /// which stopping it left it.
+    ///
+    /// The firmware download builds on this; it's exposed on its own so
+    /// RAM access can be exercised (written and read back) before the
+    /// full download exists.
     pub fn prepare_download(&mut self, timer: &Timer) -> Result<ChipCores, Error> {
         let cores = self.scan_cores(timer)?;
         self.force_alp_clock(timer)?;
-        self.core_disable(cores.arm_wrapper, 0, 0, timer)?;
+
+        // Stop the CPU. The two parts do not stop the same way: a CM3 is
+        // simply held in reset, while a CR4 is *reset into* a halted
+        // state, its halt bit being an `ioctrl` bit that survives the
+        // reset rather than a separate control.
+        match cores.cpu {
+            Cpu::CortexM3 { arm_wrapper, .. } => {
+                self.core_disable(arm_wrapper, 0, 0, timer)?;
+            }
+            Cpu::Cr4 { arm_wrapper, .. } => {
+                // Every other `ioctrl` bit is cleared and only the halt
+                // bit carried through, so the CPU comes out of this
+                // stopped and in a known state whatever it was doing.
+                let halt =
+                    self.backplane_read32(arm_wrapper + WRAP_IOCTRL, timer)? & ARMCR4_IOCTL_CPUHALT;
+                self.core_reset(
+                    arm_wrapper,
+                    halt,
+                    ARMCR4_IOCTL_CPUHALT,
+                    ARMCR4_IOCTL_CPUHALT,
+                    timer,
+                )?;
+            }
+        }
+
         self.core_reset(
             cores.d11_wrapper,
             D11_PHY_RESET | D11_PHY_CLOCK_EN,
@@ -750,27 +949,77 @@ impl Sdio {
             D11_PHY_CLOCK_EN,
             timer,
         )?;
-        self.core_reset(cores.socram_wrapper, 0, 0, 0, timer)?;
-        // 43430-specific: disable the bank-3 remap so all of RAM is
-        // plain, writable memory during download.
-        self.backplane_write32(cores.socram_base + SOCRAM_BANKIDX, SOCRAM_REMAP_BANK, timer)?;
-        self.backplane_write32(cores.socram_base + SOCRAM_BANKPDA, 0, timer)?;
+
+        // Only a CM3 part has RAM to bring up. A CR4's memory is inside
+        // the CPU core and is writable as soon as the core is clocked,
+        // which the reset above left it.
+        if let Cpu::CortexM3 {
+            socram_base,
+            socram_wrapper,
+            ..
+        } = cores.cpu
+        {
+            self.core_reset(socram_wrapper, 0, 0, 0, timer)?;
+            // 43430-specific: disable the bank-3 remap so all of RAM is
+            // plain, writable memory during download.
+            self.backplane_write32(socram_base + SOCRAM_BANKIDX, SOCRAM_REMAP_BANK, timer)?;
+            self.backplane_write32(socram_base + SOCRAM_BANKPDA, 0, timer)?;
+        }
         Ok(cores)
     }
 
     /// Measures the chip's internal RAM size, in bytes, by summing its
-    /// SOCRAM banks — the bank count comes from `coreinfo`, each bank's
-    /// size from `bankinfo`. Needed to place the nvram block at the top
-    /// of RAM. Requires the SOCRAM core to be up (see
+    /// banks: the bank count comes from a capability register and each
+    /// bank's size from a per-bank one, selected by index.
+    ///
+    /// Which registers depends on the CPU — SOCRAM's on a Cortex-M3 part,
+    /// the CR4's own on a CR4 — and so does what must already have
+    /// happened: a Cortex-M3 part needs its SOCRAM core up first (see
     /// [`Self::prepare_download`]).
+    ///
+    /// **This is a size, not a top address.** On a CR4 part RAM does not
+    /// start at zero, so the nvram goes at
+    /// [`ram_base`](Cpu::Cr4::ram_base) plus this rather than at this.
     pub fn ram_size(&mut self, cores: &ChipCores, timer: &Timer) -> Result<u32, Error> {
-        let coreinfo = self.backplane_read32(cores.socram_base + SOCRAM_COREINFO, timer)?;
-        let num_banks = (coreinfo & SOCRAM_COREINFO_BANKS_MASK) >> 4;
+        // The same shape on both parts — ask how many banks, then ask
+        // each its size — over two register maps that agree on nothing
+        // but the idea. Even the size field is a different width.
+        let (base, banks, idx_reg, info_reg, size_mask, unit) = match cores.cpu {
+            Cpu::CortexM3 { socram_base, .. } => {
+                let coreinfo = self.backplane_read32(socram_base + SOCRAM_COREINFO, timer)?;
+                (
+                    socram_base,
+                    (coreinfo & SOCRAM_COREINFO_BANKS_MASK) >> 4,
+                    SOCRAM_BANKIDX,
+                    SOCRAM_BANKINFO,
+                    SOCRAM_BANKINFO_SIZE_MASK,
+                    SOCRAM_BANK_SIZE_UNIT,
+                )
+            }
+            Cpu::Cr4 { arm_base, .. } => {
+                // Two nibbles, summed: the A banks and the B banks are
+                // one contiguous memory as far as the firmware image is
+                // concerned, and counting only one of them would size RAM
+                // short and put the nvram in the middle of the image.
+                let cap = self.backplane_read32(arm_base + ARMCR4_CAP, timer)?;
+                let banks_a = cap & ARMCR4_CAP_BANKS_A_MASK;
+                let banks_b = (cap & ARMCR4_CAP_BANKS_B_MASK) >> ARMCR4_CAP_BANKS_B_SHIFT;
+                (
+                    arm_base,
+                    banks_a + banks_b,
+                    ARMCR4_BANKIDX,
+                    ARMCR4_BANKINFO,
+                    ARMCR4_BANKINFO_SIZE_MASK,
+                    ARMCR4_BANK_SIZE_UNIT,
+                )
+            }
+        };
+
         let mut total = 0;
-        for bank in 0..num_banks {
-            self.backplane_write32(cores.socram_base + SOCRAM_BANKIDX, bank, timer)?;
-            let bankinfo = self.backplane_read32(cores.socram_base + SOCRAM_BANKINFO, timer)?;
-            total += ((bankinfo & SOCRAM_BANKINFO_SIZE_MASK) + 1) * SOCRAM_BANK_SIZE_UNIT;
+        for bank in 0..banks {
+            self.backplane_write32(base + idx_reg, bank, timer)?;
+            let bankinfo = self.backplane_read32(base + info_reg, timer)?;
+            total += ((bankinfo & size_mask) + 1) * unit;
         }
         Ok(total)
     }
@@ -778,12 +1027,18 @@ impl Sdio {
     /// Downloads the chip's firmware image into RAM, writes its nvram,
     /// releases the on-chip CPU, and confirms the firmware came alive.
     ///
-    /// `firmware` is the raw `.bin` (its first word is the CPU's reset
-    /// vector, which lands at RAM base 0 and needs nothing written
-    /// separately); `nvram` is the raw `.txt` config, which this strips
-    /// and formats before placing at the top of RAM. Where the bytes
-    /// come from — embedded via `include_bytes!` or read off the SD card
-    /// — is the caller's choice.
+    /// `firmware` is the raw `.bin` and `nvram` the raw `.txt` config,
+    /// which this strips and formats before placing at the top of RAM.
+    /// Where the bytes come from — embedded via `include_bytes!` or read
+    /// off the SD card — is the caller's choice. **They must match the
+    /// chip**: a 43430's image on a 43455 or the reverse is not something
+    /// this can detect, and presents as a download that reports success
+    /// and a radio that never answers.
+    ///
+    /// The image's first word is the CPU's reset vector. On a Cortex-M3
+    /// part it lands at address 0 as part of the image and needs nothing
+    /// written separately; on a CR4 the image sits far up the address
+    /// space, so this copies that word down to address 0 by hand.
     ///
     /// Runs [`Self::prepare_download`] itself, so call it on a freshly
     /// [`init`](Self::init)-ed link. On success the chip's firmware is
@@ -800,20 +1055,63 @@ impl Sdio {
         self.sdio_core_base = cores.sdio_base;
         let ram_size = self.ram_size(&cores, timer)?;
 
-        // Firmware image to RAM base 0 (its first word is the reset
-        // vector); condensed nvram + size token at the top of RAM.
-        self.download_to_ram(0, firmware, timer)?;
-        self.write_nvram(ram_size, nvram, timer)?;
+        // Where RAM starts, which is the one number the rest of the
+        // download is written in terms of: zero on a CM3 part, and far up
+        // the address space on a CR4.
+        let ram_base = match cores.cpu {
+            Cpu::CortexM3 { .. } => 0,
+            Cpu::Cr4 { ram_base, .. } => ram_base,
+        };
 
-        // Release the CPU: SOCRAM must still be up (else the image isn't
-        // reachable), then take the ARM out of reset. The CM3's reset
-        // vector is simply word 0 of the image already at address 0, so
-        // nothing extra is written (only CR4-class chips need a reset
-        // vector poked in).
-        if !self.core_is_up(cores.socram_wrapper, timer)? {
-            return Err(Error::SocramNotUp);
+        // Firmware image at the bottom of RAM; condensed nvram + size
+        // token at the top.
+        self.download_to_ram(ram_base, firmware, timer)?;
+        self.write_nvram(ram_base, ram_size, nvram, timer)?;
+
+        match cores.cpu {
+            Cpu::CortexM3 {
+                arm_wrapper,
+                socram_wrapper,
+                ..
+            } => {
+                // SOCRAM must still be up, or the image just written is
+                // not reachable and starting the CPU would be pointless.
+                if !self.core_is_up(socram_wrapper, timer)? {
+                    return Err(Error::SocramNotUp);
+                }
+                // The CM3's reset vector is word 0 of the image, already
+                // at address 0, so nothing extra is written.
+                self.core_reset(arm_wrapper, 0, 0, 0, timer)?;
+            }
+            Cpu::Cr4 { arm_wrapper, .. } => {
+                // The CR4 fetches its reset vector from address 0 while
+                // its image sits at `ram_base`, so the first word has to
+                // be copied down. Without this the CPU starts and
+                // branches into whatever address 0 happened to hold,
+                // which presents as a download that reported success and
+                // a chip that never answers.
+                let mut vector = [0u8; 4];
+                let n = firmware.len().min(4);
+                vector[..n].copy_from_slice(&firmware[..n]);
+                self.backplane_write32(
+                    ARMCR4_RESET_VECTOR_ADDR,
+                    u32::from_le_bytes(vector),
+                    timer,
+                )?;
+
+                // Anything raised during the download is stale and would
+                // be the first thing the firmware saw. Done only on this
+                // path: the Cortex-M3 sequence above is verified hardware
+                // behaviour and is not worth perturbing to add a step it
+                // has never needed.
+                self.backplane_write32(cores.sdio_base + SDIO_CORE_INTSTATUS, 0xffff_ffff, timer)?;
+
+                // Out of reset with the halt bit clear, which is what
+                // starts it running — the mirror of the reset that
+                // stopped it in `prepare_download`.
+                self.core_reset(arm_wrapper, ARMCR4_IOCTL_CPUHALT, 0, 0, timer)?;
+            }
         }
-        self.core_reset(cores.arm_wrapper, 0, 0, 0, timer)?;
 
         // Hand the now-running firmware the SDPCM channel version and
         // wait for the WLAN data function to come ready — the sign it
@@ -831,9 +1129,13 @@ impl Sdio {
     /// `base`, in [`FIRMWARE_CHUNK_BYTES`] `CMD53` chunks. Each chunk's
     /// bytes are assembled into little-endian words; a final partial
     /// word is zero-padded (harmless trailing bytes in RAM). `base` must
-    /// be chunk-aligned (0 for the image) or the region must sit within
-    /// one 32KB backplane window (the nvram, near the top of RAM), so no
-    /// single chunk straddles a window boundary.
+    /// be chunk-aligned, or the region must sit within one 32KB backplane
+    /// window (the nvram, near the top of RAM), so that no single chunk
+    /// straddles a window boundary.
+    ///
+    /// Both RAM bases satisfy that: zero on a Cortex-M3 part, and the
+    /// CR4 bases are 32KB-aligned, which is a stronger condition than the
+    /// chunk alignment this needs.
     fn download_to_ram(&mut self, base: u32, bytes: &[u8], timer: &Timer) -> Result<(), Error> {
         let mut addr = base;
         for chunk in bytes.chunks(FIRMWARE_CHUNK_BYTES) {
@@ -857,16 +1159,25 @@ impl Sdio {
     /// firmware reads to locate it: the vars sit just below the token at
     /// the very top of RAM, and the token holds the vars' word count in
     /// its low half and that count's complement in its high half.
-    fn write_nvram(&mut self, ram_size: u32, nvram: &[u8], timer: &Timer) -> Result<(), Error> {
+    fn write_nvram(
+        &mut self,
+        ram_base: u32,
+        ram_size: u32,
+        nvram: &[u8],
+        timer: &Timer,
+    ) -> Result<(), Error> {
         let mut buf = [0u8; NVRAM_MAX_BYTES];
         let len = condense_nvram(nvram, &mut buf);
 
-        let vars_addr = ram_size - len as u32 - 4;
+        // The top of RAM, which is only the same as its size on a part
+        // whose RAM starts at zero.
+        let ram_top = ram_base + ram_size;
+        let vars_addr = ram_top - len as u32 - 4;
         self.download_to_ram(vars_addr, &buf[..len], timer)?;
 
         let word_count = (len / 4) as u32;
         let token = (!word_count << 16) | (word_count & 0xffff);
-        self.backplane_write32(ram_size - 4, token, timer)?;
+        self.backplane_write32(ram_top - 4, token, timer)?;
         Ok(())
     }
 

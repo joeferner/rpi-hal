@@ -151,6 +151,10 @@ const GPIO_DAT: [u32; 4] = [50, 51, 52, 53];
 /// GPIO alternate function routing GPIO48-53 to this controller.
 #[cfg(not(feature = "bcm2711"))]
 const GPIO_ALT_FUNCTION: u8 = 0b111;
+/// Plain input, which is how GPIO34-39 are taken *off* this controller —
+/// see [`route_gpio_to_emmc`] for why that has to happen here.
+#[cfg(not(feature = "bcm2711"))]
+const GPIO_INPUT: u8 = 0b000;
 
 /// Firmware property tag's `ClockId` for the EMMC base clock feeding
 /// [`set_clock`]'s divider — queried at runtime rather than hardcoded,
@@ -1247,6 +1251,34 @@ impl Sd {
 /// see what a board wired to the pads.
 #[cfg(not(feature = "bcm2711"))]
 fn route_gpio_to_emmc(gpio: &GPIO) {
+    // Take the *wireless* pins off this controller first, which matters
+    // only on a board that has already brought Wi-Fi up: `sdio::Sdio::init`
+    // routes GPIO34-39 to EMMC and GPIO48-53 away from it, and nothing
+    // undoes that when the card is wanted back. Both pin groups left on
+    // the one controller means the radio and the card driving the same
+    // `CMD`/`DAT` lines, and the card simply never answers — which
+    // arrives as `Error::NoCard`, a slot that reads as empty with a card
+    // in it.
+    //
+    // Inputs rather than some other function: it is the one setting that
+    // is certainly not wired to anything, and on a board that has not
+    // touched SDIO these pins are inputs already, so this costs nothing
+    // and changes nothing.
+    gpio.gpfsel3().modify(|_, w| {
+        w.fsel34()
+            .bits(GPIO_INPUT)
+            .fsel35()
+            .bits(GPIO_INPUT)
+            .fsel36()
+            .bits(GPIO_INPUT)
+            .fsel37()
+            .bits(GPIO_INPUT)
+            .fsel38()
+            .bits(GPIO_INPUT)
+            .fsel39()
+            .bits(GPIO_INPUT)
+    });
+
     gpio.gpfsel4().modify(|_, w| {
         w.fsel48()
             .bits(GPIO_ALT_FUNCTION)
