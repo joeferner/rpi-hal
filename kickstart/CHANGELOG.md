@@ -32,15 +32,34 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the network stack, then resets it and starts it its own way. A fraction
   of a second against having no way to ask at all.
 
+  **Wi-Fi is the second interface**, behind a `wifi` feature as Ethernet is
+  behind `ethernet`. A board that lists both gets Ethernet when a cable is
+  in and the radio when it is not, from one image — which is what makes a
+  Pi 3B, a 3B+ and a Zero W run the same binary.
+
+  The radio's bring-up is a closure the board supplies
+  (`Hardware::wifi`) rather than something this module does, because every
+  step of it is a board's own decision: where the firmware image, the nvram
+  and the regulatory blob live, and how the credentials are spelled.
+  Handing the EMMC controller from the SD driver to the SDIO one gives up
+  the card slot for the rest of the boot, which is not a thing to do on a
+  board's behalf. What `net` does own is *when* — the closure runs at most
+  once, and only if the walk got that far, so a board with a cable in never
+  pays the several hundred kilobytes of card reading a radio costs.
+
+  This is also why `Interface` carries its own MAC. The Ethernet chips are
+  programmed with the address the firmware mailbox reports; the radio has
+  one of its own. A stack built with the wrong one associates and then
+  answers no ARP.
+
   **It picks once, at startup.** A cable pulled an hour later does not
   move the board to Wi-Fi; that needs swapping which runner is attached to
   a live queue pair, which is why `rpi-hal-embassy` now lets a board own
   that pair, and is not built.
 
-  **Wi-Fi is not implemented.** The variant exists so the configuration
-  shape is settled, and naming it is reported rather than silently skipped
-  — an interface quietly passed over looks exactly like one that was tried
-  and failed.
+  Enabling `net` without `ethernet` or `wifi` is refused at compile time.
+  It would build a priority walk with nothing to find, and report that
+  only at run time, one entry at a time.
 
 - **`mdns`**, an mDNS responder for one name, and the `mdns` example that
   puts it on a real link.

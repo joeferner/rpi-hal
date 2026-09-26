@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "mdns", "bcm2837"]
+features = ["console", "entropy", "heap", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -129,7 +129,11 @@ heapless = { version = "0.8", default-features = false, optional = true }
 # what `Uart::init` reaches through. Pi 2/3 because that is what the
 # examples are written for; a consumer selects its own chip and is not
 # affected by this line.
-rpi-hal = { version = "0.8.0", features = ["bcm2837"] }
+#
+# `embedded-sdmmc` is the `mdns` example's: the Wi-Fi firmware blobs come
+# off the card's FAT partition, and `rpi_hal::sd`'s `BlockDevice` adapter
+# is behind that feature.
+rpi-hal = { version = "0.8.0", features = ["bcm2837", "embedded-sdmmc"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -157,14 +161,25 @@ getrandom = { version = "0.2", default-features = false, features = [
 # whose interface is underneath, but an example is a whole image and has
 # to pick both.
 #
-# `embassy-net-driver` is the LAN9514 adapter; `irq-dispatch` defines the
+# `embassy-net-driver` is the USB Ethernet adapter and `wifi` the radio's;
+# they are separate features there because the two share only the channel
+# crate -- one is built on interrupt-driven USB transfers and the other on
+# a blocking SDIO driver behind a ticker. `irq-dispatch` defines the
 # `__irq_handler` that services the System Timer and USB, without which
 # the first `embassy-time` deadline livelocks the core. None of the other
 # examples defines one, so there is nothing for it to collide with.
 rpi-hal-embassy = { version = "0.8.0", features = [
     "embassy-net-driver",
+    "wifi",
     "irq-dispatch",
 ] }
+# How the `mdns` example reads the Wi-Fi firmware, nvram, regulatory blob
+# and credentials off the card's FAT partition before handing the EMMC
+# controller to the SDIO driver. A dev edge and not a library one, which
+# is the whole argument in `net::Hardware::wifi`: where those files live
+# is the board's decision, so the crate takes the bring-up as a closure
+# and an example is what supplies one.
+embedded-sdmmc = { version = "0.9.0", default-features = false }
 embassy-executor = "0.10.0"
 # `dhcpv4` is an application choice, which is exactly why it is on this
 # side; the library's own `embassy-net` features union in with it.
@@ -246,10 +261,35 @@ mdns = ["dep:embassy-net", "dep:embassy-time", "dep:heapless", "console"]
 # ethernet chip within 5000ms" and "no link within 5000ms" are different
 # faults with different fixes, and neither is visible from outside.
 #
-# `ethernet` is not yet a feature of its own, because it is the only
-# interface implemented; when Wi-Fi lands the two become separate toggles
-# so a board pays only for what it lists.
+# On its own it compiles the walk and no interface for it to find, which
+# is a build that cannot produce a network -- so src/net.rs refuses it
+# with a `compile_error!` rather than leaving a board to discover at run
+# time that every entry in its order reports "not compiled in".
 net = ["dep:rpi-hal", "console"]
+
+# USB Ethernet as a `net` interface: a LAN9514 on a Pi 2B/3B, a LAN7800
+# on a 3B+ (src/net.rs).
+#
+# Both chips, not one each. They are told apart by vendor and product ID
+# during the bus walk and share `rpi-hal`'s `Ethernet` trait from there
+# on, so a board that knows which one it has saves nothing by saying so --
+# and a single image running on both is the point.
+ethernet = ["net"]
+
+# The on-board radio as a `net` interface (src/net.rs).
+#
+# No `rpi-hal` feature to forward: its `wifi` module is unconditional.
+# What this turns on here is the `Connection::Wifi` arm of the walk and
+# the `Hardware::wifi` seam the board supplies its bring-up through.
+#
+# Deliberately *not* implying anything that reads the firmware blobs off
+# the card. Bringing a Pi's radio up means finding a firmware image, an
+# nvram file and a regulatory blob somewhere, handing the EMMC controller
+# from the SD driver to the SDIO one -- which gives up the card slot for
+# good -- and joining with credentials from somewhere else again. Every
+# one of those is the board's own decision, and this crate has no storage
+# module yet to have an opinion with. See `net::Hardware::wifi`.
+wifi = ["net"]
 
 # The chip, forwarded to `rpi-hal`'s feature of the same name. None is a
 # default, so a board says which it is -- and says it once, since cargo
@@ -292,7 +332,10 @@ required-features = ["heap", "console", "bcm2837"]
 
 [[example]]
 name = "mdns"
-required-features = ["mdns", "net", "console", "bcm2837"]
+# Both interfaces, because the point of this example is that one image
+# runs on a 3B, a 3B+ and a Zero W -- the first two on Ethernet, the last
+# on the radio, and a 3B on either depending on whether a cable is in.
+required-features = ["mdns", "ethernet", "wifi", "console", "bcm2837"]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding
