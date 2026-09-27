@@ -4,7 +4,7 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-09-27
 
 ### Fixed
 
@@ -23,6 +23,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   found it.
 
 ### Added
+
+- **`wifi::Wifi::set_all_multicast`**, the counterpart to the Ethernet
+  drivers' method of the same name. A board that runs the same protocols
+  over either interface needs the same thing turned on for both, and only
+  one of them had it.
+
+  Worth knowing what its absence looks like, because nothing fails.
+  Broadcast still arrives, so DHCP takes a lease. Transmit is unaffected,
+  so an mDNS responder announces itself and fills every cache on the
+  network — and `avahi-resolve` then answers from that cache, which reads
+  as a working responder. Unicast is untouched, so the board answers a
+  ping and a query sent straight to its address. What never arrives is
+  anything addressed to a group, so the responder answers no question
+  anyone actually asks it.
+
+  Set it **after** associating: the firmware resets it on every
+  association, the same way it resets the power-management setting.
 
 - **`sdio` drives the BCM43455 as well as the BCM43430**, which is the
   radio on a Pi 3 `B+` and a Pi 4. Before this, `load_firmware` on one of
@@ -1372,6 +1389,7 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.8.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.8.0
 [0.7.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.7.0
 [0.6.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.6.0
 [0.5.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.5.0
