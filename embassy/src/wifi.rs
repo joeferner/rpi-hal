@@ -199,6 +199,19 @@ pub struct Reconnect<'a> {
     /// names [`PowerManagement::Fast`], which is what the chip powers on
     /// in.
     pub power_management: PowerManagement,
+
+    /// Whether every multicast frame is delivered, applied again after
+    /// each association for the same reason as
+    /// [`Self::power_management`]: the firmware resets it.
+    ///
+    /// Its absence is quieter than a sleeping radio and harder to find.
+    /// The board reassociates, takes a lease, announces itself and
+    /// answers a ping — and stops answering anything addressed to a
+    /// group, so an mDNS responder goes silent on a link that reports as
+    /// healthy, with nothing failing anywhere. Name `true` if the
+    /// application called [`rpi_hal::wifi::Wifi::set_all_multicast`] at
+    /// bring-up.
+    pub all_multicast: bool,
 }
 
 /// Wraps an already-joined [`Wifi`] as an `embassy-net` device, returning
@@ -558,10 +571,12 @@ impl<'a> Watch<'a> {
     /// Records an association, and puts back what making one resets.
     fn associate(&mut self, runner: &mut ch::Runner<'_, MTU>, wifi: &mut Wifi, timer: &Timer) {
         if let Some(reconnect) = self.reconnect {
-            // Refusals ignored: what it costs is latency on a link that
-            // works, which is not worth giving up a network over -- and the
-            // application cannot be told from here anyway.
+            // Refusals ignored: what they cost is latency, or being
+            // queryable, on a link that otherwise works -- neither worth
+            // giving up a network over, and the application cannot be
+            // told from here anyway.
             let _ = wifi.set_power_management(reconnect.power_management, timer);
+            let _ = wifi.set_all_multicast(reconnect.all_multicast, timer);
         }
         ASSOCIATED.store(true, Ordering::Relaxed);
         runner.set_link_state(LinkState::Up);

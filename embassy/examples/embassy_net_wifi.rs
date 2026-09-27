@@ -78,7 +78,7 @@ const CLM_FILE: &str = "CLM.DAT";
 const CONFIG_FILE: &str = "WIFI.CFG";
 
 /// Buffer for the firmware image (the 43430's is ~420KB); zeroed BSS.
-static mut FW_BUF: [u8; 512 * 1024] = [0; 512 * 1024];
+static mut FW_BUF: [u8; 1024 * 1024] = [0; 1024 * 1024];
 /// Buffer for the raw nvram text.
 static mut NV_BUF: [u8; 4096] = [0; 4096];
 /// Buffer for the CLM regulatory blob (~5KB).
@@ -180,20 +180,53 @@ async fn echo_task(stack: embassy_net::Stack<'static>, mut uart: Uart) {
 /// reclaims for Wi-Fi once this returns.
 fn load_files(
     sd: Sd,
+    subdir: &str,
     timer: &Timer,
 ) -> Result<(usize, usize, usize, usize), embedded_sdmmc::Error<SdCardError>> {
     let volume_mgr = VolumeManager::new(SdCard::new(sd, timer), FixedTime);
     let volume = volume_mgr.open_volume(VolumeIdx(0))?;
     let root = volume.open_root_dir()?;
-    let wifi = root.open_dir(WIFI_DIR)?;
+    // Two bindings rather than one chained expression: the intermediate
+    // `Directory` borrows the volume manager, so a temporary would be
+    // dropped at the end of the statement while `wifi` still holds it.
+    let wifi_root = root.open_dir(WIFI_DIR)?;
+    let wifi = wifi_root.open_dir(subdir)?;
 
     // Safety: single-threaded bare-metal; these buffers are touched only
     // here and, after this returns, read-only in `kmain`.
     let fw_len = read_file(&wifi, FIRMWARE_FILE, unsafe { &mut *addr_of_mut!(FW_BUF) })?;
     let nv_len = read_file(&wifi, NVRAM_FILE, unsafe { &mut *addr_of_mut!(NV_BUF) })?;
     let clm_len = read_file(&wifi, CLM_FILE, unsafe { &mut *addr_of_mut!(CLM_BUF) })?;
-    let cfg_len = read_file(&wifi, CONFIG_FILE, unsafe { &mut *addr_of_mut!(CFG_BUF) })?;
+    let cfg_len = read_file(&root, CONFIG_FILE, unsafe { &mut *addr_of_mut!(CFG_BUF) })?;
     Ok((fw_len, nv_len, clm_len, cfg_len))
+}
+
+/// Which subdirectory of [`WIFI_DIR`] this board's blobs are in, and the
+/// chip id they are for. `None` for a board with no radio `rpi-hal`
+/// drives.
+///
+/// A directory per radio rather than one set of files, so one card boots
+/// any Pi: a 3B and a 3B+ carry different silicon and each refuses the
+/// other's image.
+///
+/// From the board rather than the chip because the chip id is only
+/// readable over the backplane, the backplane only once the one EMMC
+/// controller has been muxed off the card, and the card is where the
+/// firmware is. The guess is checked against the chip id below, before
+/// any firmware is written.
+fn radio(board_revision: u32) -> Option<(&'static str, u32)> {
+    // Old-style revision codes are Pi 1s and have no radio at all.
+    if board_revision & (1 << 23) == 0 {
+        return None;
+    }
+    // Bits 4..11 of a new-style code are the board type.
+    match (board_revision >> 4) & 0xff {
+        // 3B, Zero W.
+        0x08 | 0x0c => Some(("43430", rpi_hal::sdio::BCM43438_CHIP_ID)),
+        // 3B+, 3A+, 4B.
+        0x0d | 0x0e | 0x11 => Some(("43455", rpi_hal::sdio::BCM43455_CHIP_ID)),
+        _ => None,
+    }
 }
 
 /// Reads the whole of `name` into `buf`, returning the byte count (or
@@ -244,8 +277,27 @@ pub extern "C" fn kmain() -> ! {
     let timer = Timer::new(peripherals.SYSTMR);
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
+    // Which blobs this board needs, before anything touches the card.
+    let board_revision = match mailbox.board_revision() {
+        Ok(revision) => revision,
+        Err(e) => {
+            let _ = writeln!(uart, "board revision read failed: {e:?}");
+            halt();
+        }
+    };
+    let Some((subdir, expected_chip_id)) = radio(board_revision) else {
+        let _ = writeln!(
+            uart,
+            "board revision {board_revision:#010x} has no radio this drives"
+        );
+        halt();
+    };
+
     // Read the firmware + nvram off the SD card first (this owns EMMC).
-    let _ = writeln!(uart, "reading firmware from SD card...");
+    let _ = writeln!(
+        uart,
+        "reading {WIFI_DIR}/{subdir}/ from the SD card (board {board_revision:#010x})..."
+    );
     let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, &timer) {
         Ok(sd) => sd,
         Err(e) => {
@@ -253,13 +305,17 @@ pub extern "C" fn kmain() -> ! {
             halt();
         }
     };
-    let (fw_len, nv_len, clm_len, cfg_len) = match load_files(sd, &timer) {
+    let (fw_len, nv_len, clm_len, cfg_len) = match load_files(sd, subdir, &timer) {
         Ok(lengths) => lengths,
         Err(e) => {
             let _ = writeln!(uart, "reading Wi-Fi files failed: {e:?}");
             halt();
         }
     };
+    let _ = writeln!(
+        uart,
+        "  {FIRMWARE_FILE}: {fw_len} bytes, {NVRAM_FILE}: {nv_len}, {CLM_FILE}: {clm_len}"
+    );
 
     // Reclaim the EMMC controller for Wi-Fi (the SD driver is dropped, so
     // the slot is now free to be re-muxed to the wireless pins).
@@ -272,6 +328,26 @@ pub extern "C" fn kmain() -> ! {
             halt();
         }
     };
+
+    // The check on the guess `radio` made, and a bus liveness check
+    // besides. Halting rather than warning: the blobs in hand are for
+    // another chip.
+    match sdio.chip_id(&timer) {
+        Ok(id) if id == expected_chip_id => {}
+        Ok(id) => {
+            let _ = writeln!(
+                uart,
+                "chip id {id:#06x}, but board revision {board_revision:#010x} said to load \
+                 {WIFI_DIR}/{subdir}/ (for {expected_chip_id:#06x}) -- the board table in \
+                 `radio` is wrong for this Pi"
+            );
+            halt();
+        }
+        Err(e) => {
+            let _ = writeln!(uart, "chip id read failed: {e:?}");
+            halt();
+        }
+    }
 
     // Safety: `load_files` has finished writing these; read-only now.
     let firmware = &unsafe { &*addr_of!(FW_BUF) }[..fw_len];
@@ -404,6 +480,10 @@ fn run(
         ssid,
         passphrase,
         power_management: PowerManagement::Fast,
+        // This example speaks only TCP and DHCP, neither of which is
+        // multicast, so it asks for none and loses nothing on a rejoin.
+        // A board running an mDNS responder names `true` here.
+        all_multicast: false,
     });
 
     // A random seed keeps TCP initial sequence numbers and the DHCP
