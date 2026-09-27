@@ -646,6 +646,21 @@ fn join(timer: &Timer) -> Option<Wifi> {
             // The giveaway is the latency when it does answer: the first
             // packet lost, the second a couple of hundred milliseconds,
             // the third back to normal.
+            // The radio's counterpart to `EthernetConfig::all_multicast`,
+            // and needed for the same reason: every mDNS query arrives at
+            // 224.0.0.251, and a firmware that has not been asked for
+            // multicast drops it before the host sees it. The board still
+            // announces, still takes a lease and still answers a ping, so
+            // nothing looks wrong -- it simply answers no question anyone
+            // asks it.
+            //
+            // After the join, because the firmware resets this on every
+            // association. Not fatal if it is refused: what is lost is
+            // being queryable, not the network.
+            if let Err(e) = wifi.set_all_multicast(true, timer) {
+                logln!("wifi: multicast not enabled ({e:?}); queries will go unanswered");
+            }
+
             // Power save is left at the firmware's default, `Fast`, which
             // is what `rpi-hal`'s own Wi-Fi examples run at. Turning it
             // off keeps the receiver on and costs current; it also has to
