@@ -44,6 +44,11 @@
 //                     fill it in: `hostname`, and a `[wifi]` table with
 //                     `ssid` and `passphrase`.
 //
+// A `hostname` written as `name.local` is accepted, and the file is then
+// saved back through `config::save` with the bare `name` -- which is how
+// this example exercises writing as well as reading. The saved file is
+// regenerated whole, so it loses the template's comments.
+//
 // Wi-Fi needs three more files, all vendor blobs, in a `wifi` directory
 // under a subdirectory named for the radio -- copied once and never looked
 // at again. A 3B or a Zero W wants `wifi/43430`:
@@ -140,17 +145,20 @@ fn hostname() -> &'static str {
 /// optional, and so is the file.
 ///
 /// `Spanned` on the strings a check in `config::value` runs on, so a bad
-/// one is reported at its line and column.
-#[derive(serde::Deserialize)]
+/// one is reported at its line and column. `Serialize` as well, so the
+/// same struct is what `config::save` writes back.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Settings {
     /// The mDNS name, without `.local` (which is accepted and dropped).
+    #[serde(skip_serializing_if = "Option::is_none")]
     hostname: Option<Spanned<String>>,
     /// The network to join if Ethernet does not answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
     wifi: Option<WifiSettings>,
 }
 
 /// The `[wifi]` table.
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct WifiSettings {
     ssid: Spanned<String>,
     passphrase: Spanned<String>,
@@ -611,13 +619,14 @@ fn read_settings(
         logln!("settings: {SETTINGS_FILE}: ignoring unknown key `{key}`");
     }
 
-    let settings = loaded.parsed.settings;
+    let mut settings = loaded.parsed.settings;
     match settings.hostname() {
         Ok(Some(name)) => {
             // Leaked once, at boot: the name lives as long as the program,
             // and `mdns::run` wants a `&'static str`.
             let name: &'static str = String::from(name).leak();
             critical_section::with(|cs| HOSTNAME.borrow(cs).set(name));
+            normalize_hostname(&mut card, &mut settings, name);
         }
         Ok(None) => {}
         Err(problem) => logln!(
@@ -633,6 +642,34 @@ fn read_settings(
         None
     });
     (Some(card), credentials)
+}
+
+/// Writes the settings back with `hostname` as the label it resolved to,
+/// if the file spelled it some other way — `kickstart.local` for
+/// `kickstart`, which `value::label` accepts and drops.
+///
+/// This is the example's use of `config::save`, and a deliberate trigger
+/// for it: put `.local` on the name, boot, and the file on the card comes
+/// back without it. The whole file is regenerated, so the template's
+/// comments go with it — the trade `config::save` makes, and the reason
+/// the annotated copy lives in the repository.
+fn normalize_hostname(card: &mut Card, settings: &mut Settings, name: &str) {
+    let Some(written) = &settings.hostname else {
+        return;
+    };
+    if written.as_ref() == name {
+        return;
+    }
+    // The span is carried over for form's sake; nothing reads it on the
+    // way out, and the next load gives the new file's own.
+    settings.hostname = Some(Spanned::new(written.span(), name.into()));
+    match config::save(card, SETTINGS_FILE, settings) {
+        Ok(text) => logln!(
+            "settings: wrote {SETTINGS_FILE} back with hostname = {name:?} ({} bytes)",
+            text.len()
+        ),
+        Err(e) => logln!("settings: saving {SETTINGS_FILE} failed: {e}"),
+    }
 }
 
 /// Brings the radio up the way a Pi has to: the firmware, nvram and

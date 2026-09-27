@@ -1,11 +1,13 @@
-//! Reading a board's settings file.
+//! Reading and writing a board's settings file.
 //!
 //! The file is TOML and the schema is the application's own struct: serde's
 //! derives do the parsing, and there is no trait to implement and no key
 //! table to keep in step with the struct. What this module adds is the
 //! part TOML cannot do and the part every board otherwise writes twice —
-//! turning a byte offset into `BOARD.TOML:12:18`, and checking that a
-//! string which TOML typed as a string is also a *hostname*.
+//! turning a byte offset into `BOARD.TOML:12:18`, checking that a string
+//! which TOML typed as a string is also a *hostname*, and writing the file
+//! back without leaving a board unable to read it (see
+//! [`render`](crate::config::render) and [`save`](crate::config::save)).
 //!
 //! ```ignore
 //! use rpi_kickstart::config::{self, value, At, Problem, Spanned};
@@ -79,6 +81,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 /// A value with the byte range it was read from, so a check that fails
@@ -202,6 +205,145 @@ impl<E: fmt::Debug> fmt::Display for LoadError<E> {
                 text,
                 problem,
             } => write!(f, "{}", problem.report(path, text)),
+        }
+    }
+}
+
+/// Renders `settings` as the text of a settings file, having checked that
+/// the text reads back as the same settings.
+///
+/// The check is a round trip: serialize, parse the result as `C`, serialize
+/// *that*, and require the two texts to match. It needs nothing of `C`
+/// beyond the derives — no `PartialEq` — and it catches what `toml` cannot:
+/// a schema whose `Serialize` and `Deserialize` disagree. A field marked
+/// `skip_serializing` with no default, a `rename` on one side only, a
+/// custom impl that drops a case — each produces a file that is valid TOML
+/// and will not load, or loads as something else, and the place to find
+/// that out is here rather than at the next boot.
+///
+/// The file is regenerated whole, so comments and keys the schema does not
+/// name do not survive; the annotated template belongs in the repository.
+/// Scalars come before tables whatever the struct's field order, which is
+/// the only order TOML allows.
+pub fn render<C: Serialize + DeserializeOwned>(settings: &C) -> Result<String, RenderError> {
+    let text =
+        toml::to_string_pretty(settings).map_err(|e| RenderError::Serialize(e.to_string()))?;
+    let reparsed = parse::<C>(text.as_bytes()).map_err(RenderError::Reparse)?;
+    let again = toml::to_string_pretty(&reparsed.settings)
+        .map_err(|e| RenderError::Serialize(e.to_string()))?;
+    if again != text {
+        return Err(RenderError::NotRoundTrip);
+    }
+    Ok(text)
+}
+
+/// Why [`render`] produced no text. Every case is a problem with the
+/// schema rather than with the values in it, so none is something a
+/// person filling in a form can fix — they are for the board's author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderError {
+    /// `toml` could not serialize the settings: a map with non-string
+    /// keys, say, or a value with no TOML form. The message is `toml`'s.
+    Serialize(String),
+    /// The text `toml` produced does not parse back as the schema — a field
+    /// that is skipped when written but required when read.
+    Reparse(Problem),
+    /// The text parses back, but as settings that serialize differently:
+    /// something was lost or changed on the way through.
+    NotRoundTrip,
+}
+
+/// One line, for the console.
+impl fmt::Display for RenderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RenderError::Serialize(message) => write!(f, "cannot write settings: {message}"),
+            RenderError::Reparse(problem) => {
+                write!(f, "settings as written do not read back: {problem}")
+            }
+            RenderError::NotRoundTrip => {
+                f.write_str("settings as written read back as something different")
+            }
+        }
+    }
+}
+
+impl core::error::Error for RenderError {}
+
+/// Writes `settings` to `path` on `volume`, replacing the file, and returns
+/// the text written.
+///
+/// Every step is checked, because this is the file an update deliberately
+/// never touches: a bad one is a board that will not come up the way it
+/// should, and the fix is pulling the card.
+///
+/// 1. **Rendered and checked before anything is written** — see
+///    [`render`]. Nothing reaches the card that would not load.
+/// 2. **Written and synced.** The allocation table is held in RAM and
+///    reaches the card when a sync says so; without it the file reads back
+///    correctly now and is gone at the next boot.
+/// 3. **Read back and compared.** A write the card accepted and did not
+///    store is otherwise discovered at the reboot that was meant to apply
+///    it.
+///
+/// Not atomic. The file is replaced in place, so a reset in the middle of
+/// step 2 can leave it truncated. `load` reports that as invalid when the
+/// cut lands mid-value, but a cut between lines is valid TOML, and the keys
+/// after it load as their defaults.
+///
+/// The text comes back so a caller serving the settings, or reporting a
+/// [`Problem`] found in them later, has the bytes that are now on the card.
+#[cfg(feature = "storage")]
+pub fn save<C, D>(
+    volume: &mut crate::storage::Volume<D>,
+    path: &str,
+    settings: &C,
+) -> Result<Vec<u8>, SaveError<D::Error>>
+where
+    C: Serialize + DeserializeOwned,
+    D: resident_fat::BlockDevice,
+{
+    let text = render(settings).map_err(SaveError::Render)?.into_bytes();
+    let file = volume.write_file(path, &text).map_err(SaveError::Write)?;
+    volume.sync().map_err(SaveError::Sync)?;
+    let stored = volume.read_all(&file).map_err(SaveError::ReadBack)?;
+    if stored != text {
+        return Err(SaveError::Mismatch);
+    }
+    Ok(text)
+}
+
+/// Why [`save`] did not leave the settings on the card, by step.
+///
+/// Which step failed is the diagnosis: [`Render`](Self::Render) means the
+/// card was not touched, and everything after it means the file may no
+/// longer be what it was.
+#[cfg(feature = "storage")]
+#[derive(Debug)]
+pub enum SaveError<E> {
+    /// The settings could not be rendered; nothing was written.
+    Render(RenderError),
+    /// Writing the file failed.
+    Write(resident_fat::Error<E>),
+    /// The file was written but syncing the allocation table failed, so
+    /// it may not survive a reset.
+    Sync(resident_fat::Error<E>),
+    /// The file could not be read back to check it.
+    ReadBack(resident_fat::Error<E>),
+    /// The file read back differs from what was written.
+    Mismatch,
+}
+
+/// One line, for the console.
+#[cfg(feature = "storage")]
+impl<E: fmt::Debug> fmt::Display for SaveError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SaveError::Render(error) => write!(f, "{error}"),
+            SaveError::Write(error) => write!(f, "write failed: {error}"),
+            SaveError::Sync(error) => write!(f, "written, but sync failed: {error}"),
+            SaveError::ReadBack(error) => write!(f, "written, but reading it back failed: {error}"),
+            SaveError::Mismatch => f.write_str("written, but reads back different"),
         }
     }
 }
@@ -663,7 +805,7 @@ mod tests {
         zone: Vec<Zone>,
     }
 
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
     struct Zone {
         name: String,
         enabled: bool,
@@ -944,6 +1086,92 @@ presence_uv = 350000
         let wifi = example.wifi.unwrap();
         assert!(value::ssid(wifi.ssid.as_ref()).is_ok());
         assert!(value::passphrase(wifi.passphrase.as_ref()).is_ok());
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct Saved {
+        hostname: Spanned<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wifi: Option<SavedWifi>,
+        #[serde(default)]
+        zone: Vec<Zone>,
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct SavedWifi {
+        ssid: String,
+        passphrase: String,
+    }
+
+    #[test]
+    fn render_round_trips_tables_and_spans() {
+        let settings = parse::<Saved>(
+            b"hostname = \"a\"\n[[zone]]\nname = \"Sump\"\nenabled = true\npresence_uv = 5\n",
+        )
+        .unwrap()
+        .settings;
+        let text = render(&settings).unwrap();
+        let back = parse::<Saved>(text.as_bytes()).unwrap().settings;
+        assert_eq!(back.hostname.as_ref(), "a");
+        assert_eq!(back.zone[0].name, "Sump");
+        assert!(back.wifi.is_none());
+        assert!(!text.contains("wifi"), "{text}");
+    }
+
+    /// The input a hand-rolled writer gets wrong, and the reason there
+    /// is not one: every TOML escaping rule in a single value.
+    #[test]
+    fn render_carries_a_hostile_passphrase_through() {
+        let passphrase = "p@ss#word \"quoted\" \\back\\ = eq 'single'";
+        let settings = Saved {
+            hostname: parse::<Saved>(b"hostname = \"a\"")
+                .unwrap()
+                .settings
+                .hostname,
+            wifi: Some(SavedWifi {
+                ssid: "Café".into(),
+                passphrase: passphrase.into(),
+            }),
+            zone: Vec::new(),
+        };
+        let text = render(&settings).unwrap();
+        let back = parse::<Saved>(text.as_bytes()).unwrap().settings;
+        let wifi = back.wifi.unwrap();
+        assert_eq!(wifi.passphrase, passphrase);
+        assert_eq!(wifi.ssid, "Café");
+    }
+
+    #[test]
+    fn render_refuses_a_field_that_is_written_but_required_back() {
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Lossy {
+            #[serde(skip_serializing)]
+            required: u32,
+        }
+        let error = render(&Lossy { required: 1 }).unwrap_err();
+        assert!(matches!(error, RenderError::Reparse(_)), "{error:?}");
+    }
+
+    #[test]
+    fn render_refuses_settings_that_read_back_differently() {
+        fn upper<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+            let s: String = serde::Deserialize::deserialize(d)?;
+            Ok(s.to_uppercase())
+        }
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
+        struct Changes {
+            #[serde(deserialize_with = "upper")]
+            name: String,
+        }
+        let error = render(&Changes { name: "a".into() }).unwrap_err();
+        assert_eq!(error, RenderError::NotRoundTrip);
+    }
+
+    #[test]
+    fn render_refuses_what_toml_cannot_hold() {
+        let error = render(&vec![1u32, 2]).unwrap_err();
+        assert!(matches!(error, RenderError::Serialize(_)), "{error:?}");
     }
 
     #[test]

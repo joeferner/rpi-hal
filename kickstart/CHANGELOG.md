@@ -8,6 +8,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Writing a settings file.** `config::render` serializes a schema to
+  TOML and checks it round-trips — parse the text back as the schema,
+  serialize again, require the same text — so a schema whose `Serialize`
+  and `Deserialize` disagree is refused before anything is written. It is
+  pure and host-tested, including a passphrase carrying every TOML
+  escaping hazard. `config::save` (with `storage`) renders, writes, syncs
+  and reads back, and `SaveError` names the step that failed: `Render`
+  means the card was not touched. The file is regenerated whole, so
+  comments and unknown keys do not survive a save. `toml`'s `display`
+  feature is now on.
+
+  `examples/mdns.rs` uses it: a `hostname` written as `name.local` is
+  saved back as `name`.
+
 - **Mounting the card**, behind a `storage` feature: `storage::mount`
   finds the first FAT partition, whichever slot it is in (or a bare
   volume with no table), mounts it with `resident-fat` and logs where it
