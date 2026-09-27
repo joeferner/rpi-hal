@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -126,7 +126,32 @@ embassy-time = { version = "0.5.1", default-features = false, optional = true }
 # graph those are unrelated types, and the error names neither version.
 heapless = { version = "0.8", default-features = false, optional = true }
 
-[dev-dependencies]
+# The settings file's format, behind `config`. `parse` and `serde` only:
+# `std` is off because none of this has an OS, and `display` -- the
+# writer -- arrives with the save path that needs it. `toml_edit`, the
+# format-preserving crate, is not an option on this target: its feature
+# graph pulls `std` into four of its dependencies.
+toml = { version = "1.1", default-features = false, features = [
+    "parse",
+    "serde",
+], optional = true }
+# The trait a schema implements through its derive. `alloc` because a
+# schema of owned strings is the ordinary case, and `DeserializeOwned` is
+# what lets `config::parse` return settings that outlive the text.
+serde = { version = "1.0", default-features = false, features = [
+    "alloc",
+], optional = true }
+# Collects the keys a schema did not name as it deserializes, which is how
+# an unknown key is reported rather than silently dropped -- serde's own
+# derive can only ignore one or refuse it.
+serde_ignored = { version = "0.1.14", default-features = false, optional = true }
+
+# Bare-metal only, so that `cargo test` can build this crate for the host:
+# the config parser is pure, and its tests have nowhere else to run. None of
+# these compile for an OS target, and none of them are needed there -- they
+# are what the examples link against, and an example is only ever a Pi
+# image.
+[target.'cfg(target_os = "none")'.dev-dependencies]
 # The examples are whole programs: they boot on `rpi-hal`'s `rt` and talk
 # to real peripherals, which the library itself does not yet do. Keeping
 # this to a dev edge is what stops the examples' needs -- a boot sequence,
@@ -199,6 +224,14 @@ embassy-net = { version = "0.9.1", default-features = false, features = [
 # Embassy actually uses.
 embassy-time = { version = "0.5.1", default-features = false }
 
+[dev-dependencies]
+# `derive` for the test schemas in src/config.rs. The library needs only
+# the trait; a board's own `serde` line is where the derive comes from.
+serde = { version = "1.0", default-features = false, features = [
+    "alloc",
+    "derive",
+] }
+
 [features]
 # Nothing is on by default, and that is the crate's whole arrangement: a
 # board states what it is and pays for nothing else. `default` is written
@@ -242,6 +275,19 @@ entropy = ["dep:rpi-hal", "dep:getrandom", "dep:critical-section"]
 # it; this makes the requirement resolve rather than surface as a missing
 # module.
 heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:embedded-alloc"]
+
+# Reading a settings file: TOML into the application's own schema, located
+# errors, and the semantic checks TOML cannot make (src/config.rs).
+#
+# Implies nothing, and in particular not `console` or a storage module.
+# Parsing is pure -- bytes in, settings or a located problem out -- and
+# keeping it that way is what makes it testable on the host, which is
+# where the tests in that file run. Reading the file off a card is a
+# separate surface.
+#
+# Needs an allocator, which is the application's: `heap` is one, and a
+# board with its own is equally served.
+config = ["dep:toml", "dep:serde", "dep:serde_ignored"]
 
 # An mDNS responder for one name (src/mdns.rs).
 #

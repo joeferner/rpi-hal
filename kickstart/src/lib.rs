@@ -37,6 +37,13 @@
 #![no_std]
 #![deny(missing_docs)]
 
+#[cfg(feature = "config")]
+extern crate alloc;
+
+/// Reading a board's settings file — see the module's own documentation
+/// for why the semantic checks run after parsing rather than inside it.
+#[cfg(feature = "config")]
+pub mod config;
 /// The console every module logs to — see the module's own documentation
 /// for why its sink is a trait object and its clock is passed in.
 ///
@@ -65,5 +72,5 @@ pub mod mdns;
 pub mod net;
 
 // The rest of the modules this crate is being assembled from -- clock,
-// heap, storage, config, site, web, metrics, mdns, ota -- arrive one at a
-// time, each behind the feature named for it.
+// storage, site, web, metrics, ota -- arrive one at a time, each behind
+// the feature named for it.

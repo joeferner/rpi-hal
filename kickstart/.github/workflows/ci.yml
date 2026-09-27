@@ -24,7 +24,7 @@ jobs:
   # Each of those targets covers both architectures on its own, so there is
   # no separate AArch64 step here the way there is in the sibling crates.
   check:
-    name: fmt, clippy, build, examples, docs
+    name: fmt, clippy, build, examples, tests, docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,6 +42,7 @@ jobs:
       - run: make clippy
       - run: make build
       - run: make examples
+      - run: make test
       - run: make doc
 
   # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
@@ -93,5 +94,5 @@ jobs:
       - run: make package
 
   # Hardware-in-the-loop tests are deliberately absent: every check above is
-  # a compile-time one. Whether an image actually boots, mounts a card and
+  # a compile-time one, or a host test of a module that is pure. Whether an image actually boots, mounts a card and
   # serves a page is established on a board.

@@ -8,6 +8,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Reading a settings file**, behind a `config` feature. The file is TOML
+  and the schema is the board's own `#[derive(Deserialize)]` struct, so
+  there is no key table and no trait to implement. `config::parse` takes
+  the bytes off the card and returns the settings plus every key the
+  schema did not name — skipped rather than refused, so older firmware
+  still boots a card written for newer. `config::value` holds the checks
+  TOML cannot make (`label`, `host`, `word`, `url`, `address`,
+  `duration`, `degrees`), and `.at(&spanned)` locates a failed one at the
+  setting it was run on. Syntax errors, type errors, bad UTF-8 and failed
+  checks all come back as one `Problem`, which prints as
+  `BOARD.TOML:12:18: …`.
+
+  Pure, and implies nothing — not `console`, not storage — which is what
+  makes it the first module here with tests. They run on the host under
+  `make test`, which needed the examples' bare-metal dev-dependencies
+  moved under `cfg(target_os = "none")`; nothing they link builds for an
+  OS target.
+
 - **`net`, which gets the board onto the network whichever way it can.**
   A board states what it is willing to use and in what order —
   `connection = ["ethernet", "wifi"]` — and `net::discover` takes the

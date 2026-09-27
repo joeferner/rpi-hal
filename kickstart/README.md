@@ -25,8 +25,9 @@ named for it.
 | `console` | One sink for the whole image, and `logln!` |
 | `entropy` | The SoC's hardware RNG, and the `getrandom` backend over it |
 | `heap` | A TLSF `#[global_allocator]`, sized from what the firmware reports |
+| `config` | A TOML settings file into the board's own schema, with `file:line:column` errors and the checks TOML cannot make |
 
-Still to come: clock, storage, config, site, web, metrics, mdns, ota.
+Still to come: clock, storage, site, web, metrics, mdns, ota.
 
 `entropy` and `heap` each install something the *whole binary* resolves
 against — a `getrandom` backend and a `#[global_allocator]`. There is no

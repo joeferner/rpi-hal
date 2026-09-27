@@ -21,7 +21,7 @@
 # away.
 ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 
-.PHONY: build examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build examples test fmt fmt-check clippy doc package pre-commit clean
 
 # Every module, plus one chip. Enumerated rather than `--all-features`,
 # which is wrong here and not merely inelegant: the chip features forward
@@ -33,7 +33,17 @@ ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 # `bcm2837` is the one named because the examples are Pi 2/3 images. A
 # board is free to select another; what this list covers is that the
 # modules compile, and none of them is chip-conditional.
-FEATURES := console,entropy,heap,mdns,ethernet,wifi,bcm2837
+FEATURES := console,entropy,heap,config,mdns,ethernet,wifi,bcm2837
+
+# The machine running the build. Tests run there, because that is the only
+# place `cargo test` has to run them: the bare-metal targets have no test
+# harness and nothing to execute one on.
+HOST := $(shell rustc -vV | sed -n 's/^host: //p')
+
+# The modules whose tests are pure and so build for the host. Not
+# $(FEATURES): most of those reach `rpi-hal`, which compiles only for a
+# Pi, and a module that does cannot be tested this way at all.
+TEST_FEATURES := config
 
 # Twice, because a feature-gated module is not compiled at all without its
 # feature: the plain pass proves the crate is usable with nothing turned
@@ -49,6 +59,12 @@ build:
 examples:
 	cargo build --release $(ARCHES) --examples
 	cargo build --release $(ARCHES) --examples --features $(FEATURES)
+
+
+# `--lib` because the examples are Pi images, and the bare-metal
+# dev-dependencies they link are excluded from a host build on purpose.
+test:
+	cargo test --target $(HOST) --lib --features $(TEST_FEATURES)
 
 fmt:
 	cargo fmt
@@ -90,7 +106,7 @@ doc:
 package:
 	CARGO_TARGET_DIR=target/verify cargo package
 
-pre-commit: fmt clippy build examples doc
+pre-commit: fmt clippy build examples test doc
 
 clean:
 	cargo clean
