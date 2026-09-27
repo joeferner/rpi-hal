@@ -4,7 +4,7 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-09-27
 
 ### Added
 
@@ -64,6 +64,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the retries that were the old behaviour.
 
 ### Changed
+
+- **Requires `rpi-hal` 0.8.0**, which is where `usb::ethernet`'s
+  `Ethernet`/`EthernetAsync` traits and `wifi::Wifi::set_all_multicast`
+  live — the first is what makes one adapter serve both USB-Ethernet
+  chips, the second what the rejoin path re-applies.
+
+  Breaking on its own, whatever else changed: the two crates share types,
+  so a consumer cannot take this without moving the HAL too.
 
 - **The adapter brings the chip up itself, so `new` takes an *unstarted*
   driver and an `EthernetConfig`.** Breaking: callers used to call `start`
@@ -376,6 +384,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.8.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.8.0
 [0.7.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.7.0
 [0.6.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.6.0
 [0.5.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.5.0
