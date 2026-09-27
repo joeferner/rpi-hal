@@ -71,7 +71,8 @@ build-bcm2837:
 #     64-bit counterpart recipe: the ARM1176 has no 64-bit mode.
 #   - It is the one build in this repository that needs nightly. That
 #     target is tier 3, so rustup publishes no `core` for it and
-#     `-Z build-std` has to compile one. `+nightly` rather than a
+#     `-Z build-std` has to compile one -- and `alloc` beside it, which
+#     the `sd-*` commands' filesystem needs. `+nightly` rather than a
 #     `rust-toolchain.toml` change, so everything else stays on stable;
 #     it needs `rustup toolchain install nightly --component rust-src`
 #     once.
@@ -84,8 +85,8 @@ build-bcm2837:
 # feature and rpi-hal prefers `bcm2837` when both are on -- see
 # firmware/Cargo.toml.
 build-bcm2835:
-	cd $(FIRMWARE) && cargo +nightly build --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835
-	cd $(FIRMWARE) && cargo +nightly objcopy --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835 -- -O binary target/kernel.img
+	cd $(FIRMWARE) && cargo +nightly build --release -Z build-std=core,alloc --target $(ARCH6) --no-default-features --features bcm2835
+	cd $(FIRMWARE) && cargo +nightly objcopy --release -Z build-std=core,alloc --target $(ARCH6) --no-default-features --features bcm2835 -- -O binary target/kernel.img
 
 build64-bcm2837:
 	cd $(FIRMWARE) && cargo build --release --target $(ARCH64)
@@ -114,7 +115,7 @@ clippy64:
 
 # See `build-bcm2835` for the nightly and the feature flags.
 clippy6:
-	cd $(FIRMWARE) && cargo +nightly clippy --release -Z build-std=core --target $(ARCH6) --no-default-features --features bcm2835 -- -D warnings
+	cd $(FIRMWARE) && cargo +nightly clippy --release -Z build-std=core,alloc --target $(ARCH6) --no-default-features --features bcm2835 -- -D warnings
 
 clippy-cli:
 	cd $(CLI) && cargo clippy --release --all-targets -- -D warnings

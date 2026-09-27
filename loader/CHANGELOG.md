@@ -13,6 +13,48 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [Unreleased]
+
+### Changed
+
+- **The `sd-*` commands use `resident-fat` in place of `embedded-sdmmc`,
+  so long file names work.** `sd-write ./kickstart.toml /kickstart.toml`
+  used to fail with "filesystem error", because `embedded-sdmmc` speaks
+  only 8.3 names; it now creates `kickstart.toml`, and a PC sees that
+  name. `sd-read`, `sd-delete` and `sd-mkdir` take long names too,
+  `sd-list` shows them, and lookups match either the long name or its
+  8.3 alias, case-insensitively.
+- **The volume is the first FAT partition in the card's table**, whichever
+  slot it is in, rather than always slot 0 — or the whole card, when it
+  has no partition table.
+- **`sd-write` receives the whole file before writing any of it.** The
+  file lands contiguous and goes to the card one transfer per run instead
+  of a command per 512-byte block, and an upload interrupted partway
+  leaves the old file untouched instead of truncated. `sd-read` likewise
+  reads the whole file before sending it, so a card error is a clean
+  failure rather than a transfer that stops short. Both need the file to
+  fit in the device's RAM.
+- **A failure says why.** `sd-*` errors that were all "filesystem error"
+  are now named separately: a name FAT cannot store, a file that already
+  exists, a file where a directory was needed or the reverse, a full
+  card, the device out of memory, a card read/write failure, and no FAT32
+  volume at all. A failed `sd-write` commit reports its cause rather than
+  "write failed". "Filesystem error" is left for a volume found
+  inconsistent. The CLI still names the old codes, for a loader flashed
+  before this.
+- **`sd-list` has no size limit.** A listing was built in an 8 KiB
+  buffer and refused beyond that; it is now allocated.
+- **New files are stamped with the FAT epoch (1980-01-01)** rather than a
+  made-up 2026-01-01. The loader has no clock, and a fixed date that
+  looks real is worse than one that is plainly a default.
+- **`rpi-hal` 0.8.0**, up from 0.6.0, for its `resident-fat` feature and
+  `sd::SdBlockDevice`.
+- **The firmware now has a heap**, running from the top of the loader's
+  stack to the top of the ARM's RAM. That is above where `mem-write` is
+  allowed to write, so a kernel being loaded cannot overwrite it.
+  Building the Pi 1 / Pi Zero image now needs `-Z build-std=core,alloc`
+  (the `make` recipe passes it).
+
 ## [0.4.0] - 2026-09-20
 
 ### Added

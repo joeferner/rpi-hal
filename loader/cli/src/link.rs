@@ -123,11 +123,15 @@ const DRAIN_LIMIT: Duration = Duration::from_millis(500);
 
 /// Names the error code that follows a leading [`FAIL`] when a command
 /// can't start (or, for `sd-write`, can't commit).
+///
+/// 4 and 6 are no longer sent — a listing is not size-limited any more,
+/// and a failed `sd-write` commit is reported by its cause — but a loader
+/// flashed before that still sends them, and this CLI has to name them.
 fn err_name(code: u8) -> String {
     match code {
         1 => "SD bring-up failed".into(),
         2 => "no such file or directory".into(),
-        3 => "filesystem error".into(),
+        3 => "filesystem error (the volume is inconsistent; check it with fsck)".into(),
         4 => "directory listing too large".into(),
         5 => "bad path".into(),
         6 => "write failed".into(),
@@ -137,6 +141,16 @@ fn err_name(code: u8) -> String {
               or an implausible page size)"
             .into(),
         10 => "a page was written, but the part never answered the read that checks it".into(),
+        11 => "name cannot be stored on a FAT volume (over 255 characters, a reserved \
+               character such as : or ?, or a leading/trailing space or trailing period)"
+            .into(),
+        12 => "already exists".into(),
+        13 => "a path component is a file, not a directory".into(),
+        14 => "is a directory".into(),
+        15 => "no space left on the card, or the directory is full".into(),
+        16 => "the device has no memory for that (the file, or the card's allocation table)".into(),
+        17 => "SD card read/write failed".into(),
+        18 => "no FAT32 volume on the card".into(),
         other => format!("error code {other}"),
     }
 }

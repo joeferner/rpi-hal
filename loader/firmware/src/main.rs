@@ -1,13 +1,19 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Write;
+use embedded_alloc::LlffHeap as Heap;
 use embedded_hal::i2c::I2c as _;
-use embedded_sdmmc::{Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager};
+use resident_fat::mbr::PartitionTable;
+use resident_fat::{FatError, FileSystem};
 use rpi_hal::i2c::I2c;
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::pac::BSC0;
-use rpi_hal::sd::{Sd, SdCard, SdCardError};
+use rpi_hal::sd::{Sd, SdBlockDevice, SdBlockDeviceError};
 use rpi_hal::timer::Timer;
 use rpi_hal::{pac, uart::Uart};
 
@@ -79,18 +85,30 @@ const CMD_EEPROM_WRITE: u8 = 10;
 
 // Error codes, sent as the byte right after a leading `FAIL` when a
 // command can't even begin (bad path, SD bring-up failed, filesystem
-// error, etc.). A coarse classification is enough for the host to print
-// something useful; the exact `embedded-sdmmc` variant isn't wired over.
+// error, etc.). The host prints a name for each; `ERR_FS` is what is left
+// over once every failure a user can act on has a code of its own (see
+// [`err_code`]).
+//
+// Codes are never reused. 4 meant "directory listing too large", back
+// when a listing was built in a fixed buffer, and 6 "write failed", which
+// the `sd-write` commit now reports by its real cause instead; neither is
+// sent any more, but a host still has to name them for an older loader.
 const ERR_SD_INIT: u8 = 1;
 const ERR_NOT_FOUND: u8 = 2;
 const ERR_FS: u8 = 3;
-const ERR_TOO_LARGE: u8 = 4;
 const ERR_BAD_PATH: u8 = 5;
-const ERR_WRITE: u8 = 6;
 const ERR_I2C: u8 = 7;
 const ERR_VERIFY: u8 = 8;
 const ERR_RANGE: u8 = 9;
 const ERR_READBACK: u8 = 10;
+const ERR_BAD_NAME: u8 = 11;
+const ERR_EXISTS: u8 = 12;
+const ERR_NOT_DIR: u8 = 13;
+const ERR_IS_DIR: u8 = 14;
+const ERR_NO_SPACE: u8 = 15;
+const ERR_NO_MEMORY: u8 = 16;
+const ERR_CARD: u8 = 17;
+const ERR_NO_VOLUME: u8 = 18;
 
 /// Stay clear of the relocated loader's own copy — see `boot.s`. Every
 /// `CMD_MEM_WRITE`/`CMD_EXEC` address must fall below this, so a client
@@ -106,11 +124,6 @@ const STREAM_CHUNK_SIZE: usize = 4096;
 /// Longest path accepted from the host. Anything longer is drained off
 /// the wire (to stay in sync) and rejected with [`ERR_BAD_PATH`].
 const MAX_PATH: usize = 255;
-
-/// Cap on a single directory listing. Listings are built in RAM before
-/// streaming, so an unusually large directory is rejected with
-/// [`ERR_TOO_LARGE`] rather than overrunning the buffer.
-const LISTING_CAP: usize = 8192;
 
 /// BSC clock divider for the EEPROM bus: the reset default, 100kHz at a
 /// 150MHz core clock and 166kHz at 250MHz. Either is within what every
@@ -145,6 +158,39 @@ const EEPROM_WRITE_CYCLE_MS: u32 = 6;
 /// of finding out is one more transfer.
 const EEPROM_READBACK_ATTEMPTS: u32 = 4;
 
+/// The heap `resident-fat` keeps a mounted volume's allocation table and
+/// directories in, and the `sd-*` commands their file contents.
+///
+/// Empty until [`init_heap`] gives it a region. Should that fail, the
+/// `sd-*` commands refuse with [`ERR_NO_MEMORY`] before touching the card
+/// (see [`mount`]) and everything else works as before.
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
+extern "C" {
+    /// Top of the loader's stack, placed by `linker.ld`/`linker64.ld` above
+    /// everything else the relocated loader occupies. Only its address is
+    /// meaningful.
+    static __stack_top: u8;
+}
+
+/// The `critical-section` implementation [`HEAP`]'s lock goes through.
+///
+/// Does nothing, and that is sound: the loader runs on one core and never
+/// enables an interrupt, so there is no other context that could enter a
+/// critical section concurrently. rpi-hal's own implementation, which
+/// masks IRQs, is `rt`-gated, and this loader builds without `rt`.
+struct SingleCore;
+critical_section::set_impl!(SingleCore);
+
+unsafe impl critical_section::Impl for SingleCore {
+    unsafe fn acquire() -> critical_section::RawRestoreState {
+        false
+    }
+
+    unsafe fn release(_: critical_section::RawRestoreState) {}
+}
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     halt();
@@ -160,10 +206,13 @@ pub extern "C" fn kmain() -> ! {
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     // The SD commands re-`steal()` the peripherals they need (EMMC, GPIO,
     // VCMAILBOX) and bring the card up fresh each time, so `kmain` holds
-    // on to a `Timer` only — the one long-lived borrow `SdCard` needs for
-    // its block reads. Everything else in `peripherals` goes unused here.
+    // on to a `Timer` only — the one long-lived borrow `SdBlockDevice`
+    // needs for its block transfers. Everything else in `peripherals` goes unused here.
     let timer = Timer::new(peripherals.SYSTMR);
 
+    if let Err(e) = init_heap() {
+        let _ = writeln!(uart, "rpi-loader: no heap ({e:?}), sd-* unavailable");
+    }
     let _ = writeln!(uart, "rpi-loader: relocated, waiting for host");
 
     // Block waiting for the host to send HELLO — no retry/timeout
@@ -212,13 +261,13 @@ pub extern "C" fn kmain() -> ! {
                 }
             }
             CMD_SD_READ => {
-                if let Err(code) = cmd_sd_read(&mut uart, &timer, &mut chunk_buf) {
+                if let Err(code) = cmd_sd_read(&mut uart, &timer) {
                     uart.write_byte(FAIL);
                     uart.write_byte(code);
                 }
             }
             CMD_SD_WRITE => {
-                if let Err(code) = cmd_sd_write(&mut uart, &timer, &mut chunk_buf) {
+                if let Err(code) = cmd_sd_write(&mut uart, &timer) {
                     uart.write_byte(FAIL);
                     uart.write_byte(code);
                 }
@@ -330,177 +379,138 @@ fn cmd_set_baud(uart: &mut Uart) {
 /// `CMD_SD_LIST`: list a directory on the FAT boot partition.
 ///
 /// Reads a path (empty/`/` means the root), builds a line-based text
-/// listing (`type\tsize\tname`, one entry per line) into a bounded RAM
-/// buffer, then streams it to the host. `Err(code)` here means the
-/// listing never started (bad path, SD/FS error, or too large); the
-/// caller sends `FAIL` + `code`.
+/// listing (`type\tsize\tname`, one entry per line) in RAM, then streams
+/// it to the host. `Err(code)` here means the listing never started (bad
+/// path, SD/FS error); the caller sends `FAIL` + `code`.
+///
+/// Names are long names wherever the volume has one, falling back to the
+/// 8.3 name for an entry that has only that.
 fn cmd_sd_list(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
     let mut path_buf = [0u8; MAX_PATH];
     let path = read_path(uart, &mut path_buf)?;
 
-    let vm = init_volume_mgr(timer)?;
-    let volume = vm.open_volume(VolumeIdx(0)).map_err(err_code)?;
-    let mut dir = volume.open_root_dir().map_err(err_code)?;
-    for comp in path.split('/').filter(|c| !c.is_empty()) {
-        dir.change_dir(comp).map_err(err_code)?;
+    let mut volume = mount(timer)?;
+    // Built whole before the leading `OK`, so a directory that cannot be
+    // read fails cleanly instead of mid-stream, and so the stream below can
+    // resend a chunk without walking the directory again.
+    let mut listing = String::new();
+    for entry in volume.open_dir(path).map_err(err_code)?.iter() {
+        let kind = if entry.is_directory() { 'D' } else { 'F' };
+        let _ = writeln!(listing, "{}\t{}\t{}", kind, entry.len(), entry.name());
     }
-
-    // Build the listing in RAM first: `iterate_dir` is a single forward
-    // pass with no rewind, so buffering here is what lets the stream
-    // below retry a chunk without re-walking the directory.
-    let mut listing = [0u8; LISTING_CAP];
-    let mut w = ListingWriter::new(&mut listing);
-    dir.iterate_dir(|entry| {
-        let kind = if entry.attributes.is_directory() {
-            'D'
-        } else {
-            'F'
-        };
-        let _ = writeln!(w, "{}\t{}\t{}", kind, entry.size, entry.name);
-    })
-    .map_err(err_code)?;
-    if w.overflowed {
-        return Err(ERR_TOO_LARGE);
-    }
-    let len = w.len;
 
     uart.write_byte(OK);
-    send_bulk(uart, &listing[..len]);
+    send_bulk(uart, listing.as_bytes());
     Ok(())
 }
 
 /// `CMD_SD_READ`: stream a file off the FAT boot partition to the host.
 ///
-/// Reads a path, opens the file, sends its length, then streams the
-/// contents as CRC-checked chunks. `Err(code)` means the read never
-/// started (bad path, not found, SD/FS error); the caller sends `FAIL` +
-/// `code`. Once the leading `OK` is sent, streaming is committed — a rare
-/// mid-stream block-read error just stops early, and the host's
-/// per-chunk timeout surfaces the short transfer.
-fn cmd_sd_read(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
+/// Reads a path, reads the whole file into RAM, sends its length, then
+/// streams the contents as CRC-checked chunks. `Err(code)` means the read
+/// never started (bad path, not found, SD/FS error, or no room for the
+/// file); the caller sends `FAIL` + `code`.
+///
+/// Whole rather than a chunk at a time because that is what makes a card
+/// error a clean failure: the file is off the card before the leading
+/// `OK`, so once streaming starts nothing can stop it short. It also
+/// costs the card one transfer per contiguous run of the file rather than
+/// one per chunk.
+fn cmd_sd_read(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
     let mut path_buf = [0u8; MAX_PATH];
-    let path = read_path(uart, &mut path_buf)?;
-    let (dir_path, file_name) = split_parent(path)?;
+    let path = entry_path(read_path(uart, &mut path_buf)?)?;
 
-    let vm = init_volume_mgr(timer)?;
-    let volume = vm.open_volume(VolumeIdx(0)).map_err(err_code)?;
-    let mut dir = volume.open_root_dir().map_err(err_code)?;
-    for comp in dir_path.split('/').filter(|c| !c.is_empty()) {
-        dir.change_dir(comp).map_err(err_code)?;
-    }
-    let file = dir
-        .open_file_in_dir(file_name, Mode::ReadOnly)
-        .map_err(err_code)?;
-    let length = file.length();
+    let mut volume = mount(timer)?;
+    let file = volume.open(path).map_err(err_code)?;
+    let data = volume.read_all(&file).map_err(err_code)?;
 
     uart.write_byte(OK);
-    write_u32(uart, length);
-    write_u32(uart, STREAM_CHUNK_SIZE as u32);
-
-    let mut remaining = length as usize;
-    while remaining > 0 {
-        let want = core::cmp::min(STREAM_CHUNK_SIZE, remaining);
-        // `read` may return short (it reads block-aligned under the hood),
-        // so fill the chunk before sending it. A `0`/`Err` means the file
-        // ended sooner than `length()` claimed or a block read failed;
-        // either way, send what we have and stop.
-        let mut got = 0;
-        while got < want {
-            match file.read(&mut chunk_buf[got..want]) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => got += n,
-            }
-        }
-        send_chunk(uart, &chunk_buf[..got]);
-        if got < want {
-            break;
-        }
-        remaining -= want;
-    }
+    send_bulk(uart, &data);
     Ok(())
 }
 
 /// `CMD_SD_WRITE`: receive a file from the host and write it to the FAT
-/// boot partition, creating or truncating it.
+/// boot partition, creating or replacing it.
 ///
 /// Reads a path, then a `u32` LE `total_size` and `u32` LE `chunk_size`,
-/// opens the file, then receives the payload as CRC-checked chunks and
-/// writes each out. `Err(code)` means the write never started; the
-/// caller sends `FAIL` + `code`. After the leading `OK`, chunks are
-/// always drained to keep the link in sync even if a write fails, and a
-/// final status byte (`OK`, or `FAIL` + [`ERR_WRITE`]) reports the
-/// committed result.
-fn cmd_sd_write(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
+/// receives the payload into RAM as CRC-checked chunks, then writes the
+/// file in one go. `Err(code)` means the write never started; the caller
+/// sends `FAIL` + `code`. After the leading `OK`, a final status byte
+/// (`OK`, or `FAIL` + the code for why) reports the committed result.
+///
+/// Receiving the whole file before writing any of it has three payoffs.
+/// The length is known when the file is created, so `resident-fat`
+/// allocates its chain at once and the file lands contiguous, written in
+/// one transfer per run. Each chunk's `OK` follows a copy into RAM rather
+/// than an SD write, so the link is never idle waiting on the card. And a
+/// transfer abandoned partway (the host killed, the cable pulled) leaves
+/// the old file on the card untouched rather than truncated.
+fn cmd_sd_write(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
     let mut path_buf = [0u8; MAX_PATH];
     let path = read_path(uart, &mut path_buf)?;
     let total_size = read_u32_le(uart) as usize;
     let chunk_size = read_u32_le(uart) as usize;
-    let (dir_path, file_name) = split_parent(path)?;
-    if chunk_size == 0 || chunk_size > chunk_buf.len() {
+    let path = entry_path(path)?;
+    if chunk_size == 0 || chunk_size > STREAM_CHUNK_SIZE {
         return Err(ERR_FS);
     }
 
-    let vm = init_volume_mgr(timer)?;
-    let volume = vm.open_volume(VolumeIdx(0)).map_err(err_code)?;
-    let mut dir = volume.open_root_dir().map_err(err_code)?;
-    for comp in dir_path.split('/').filter(|c| !c.is_empty()) {
-        dir.change_dir(comp).map_err(err_code)?;
+    let mut volume = mount(timer)?;
+    // Everything that can be known about the destination is checked
+    // before the transfer, not after it: a missing parent directory, or a
+    // directory where the file should go, would otherwise cost the whole
+    // upload to find out.
+    let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+    volume.open_dir(parent).map_err(err_code)?;
+    match volume.open(path) {
+        Ok(_) | Err(resident_fat::Error::NotFound { .. }) => {}
+        Err(e) => return Err(err_code(e)),
     }
-    let file = dir
-        .open_file_in_dir(file_name, Mode::ReadWriteCreateOrTruncate)
-        .map_err(err_code)?;
+
+    let mut data = Vec::new();
+    data.try_reserve_exact(total_size)
+        .map_err(|_| ERR_NO_MEMORY)?;
+    data.resize(total_size, 0);
 
     uart.write_byte(OK);
 
     let mut offset = 0;
-    let mut write_failed = false;
     while offset < total_size {
         let this_len = core::cmp::min(chunk_size, total_size - offset);
-        recv_chunk(uart, chunk_buf, this_len);
-        // Keep draining chunks even after a write error so the link stays
-        // in sync; the failure is reported once, at the end.
-        if !write_failed && file.write(&chunk_buf[..this_len]).is_err() {
-            write_failed = true;
-        }
-        // ACK after the write, not before: the `OK` is what frees the host
-        // to send the next chunk, so deferring it until we're ready to
-        // receive again keeps the SD write from overrunning the RX FIFO
-        // (see `recv_chunk`). Sent even on write failure, to keep draining.
+        recv_chunk(uart, &mut data[offset..], this_len);
         uart.write_byte(OK);
         offset += this_len;
     }
 
-    // Close (not just drop) so a flush error is caught and folded into
-    // the final status — the write isn't committed until this returns.
-    let close_failed = file.close().is_err();
-    if write_failed || close_failed {
-        uart.write_byte(FAIL);
-        uart.write_byte(ERR_WRITE);
-    } else {
-        uart.write_byte(OK);
+    // Synced even when the write failed: a failure partway may already
+    // have marked the volume dirty, and leaving it so would have the next
+    // mount (and every PC the card is put in) think it was pulled mid-write.
+    let written = volume.write_file(path, &data).map(|_| ());
+    let synced = volume.unmount().map(|_| ());
+    match written.and(synced) {
+        Ok(()) => uart.write_byte(OK),
+        Err(e) => {
+            uart.write_byte(FAIL);
+            uart.write_byte(err_code(e));
+        }
     }
     Ok(())
 }
 
 /// `CMD_SD_DELETE`: delete a file from the FAT boot partition.
 ///
-/// Reads a path, walks to its parent directory, and deletes the final
-/// component. Replies `OK` on success; `Err(code)` (bad path, not found,
-/// SD/FS error) means the caller sends `FAIL` + `code`. Deletes files
-/// only — `embedded-sdmmc` rejects deleting a directory as a file, which
-/// surfaces here as [`ERR_FS`].
+/// Reads a path and deletes the file it names, long-name entries and all.
+/// Replies `OK` on success; `Err(code)` (bad path, not found, SD/FS error)
+/// means the caller sends `FAIL` + `code`. Deletes files only — a
+/// directory is [`ERR_IS_DIR`].
 fn cmd_sd_delete(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
     let mut path_buf = [0u8; MAX_PATH];
-    let path = read_path(uart, &mut path_buf)?;
-    let (dir_path, file_name) = split_parent(path)?;
+    let path = entry_path(read_path(uart, &mut path_buf)?)?;
 
-    let vm = init_volume_mgr(timer)?;
-    let volume = vm.open_volume(VolumeIdx(0)).map_err(err_code)?;
-    let mut dir = volume.open_root_dir().map_err(err_code)?;
-    for comp in dir_path.split('/').filter(|c| !c.is_empty()) {
-        dir.change_dir(comp).map_err(err_code)?;
-    }
-    dir.delete_file_in_dir(file_name).map_err(err_code)?;
+    let mut volume = mount(timer)?;
+    let removed = volume.remove(path);
+    let synced = volume.unmount().map(|_| ());
+    removed.and(synced).map_err(err_code)?;
 
     uart.write_byte(OK);
     Ok(())
@@ -508,24 +518,20 @@ fn cmd_sd_delete(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
 
 /// `CMD_SD_MKDIR`: create a directory on the FAT boot partition.
 ///
-/// Reads a path, walks to its parent directory, and creates the final
-/// component. Replies `OK` on success; `Err(code)` (bad path, SD/FS
-/// error) means the caller sends `FAIL` + `code`. Only the final
-/// component is created — the parent directories must already exist, so
-/// this is a single `mkdir`, not `mkdir -p`. Creating a directory that
-/// already exists surfaces as [`ERR_FS`].
+/// Reads a path and creates the directory it names. Replies `OK` on
+/// success; `Err(code)` (bad path, SD/FS error) means the caller sends
+/// `FAIL` + `code`. Only the final component is created — the parent
+/// directories must already exist, so this is a single `mkdir`, not
+/// `mkdir -p`. Creating a directory that already exists is
+/// [`ERR_EXISTS`].
 fn cmd_sd_mkdir(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
     let mut path_buf = [0u8; MAX_PATH];
-    let path = read_path(uart, &mut path_buf)?;
-    let (dir_path, dir_name) = split_parent(path)?;
+    let path = entry_path(read_path(uart, &mut path_buf)?)?;
 
-    let vm = init_volume_mgr(timer)?;
-    let volume = vm.open_volume(VolumeIdx(0)).map_err(err_code)?;
-    let mut dir = volume.open_root_dir().map_err(err_code)?;
-    for comp in dir_path.split('/').filter(|c| !c.is_empty()) {
-        dir.change_dir(comp).map_err(err_code)?;
-    }
-    dir.make_dir_in_dir(dir_name).map_err(err_code)?;
+    let mut volume = mount(timer)?;
+    let created = volume.create_dir(path).map(|_| ());
+    let synced = volume.unmount().map(|_| ());
+    created.and(synced).map_err(err_code)?;
 
     uart.write_byte(OK);
     Ok(())
@@ -757,26 +763,41 @@ fn in_eeprom_range(offset: usize, length: usize) -> bool {
 /// takes: BSC0's other one is GPIO44/45, the camera/display connector bus,
 /// and the two cannot both be muxed at once.
 ///
-/// Re-`steal()`s its peripherals per command, exactly as
-/// [`init_volume_mgr`] does, so nothing has to be threaded through the
-/// command loop; sound for the same reason — single core, and the
-/// previous command's driver is long dropped.
+/// Re-`steal()`s its peripherals per command, exactly as [`mount`] does,
+/// so nothing has to be threaded through the command loop; sound for the
+/// same reason — single core, and the previous command's driver is long
+/// dropped.
 fn init_i2c(timer: &Timer) -> I2c<'_, BSC0> {
     let peripherals = unsafe { pac::Peripherals::steal() };
     I2c::<BSC0>::init_id(&peripherals.GPIO, peripherals.BSC0, EEPROM_CDIV, timer)
 }
 
-/// Brings the SD card up from scratch and wraps it in a
-/// [`VolumeManager`] over the FAT filesystem.
+/// A mounted FAT volume on the SD card.
+type Volume<'t> = FileSystem<SdBlockDevice<'t>>;
+
+/// What any operation on a [`Volume`] can fail with.
+type FsError = resident_fat::Error<SdBlockDeviceError>;
+
+/// Brings the SD card up from scratch and mounts its FAT volume.
 ///
 /// Each SD command calls this fresh: it re-`steal()`s the peripherals it
-/// needs and re-runs card identification, trading a little latency for a
-/// stateless design with no card handle to thread across the command
-/// loop. Stealing again is sound here because the previous command's
-/// `Sd` has already been dropped — there's never more than one live at a
-/// time on this single core. Maps any bring-up failure to
-/// [`ERR_SD_INIT`].
-fn init_volume_mgr(timer: &Timer) -> Result<VolumeManager<SdCard<'_>, FixedTime>, u8> {
+/// needs, re-runs card identification and re-reads the allocation table,
+/// trading some latency for a stateless design with no volume to thread
+/// across the command loop — and with nothing held between commands, a
+/// board reset between them can lose nothing. Stealing again is sound
+/// here because the previous command's `Sd` has already been dropped —
+/// there's never more than one live at a time on this single core. Maps
+/// any bring-up failure to [`ERR_SD_INIT`].
+///
+/// The volume is the first FAT partition in the card's partition table,
+/// whichever slot it is in, or the whole card when it has no table at all
+/// (one formatted as a bare volume).
+fn mount(timer: &Timer) -> Result<Volume<'_>, u8> {
+    // Checked up front because not every allocation `resident-fat` makes
+    // is fallible, and one that is not would halt the loader.
+    if HEAP.free() == 0 {
+        return Err(ERR_NO_MEMORY);
+    }
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
     // `Sd::steal_emmc` picks the right controller for the active chip --
@@ -785,7 +806,47 @@ fn init_volume_mgr(timer: &Timer) -> Result<VolumeManager<SdCard<'_>, FixedTime>
     // `sd.rs` "BCM2711" doc section.
     let emmc = unsafe { Sd::steal_emmc() };
     let sd = Sd::init(&peripherals.GPIO, emmc, &mut mailbox, timer).map_err(|_| ERR_SD_INIT)?;
-    Ok(VolumeManager::new(SdCard::new(sd, timer), FixedTime))
+    let mut device = SdBlockDevice::new(sd, timer);
+    let volume = match PartitionTable::read(&mut device).map_err(err_code)? {
+        Some(table) => {
+            let index = table.first_fat().ok_or(ERR_NO_VOLUME)?.index;
+            FileSystem::mount_partition(device, index)
+        }
+        None => FileSystem::mount(device),
+    };
+    volume.map_err(err_code)
+}
+
+/// Gives [`HEAP`] everything from the top of the loader's stack to the top
+/// of the ARM's share of RAM.
+///
+/// That region is already out of every client's reach, which is what
+/// makes it safe to hold a volume's allocation table in: `CMD_MEM_WRITE`
+/// refuses anything ending above [`RELOC_ADDR`], and the loader itself
+/// sits between that and `__stack_top`. So an image being loaded cannot
+/// overwrite the heap, nor the heap the image.
+///
+/// Not `rpi_hal::mem::heap_region`, which starts the heap at `__bss_end`.
+/// That is right for rpi-hal's own linker script, where the stacks sit
+/// below `.bss`, and wrong for this loader's, where the stack is above it:
+/// the heap would start inside the stack.
+///
+/// The top comes from the firmware rather than a constant because
+/// `gpu_mem` in `config.txt` moves it.
+fn init_heap() -> Result<(), rpi_hal::mailbox::Error> {
+    let peripherals = unsafe { pac::Peripherals::steal() };
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    let region = mailbox.arm_memory()?;
+    // 8, not the word alignment the linker script promises: an allocator
+    // hands out blocks aligned for `u64`, which is 8 on AArch32 too.
+    let start = (&raw const __stack_top as usize).next_multiple_of(8);
+    let end = region.base_address as usize + region.size_bytes as usize;
+    if end > start {
+        // SAFETY: called once, before anything allocates, on a region that
+        // nothing else in the loader uses and no command can write to.
+        unsafe { HEAP.init(start, end - start) };
+    }
+    Ok(())
 }
 
 /// Jumps to a freshly loaded image at `addr`, never returning.
@@ -905,31 +966,42 @@ fn read_path<'a>(uart: &mut Uart, buf: &'a mut [u8; MAX_PATH]) -> Result<&'a str
     core::str::from_utf8(&buf[..length]).map_err(|_| ERR_BAD_PATH)
 }
 
-/// Splits a path into its parent directory and final (file) component.
+/// Trims the slashes at either end of a path that must name a file or
+/// directory, refusing one that names nothing.
 ///
-/// Leading/trailing slashes are ignored. `"a/b/c.bin"` → `("a/b",
-/// "c.bin")`, `"c.bin"` → `("", "c.bin")`. Returns [`ERR_BAD_PATH`] if
-/// there's no final component (e.g. an empty path or bare `/`).
-fn split_parent(path: &str) -> Result<(&str, &str), u8> {
+/// `resident-fat` already treats a leading slash as optional, but reads a
+/// trailing one as an empty final component and refuses it as a bad name
+/// — where `sd-mkdir /logs/` meaning `/logs` is what anyone typing it
+/// expects. An empty path or bare `/` names the root, which no file or new
+/// directory can be, and is [`ERR_BAD_PATH`].
+fn entry_path(path: &str) -> Result<&str, u8> {
     let trimmed = path.trim_matches('/');
-    match trimmed.rfind('/') {
-        Some(i) => {
-            let name = &trimmed[i + 1..];
-            if name.is_empty() {
-                Err(ERR_BAD_PATH)
-            } else {
-                Ok((&trimmed[..i], name))
-            }
-        }
-        None if trimmed.is_empty() => Err(ERR_BAD_PATH),
-        None => Ok(("", trimmed)),
+    if trimmed.is_empty() {
+        Err(ERR_BAD_PATH)
+    } else {
+        Ok(trimmed)
     }
 }
 
-/// Maps an `embedded-sdmmc` error to the coarse code sent to the host.
-fn err_code(e: embedded_sdmmc::Error<SdCardError>) -> u8 {
+/// Maps a `resident-fat` error to the code sent to the host.
+///
+/// Every failure a user can do something about has its own code — a name
+/// FAT cannot store, a path that is missing or the wrong kind, a full
+/// card, a card that stopped answering, no FAT volume at all. What is left
+/// ([`ERR_FS`]) is a volume `resident-fat` found inconsistent, which is a
+/// job for `fsck` rather than for anything the host could retry.
+fn err_code(e: FsError) -> u8 {
+    use resident_fat::Error;
     match e {
-        embedded_sdmmc::Error::NotFound => ERR_NOT_FOUND,
+        Error::NotFound { .. } => ERR_NOT_FOUND,
+        Error::BadName { .. } => ERR_BAD_NAME,
+        Error::AlreadyExists { .. } => ERR_EXISTS,
+        Error::NotADirectory { .. } => ERR_NOT_DIR,
+        Error::IsADirectory { .. } => ERR_IS_DIR,
+        Error::DirectoryFull | Error::Fat(FatError::DiskFull { .. }) => ERR_NO_SPACE,
+        Error::OutOfMemory { .. } => ERR_NO_MEMORY,
+        Error::Device(_) => ERR_CARD,
+        Error::Boot(_) | Error::NoPartitionTable | Error::NoSuchPartition { .. } => ERR_NO_VOLUME,
         _ => ERR_FS,
     }
 }
@@ -944,10 +1016,9 @@ fn err_code(e: embedded_sdmmc::Error<SdCardError>) -> u8 {
 /// host sends the next chunk the instant it sees the `OK`, streaming
 /// ~4 KB back-to-back with no hardware flow control, and the PL011's
 /// 16-byte RX FIFO overflows within ~85µs at 1.5Mbaud. If the caller ACKs
-/// before a slow step (an SD `file.write`, which for a freshly created
-/// file allocates a cluster and updates the FAT before programming a
-/// block), those incoming bytes are dropped and the framing desyncs
-/// permanently. ACKing only once the caller is back at `recv_chunk` turns
+/// before a slow step (programming an EEPROM page, whose internal write
+/// cycle is milliseconds), those incoming bytes are dropped and the
+/// framing desyncs permanently. ACKing only once the caller is back at `recv_chunk` turns
 /// the per-chunk `OK` into flow control, keeping the transfer lockstep.
 fn recv_chunk(uart: &mut Uart, buf: &mut [u8], len: usize) {
     loop {
@@ -986,9 +1057,8 @@ fn send_chunk(uart: &mut Uart, buf: &[u8]) {
 }
 
 /// Streams an in-RAM blob to the host: a `u32` LE total length and `u32`
-/// LE chunk size, then the data as [`send_chunk`] chunks. Used by the
-/// device→host commands (`CMD_SD_LIST`, and — with the data sourced from
-/// a file rather than a slice — `CMD_SD_READ`) after their leading `OK`.
+/// LE chunk size, then the data as [`send_chunk`] chunks. Used by
+/// `CMD_SD_LIST` and `CMD_SD_READ` after their leading `OK`.
 fn send_bulk(uart: &mut Uart, data: &[u8]) {
     write_u32(uart, data.len() as u32);
     write_u32(uart, STREAM_CHUNK_SIZE as u32);
@@ -1037,59 +1107,6 @@ fn write_u32(uart: &mut Uart, value: u32) {
 fn halt() -> ! {
     loop {
         unsafe { core::arch::asm!("wfe") };
-    }
-}
-
-/// A fixed timestamp for `embedded-sdmmc`, stamped onto files as they're
-/// created or written. A real clock (an RTC or the ARM generic timer) is
-/// application policy, not something a loader should impose — and nothing
-/// here depends on the timestamp being accurate — so a constant is fine.
-struct FixedTime;
-
-impl TimeSource for FixedTime {
-    fn get_timestamp(&self) -> Timestamp {
-        Timestamp {
-            year_since_1970: 56, // 2026
-            zero_indexed_month: 0,
-            zero_indexed_day: 0,
-            hours: 0,
-            minutes: 0,
-            seconds: 0,
-        }
-    }
-}
-
-/// A `core::fmt::Write` sink over a fixed byte buffer used to build a
-/// directory listing without an allocator. Once the buffer fills,
-/// further writes are dropped and `overflowed` latches true — the caller
-/// checks it and rejects the listing rather than sending a truncated one.
-struct ListingWriter<'a> {
-    buf: &'a mut [u8],
-    len: usize,
-    overflowed: bool,
-}
-
-impl<'a> ListingWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Self {
-            buf,
-            len: 0,
-            overflowed: false,
-        }
-    }
-}
-
-impl Write for ListingWriter<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for &b in s.as_bytes() {
-            if self.len >= self.buf.len() {
-                self.overflowed = true;
-                break;
-            }
-            self.buf[self.len] = b;
-            self.len += 1;
-        }
-        Ok(())
     }
 }
 

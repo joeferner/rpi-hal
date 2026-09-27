@@ -29,8 +29,8 @@ established on hardware, not in CI.
 
 Depends on [`rpi-hal`](https://crates.io/crates/rpi-hal) for GPIO/UART
 and SD/FAT access. The FAT filesystem layer is
-[`embedded-sdmmc`](https://crates.io/crates/embedded-sdmmc), on top of
-`rpi-hal`'s `SdCard` block-device adapter.
+[`resident-fat`](https://crates.io/crates/resident-fat), on top of
+`rpi-hal`'s `SdBlockDevice` adapter.
 
 ## Layout
 
@@ -456,9 +456,19 @@ where `kernel8.img`-style binaries expect to run:
 rpi-loader --device $DEV boot --load-addr 0x80000 path/to/kernel8.img
 ```
 
-The `sd-*` commands operate on the first MBR partition (the Pi's boot
-FAT partition on a stock card) and support nested paths. Large transfers
-are slow — see "Limitations" below.
+The `sd-*` commands operate on the first FAT partition in the card's
+partition table (the Pi's boot partition on a stock card), or on the
+whole card if it has no partition table. They support nested paths and
+long file names — `sd-write ./kickstart.toml /kickstart.toml` creates a
+file a PC sees as `kickstart.toml`, and `sd-list` shows long names — and
+look names up case-insensitively, by either the long name or its 8.3
+alias. The volume must be FAT32.
+
+`sd-write` receives the whole file into the device's RAM before writing
+any of it, so an interrupted upload leaves the old file untouched, and
+`sd-read` reads the whole file before sending any of it. Either way the
+file must fit in the ARM's share of RAM beside the card's allocation
+table (four bytes per cluster).
 
 ### Proving out the 64-bit path
 
@@ -520,17 +530,16 @@ settings file into the binary this command programs.
 
 ## Limitations
 
-- **`sd-read`/`sd-write` are slow**, and noticeably so on files of any
-  size. Two independent reasons, neither of them a missing driver
-  feature. `rpi-hal` does multi-block transfers (`CMD18`/`CMD25` with an
-  auto-`CMD12` stop) and its `embedded-sdmmc` adapter uses them whenever
-  it is handed more than one block — but `embedded-sdmmc`'s block cache
-  holds exactly one block, so through the filesystem it never is, and
-  every 512 bytes costs its own SD command. Separately, the transfer is
-  lockstep: the device defers each chunk's `OK` until it has finished
-  writing that chunk. That deferral is not an oversight — it is the flow
-  control keeping the UART's 16-byte RX FIFO from overflowing — but it
-  leaves the link idle for the whole of every SD write.
+- **Every `sd-*` command mounts the card afresh**, re-identifying it
+  and reading its whole allocation table before doing anything else.
+  That keeps the loader stateless — nothing is held between commands, so
+  a board reset between them can lose nothing — at the price of a fixed
+  cost per command that grows with the card's cluster count.
+- **The link, not the card, bounds `sd-read`/`sd-write` throughput.**
+  File data moves to and from the card one transfer per contiguous run,
+  but every byte still crosses the UART in lockstep chunks, each waiting
+  for its `OK` — the flow control that keeps the UART's 16-byte RX FIFO
+  from overflowing.
 - **Single-core throughout.** The loader never touches cores 1-3; the
   GPU firmware holds them in its own stub, and a multicore kernel loaded
   this way wakes them itself exactly as it would if the firmware had

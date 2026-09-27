@@ -61,8 +61,10 @@ const CMD_EEPROM_WRITE: u8 = 10;
 
 /// Error code the device sends for a missing file.
 const ERR_NOT_FOUND: u8 = 2;
-/// Error code the device sends when a write cannot be committed.
-const ERR_WRITE: u8 = 6;
+/// Error code the device sends for a name no FAT volume can store.
+const ERR_BAD_NAME: u8 = 11;
+/// Error code the device sends when the card is out of space.
+const ERR_NO_SPACE: u8 = 15;
 /// Error code the device sends when an EEPROM page read back differently
 /// than it was written.
 const ERR_VERIFY: u8 = 8;
@@ -558,11 +560,45 @@ fn sd_write_names_a_failure_before_the_transfer() {
     fx.device.read_path();
     fx.device.read_u32();
     fx.device.read_u32();
-    fx.device.write_all(&[FAIL, ERR_WRITE]);
+    fx.device.write_all(&[FAIL, ERR_NOT_FOUND]);
 
     let output = fx.finish();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("write failed"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no such file or directory"));
+}
+
+#[test]
+fn sd_write_names_why_the_commit_failed() {
+    for (code, reason) in [
+        (ERR_NO_SPACE, "no space left"),
+        (ERR_BAD_NAME, "cannot be stored on a FAT volume"),
+    ] {
+        sd_write_commit_fails_with(code, reason);
+    }
+}
+
+/// Runs an `sd-write` whose transfer succeeds and whose commit is refused
+/// with `code`, and checks the CLI says `reason`.
+fn sd_write_commit_fails_with(code: u8, reason: &str) {
+    let data = payload();
+    let file = temp_file("sd-write-commit.bin", &data);
+    let mut fx = Fixture::spawn(&["sd-write", file.to_str().unwrap(), "/BIG.BIN"]);
+
+    fx.device.handshake();
+    fx.device.expect_set_baud();
+    fx.device.expect_command(CMD_SD_WRITE);
+    fx.device.read_path();
+    let total = fx.device.read_u32() as usize;
+    let chunk = fx.device.read_u32() as usize;
+    fx.device.write_all(&[OK]);
+    fx.device.recv_chunks(total, chunk, false);
+    fx.device.write_all(&[FAIL, code]);
+
+    let output = fx.finish();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("did not commit"), "{stderr}");
+    assert!(stderr.contains(reason), "{stderr}");
 }
 
 #[test]
