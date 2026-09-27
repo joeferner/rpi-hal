@@ -61,10 +61,19 @@
 // Verify it from another machine on the same link:
 //
 //     ping kickstart.local
-//     dig +short @224.0.0.251 -p 5353 kickstart.local
+//     avahi-resolve -n kickstart.local
+//     dig +short @<the board's address> -p 5353 kickstart.local
 //
-// The second is the legacy-query path (RFC 6762 §6.7) and is the one that
-// works from a shell with no mDNS client in the way.
+// **Not `dig @224.0.0.251`.** That looks like the obvious test and it
+// cannot work: `dig` checks that a reply comes from the server it asked,
+// and a responder answers a legacy query from its own address rather than
+// from the group -- so `dig` discards a perfectly good answer and reports
+// a timeout. Asking the board's own address is the same legacy path (RFC
+// 6762 §6.7) with a source `dig` will accept.
+//
+// `avahi-resolve` can answer out of its cache, which a responder fills by
+// announcing. It therefore proves the announcement arrived, *not* that a
+// query was answered; only the `dig` line above proves that.
 //
 // Build it with `scripts/build-example.sh mdns` (kernel7.img) or
 // `scripts/build-example64.sh mdns` (kernel8.img).
@@ -267,6 +276,16 @@ async fn report_task(stack: embassy_net::Stack<'static>) {
             "DHCP: {} — this is what {NAME}.local should resolve to",
             config.address
         );
+    }
+
+    // The adapter records a bring-up failure rather than logging it, and
+    // nothing was reading it. That matters most for the multicast enable:
+    // it is not fatal, so a chip that refused it carries every other
+    // frame and looks entirely healthy — while the responder answers
+    // nothing it is asked, which is the exact failure this example exists
+    // to surface.
+    if let Some(error) = rpi_hal_embassy::ethernet::start_error() {
+        logln!("ethernet: something in bring-up failed: {error:?}");
     }
 }
 

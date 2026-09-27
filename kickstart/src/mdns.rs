@@ -307,6 +307,13 @@ fn reply(
             //
             // Worth handling for ten lines, because it is how this gets
             // tested from a shell without an mDNS client in the way.
+            //
+            // The answer goes back from *this host's* address, not from
+            // the group, which is what RFC 6762 §6.7 requires and what a
+            // resolver stub expects. `dig` aimed at `224.0.0.251` will
+            // therefore discard it — it checks the reply came from the
+            // server it asked — and report a timeout on a correct
+            // exchange. Aim `dig` at this board's own address instead.
             let legacy = from.port != PORT;
             let question = legacy.then(|| &query[at..end]);
             let to = if legacy || qclass & UNICAST_RESPONSE != 0 {
