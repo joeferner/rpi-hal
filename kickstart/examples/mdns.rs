@@ -2,8 +2,9 @@
 #![no_main]
 
 // The mDNS responder on a real link, over whichever interface the board
-// turns out to have: bring up Ethernet or Wi-Fi, take a DHCP lease, and
-// answer to `kickstart.local`.
+// turns out to have: read `kickstart.toml` off the card, bring up Ethernet
+// or Wi-Fi, take a DHCP lease, and answer to the name the file gives --
+// `kickstart.local` if it gives none.
 //
 // One image, three boards. A Pi 3B and a 3B+ have different Ethernet
 // chips and neither is named here; a Zero W has no Ethernet at all and
@@ -31,10 +32,21 @@
 // though the board announces itself and is reachable; that belongs in
 // `rpi-hal`'s Wi-Fi driver rather than in this file.
 //
-// Wi-Fi needs four files on the boot partition, under 8.3 names. Three
-// are vendor blobs, in a `wifi` directory under a subdirectory named for
-// the radio -- copied once and never looked at again. A 3B or a Zero W
-// wants `wifi/43430`:
+// The card is mounted once, at boot, through the crate's `storage`, and
+// its settings read through `config::load`. The file is optional: with no
+// card, or no `kickstart.toml` on it, the board answers to `kickstart` and
+// has no Wi-Fi to fall back to. A bad value is reported with its line and
+// column and that one setting is ignored, rather than halting -- an
+// example that can still come up on Ethernet should.
+//
+//   kickstart.toml -- at the root, beside `config.txt`. Copy
+//                     `kickstart.toml.example` from this repository and
+//                     fill it in: `hostname`, and a `[wifi]` table with
+//                     `ssid` and `passphrase`.
+//
+// Wi-Fi needs three more files, all vendor blobs, in a `wifi` directory
+// under a subdirectory named for the radio -- copied once and never looked
+// at again. A 3B or a Zero W wants `wifi/43430`:
 //
 //   FW.BIN    -- Broadcom's brcmfmac43430-sdio.bin
 //   NVRAM.TXT -- the matching nvram (brcmfmac43430-sdio.txt)
@@ -44,15 +56,11 @@
 // names -- including the board-specific nvram
 // (brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt for a 3B+). A
 // directory per radio is what lets one card boot any of them, since each
-// chip refuses the other's image.
+// chip refuses the other's image. Names are matched case-insensitively,
+// long or 8.3.
 //
-// The fourth file is the one a person edits, and is not per-radio, so it
-// sits at the root beside `config.txt` with the board's other settings:
-//
-//   WIFI.CFG  -- two lines: the SSID, then the WPA2 passphrase
-//
-// A board missing any of them simply has no Wi-Fi to fall back to, and
-// the walk reports that rather than failing.
+// A board missing any of them, or the credentials, simply has no Wi-Fi to
+// fall back to, and the walk reports that rather than failing.
 //
 // A Zero 2 W's 43436 is a third radio again and `rpi-hal` does not drive
 // it, so that board reaches Wi-Fi and stops -- which is the honest
@@ -63,6 +71,8 @@
 //     ping kickstart.local
 //     avahi-resolve -n kickstart.local
 //     dig +short @<the board's address> -p 5353 kickstart.local
+//
+// (or whatever `hostname` the file sets).
 //
 // **Not `dig @224.0.0.251`.** That looks like the obvious test and it
 // cannot work: `dig` checks that a reply comes from the server it asked,
@@ -78,14 +88,19 @@
 // Build it with `scripts/build-example.sh mdns` (kernel7.img) or
 // `scripts/build-example64.sh mdns` (kernel8.img).
 
-use core::ptr::{addr_of, addr_of_mut};
+extern crate alloc;
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cell::Cell;
+
+use critical_section::Mutex;
 use embassy_executor::Spawner;
 use embassy_net::{Config, StackResources};
-use embedded_sdmmc::{Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::rng::Rng;
-use rpi_hal::sd::{Sd, SdCard, SdCardError};
+use rpi_hal::sd::{Sd, SdBlockDevice};
 use rpi_hal::sdio::Sdio;
 use rpi_hal::usb::dwc2::Dwc2Host;
 use rpi_hal::usb::ethernet::EthernetAsync;
@@ -97,16 +112,82 @@ use rpi_hal_embassy::channel as ch;
 use rpi_hal_embassy::ethernet::{EthernetConfig, EthernetRunner};
 use rpi_hal_embassy::wifi::WifiRunner;
 use rpi_hal_embassy::{Executor, time_driver};
+use rpi_kickstart::config::{self, At, Problem, Spanned, value};
 use rpi_kickstart::net::{self, Interface};
-use rpi_kickstart::{console, logln, mdns};
+use rpi_kickstart::{console, heap, logln, mdns, storage};
 use static_cell::StaticCell;
 
-/// The name the board answers to. A real board reads this from its
-/// settings and passes a function that re-reads it, which is why
-/// `mdns::run` takes `fn() -> &'static str` rather than a `&str` — see
-/// that module. Here it is fixed, which is the other end of the same
-/// seam.
-const NAME: &str = "kickstart";
+/// The settings file, at the root of the card's FAT partition.
+const SETTINGS_FILE: &str = "kickstart.toml";
+
+/// The name the board answers to when the settings do not give one.
+const DEFAULT_HOSTNAME: &str = "kickstart";
+
+/// The name the board answers to, once the settings have been read.
+///
+/// A static behind a function rather than a value passed down, because
+/// `mdns::run` takes `fn() -> &'static str` — so a board that changes its
+/// name at run time, from a web form say, is answering to the new one on
+/// the next query. This example only ever sets it once, at boot, which is
+/// the simple end of the same seam.
+static HOSTNAME: Mutex<Cell<&'static str>> = Mutex::new(Cell::new(DEFAULT_HOSTNAME));
+
+fn hostname() -> &'static str {
+    critical_section::with(|cs| HOSTNAME.borrow(cs).get())
+}
+
+/// Everything this example reads from [`SETTINGS_FILE`]. Every key is
+/// optional, and so is the file.
+///
+/// `Spanned` on the strings a check in `config::value` runs on, so a bad
+/// one is reported at its line and column.
+#[derive(serde::Deserialize)]
+struct Settings {
+    /// The mDNS name, without `.local` (which is accepted and dropped).
+    hostname: Option<Spanned<String>>,
+    /// The network to join if Ethernet does not answer.
+    wifi: Option<WifiSettings>,
+}
+
+/// The `[wifi]` table.
+#[derive(serde::Deserialize)]
+struct WifiSettings {
+    ssid: Spanned<String>,
+    passphrase: Spanned<String>,
+}
+
+/// The network credentials, once checked.
+struct Credentials {
+    ssid: String,
+    passphrase: String,
+}
+
+impl Settings {
+    /// The semantic half, which TOML cannot do: it typed `hostname` as a
+    /// string, not as a name a resolver can ask for.
+    fn hostname(&self) -> Result<Option<&str>, Problem> {
+        self.hostname
+            .as_ref()
+            .map(|name| value::label(name.as_ref()).at(name))
+            .transpose()
+    }
+
+    fn credentials(&self) -> Result<Option<Credentials>, Problem> {
+        let Some(wifi) = &self.wifi else {
+            return Ok(None);
+        };
+        Ok(Some(Credentials {
+            ssid: value::ssid(wifi.ssid.as_ref()).at(&wifi.ssid)?.into(),
+            passphrase: value::passphrase(wifi.passphrase.as_ref())
+                .at(&wifi.passphrase)?
+                .into(),
+        }))
+    }
+}
+
+/// The card, mounted. Kept for as long as the Wi-Fi bring-up might still
+/// want its firmware off it.
+type Card = storage::Volume<SdBlockDevice<'static>>;
 
 /// Largest frame the queue pair carries, and the reason there is one pair
 /// rather than one per interface.
@@ -133,23 +214,18 @@ const SOCKETS: usize = 2;
 
 /// Directory on the FAT boot partition holding the Wi-Fi firmware files,
 /// one subdirectory per radio — see [`radio`].
-const WIFI_DIR: &str = "WIFI";
-/// Firmware image, within a [`WIFI_DIR`] subdirectory (8.3 name).
-const FIRMWARE_FILE: &str = "FW.BIN";
-/// Raw nvram config, within a [`WIFI_DIR`] subdirectory (8.3 name).
-const NVRAM_FILE: &str = "NVRAM.TXT";
-/// CLM (regulatory) blob, within a [`WIFI_DIR`] subdirectory (8.3 name).
-const CLM_FILE: &str = "CLM.DAT";
-/// Network credentials: the SSID on the first line and the WPA2
-/// passphrase on the second (8.3 name).
 ///
-/// At the **root** of the boot partition rather than under [`WIFI_DIR`],
-/// which is a distinction worth keeping: the three files above are vendor
-/// blobs that are copied once and never looked at again, and they are
-/// per-radio, while this is the one a person edits and the network a
-/// board joins does not change with its silicon. It sits beside
-/// `config.txt`, where a board's other settings already live.
-const CONFIG_FILE: &str = "WIFI.CFG";
+/// The credentials are *not* in here but in [`SETTINGS_FILE`] at the root,
+/// which is a distinction worth keeping: these are vendor blobs, copied
+/// once, never looked at again and per-radio, while the network a board
+/// joins is something a person edits and does not change with its silicon.
+const WIFI_DIR: &str = "WIFI";
+/// Firmware image, within a [`WIFI_DIR`] subdirectory.
+const FIRMWARE_FILE: &str = "FW.BIN";
+/// Raw nvram config, within a [`WIFI_DIR`] subdirectory.
+const NVRAM_FILE: &str = "NVRAM.TXT";
+/// CLM (regulatory) blob, within a [`WIFI_DIR`] subdirectory.
+const CLM_FILE: &str = "CLM.DAT";
 
 /// Which subdirectory of [`WIFI_DIR`] this board's blobs are in, and the
 /// chip id they are for. `None` for a board with no radio `rpi-hal`
@@ -192,21 +268,6 @@ fn radio(board_revision: u32) -> Option<(&'static str, u32)> {
         _ => None,
     }
 }
-
-/// Buffer for the firmware image; zeroed BSS.
-///
-/// Sized for the largest image this loads rather than for the 43430's
-/// ~400KB, because a file that does not fit is read as far as the buffer
-/// goes and its truncated length reported — so an image short by a
-/// hundred kilobytes downloads, starts, and simply never answers, with
-/// nothing reported anywhere. A 43455's is 643,651 bytes.
-static mut FW_BUF: [u8; 1024 * 1024] = [0; 1024 * 1024];
-/// Buffer for the raw nvram text.
-static mut NV_BUF: [u8; 4096] = [0; 4096];
-/// Buffer for the CLM regulatory blob (~5KB).
-static mut CLM_BUF: [u8; 8192] = [0; 8192];
-/// Buffer for the network-credentials file.
-static mut CFG_BUF: [u8; 256] = [0; 256];
 
 static UART: StaticCell<Uart> = StaticCell::new();
 static DWC2: StaticCell<Dwc2Host> = StaticCell::new();
@@ -262,7 +323,7 @@ async fn wifi_task(runner: WifiRunner<'static>) -> ! {
 // have to be named somewhere the application owns.
 #[embassy_executor::task]
 async fn mdns_task(stack: embassy_net::Stack<'static>) -> ! {
-    mdns::run(stack, || NAME).await
+    mdns::run(stack, hostname).await
 }
 
 /// Reports the lease once, so there is an address to compare what
@@ -273,8 +334,9 @@ async fn report_task(stack: embassy_net::Stack<'static>) {
     stack.wait_config_up().await;
     if let Some(config) = stack.config_v4() {
         logln!(
-            "DHCP: {} — this is what {NAME}.local should resolve to",
-            config.address
+            "DHCP: {} — this is what {}.local should resolve to",
+            config.address,
+            hostname()
         );
     }
 
@@ -304,6 +366,19 @@ pub extern "C" fn kmain() -> ! {
 
     let timer = TIMER.init(Timer::new(peripherals.SYSTMR));
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+
+    // Before anything allocates: mounting the card reads its allocation
+    // table onto the heap, and parsing the settings builds strings.
+    match heap::init(&mut mailbox) {
+        Ok(bytes) => logln!("heap: {} MiB", bytes / (1024 * 1024)),
+        Err(e) => {
+            logln!("heap: {e:?}");
+            halt();
+        }
+    }
+
+    let (mut card, credentials) = read_settings(&mut mailbox, timer);
+    logln!("mdns: answering to {}.local", hostname());
 
     if !usb::power_on(&mut mailbox) {
         logln!("USB power-on failed");
@@ -342,8 +417,9 @@ pub extern "C" fn kmain() -> ! {
     // The radio's bring-up is a closure because where its firmware lives
     // is a board's decision and not this crate's -- see `net::Hardware`.
     // It is called at most once, and only if Ethernet did not answer, so a
-    // board with a cable in never pays the card reading below.
-    let mut bring_up_wifi = || join(timer);
+    // board with a cable in never reads the firmware -- and keeps its card,
+    // which the radio would otherwise take the controller from.
+    let mut bring_up_wifi = || join(timer, card.take(), credentials.as_ref());
     let mut hardware = net::Hardware::new().usb(dwc2).wifi(&mut bring_up_wifi);
     let Some(interface) = net::discover(&mut hardware, timer, mac, &net::Config::default()) else {
         halt();
@@ -493,17 +569,94 @@ fn run<S: FnOnce(Spawner)>(driver: ch::Device<'static, MTU>, spawn_interface: S)
     });
 }
 
+/// Mounts the card and reads [`SETTINGS_FILE`], setting [`HOSTNAME`] and
+/// returning the mounted card and the Wi-Fi credentials, if any.
+///
+/// Nothing here is fatal. No card, no file or a bad value each leave the
+/// board on its defaults with a line saying why, because the policy for a
+/// malformed settings file is the application's, and for an example whose
+/// point is the responder, booting on defaults is the useful one.
+fn read_settings(
+    mailbox: &mut Mailbox,
+    timer: &'static Timer,
+) -> (Option<Card>, Option<Credentials>) {
+    let peripherals = unsafe { pac::Peripherals::steal() };
+    let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, mailbox, timer) {
+        Ok(sd) => sd,
+        Err(e) => {
+            logln!("settings: no SD card ({e:?}); using defaults");
+            return (None, None);
+        }
+    };
+    let mut card = match storage::mount(SdBlockDevice::new(sd, timer)) {
+        Ok(card) => card,
+        Err(e) => {
+            logln!("settings: {e}; using defaults");
+            return (None, None);
+        }
+    };
+
+    let loaded = match config::load::<Settings, _>(&mut card, SETTINGS_FILE) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            logln!("settings: {e}; using defaults");
+            return (Some(card), None);
+        }
+    };
+    let Some(text) = loaded.text else {
+        logln!("settings: no {SETTINGS_FILE} on the card; using defaults");
+        return (Some(card), None);
+    };
+    for key in &loaded.parsed.unknown {
+        logln!("settings: {SETTINGS_FILE}: ignoring unknown key `{key}`");
+    }
+
+    let settings = loaded.parsed.settings;
+    match settings.hostname() {
+        Ok(Some(name)) => {
+            // Leaked once, at boot: the name lives as long as the program,
+            // and `mdns::run` wants a `&'static str`.
+            let name: &'static str = String::from(name).leak();
+            critical_section::with(|cs| HOSTNAME.borrow(cs).set(name));
+        }
+        Ok(None) => {}
+        Err(problem) => logln!(
+            "settings: {}; answering to {DEFAULT_HOSTNAME}",
+            problem.report(SETTINGS_FILE, &text)
+        ),
+    }
+    let credentials = settings.credentials().unwrap_or_else(|problem| {
+        logln!(
+            "settings: {}; no Wi-Fi",
+            problem.report(SETTINGS_FILE, &text)
+        );
+        None
+    });
+    (Some(card), credentials)
+}
+
 /// Brings the radio up the way a Pi has to: the firmware, nvram and
 /// regulatory blob off the card, then a WPA2 join with the credentials
-/// beside them. `None` at the first step that does not work, having said
-/// which.
+/// from the settings. `None` at the first step that does not work, having
+/// said which.
 ///
 /// This is what `net::Hardware::wifi` takes, and the reason it takes a
 /// closure rather than doing it: every line below is a board's own choice
 /// — where the files live, what they are called, how the credentials are
 /// spelled — and a crate that decided them would be deciding for boards
 /// that keep their firmware somewhere else entirely.
-fn join(timer: &Timer) -> Option<Wifi> {
+fn join(timer: &Timer, card: Option<Card>, credentials: Option<&Credentials>) -> Option<Wifi> {
+    // Checked first, because without them nothing below is worth doing --
+    // and doing it gives the card slot away for nothing.
+    let Some(credentials) = credentials else {
+        logln!("wifi: no [wifi] table in {SETTINGS_FILE}; nothing to join");
+        return None;
+    };
+    let Some(mut card) = card else {
+        logln!("wifi: no card to read firmware from");
+        return None;
+    };
+
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
@@ -522,27 +675,30 @@ fn join(timer: &Timer) -> Option<Wifi> {
         return None;
     };
 
-    // The card next, and only once: the Pi has one EMMC controller and
-    // `Sdio::init` re-muxes it onto the wireless pins, so every file the
-    // radio needs has to be in RAM before it starts — and the card slot is
-    // gone for the rest of the boot once it has.
-    let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, timer) {
-        Ok(sd) => sd,
-        Err(e) => {
-            logln!("wifi: no SD card to read firmware from: {e:?}");
-            return None;
-        }
+    // Every file the radio needs, into RAM, and then the card goes: the Pi
+    // has one EMMC controller and `Sdio::init` re-muxes it onto the
+    // wireless pins, so the card slot is gone for the rest of the boot.
+    let mut read = |name: &str| -> Option<Vec<u8>> {
+        let path = format!("{WIFI_DIR}/{subdir}/{name}");
+        let result = card.open(&path).and_then(|file| card.read_all(&file));
+        result
+            .inspect_err(|e| logln!("wifi: reading {path} off the card failed: {e}"))
+            .ok()
     };
-    let (fw_len, nv_len, clm_len, cfg_len) = match load_files(sd, subdir, timer) {
-        Ok(lengths) => lengths,
-        Err(e) => {
-            logln!("wifi: reading {WIFI_DIR}/{subdir}/ off the card failed: {e:?}");
-            return None;
-        }
-    };
-    logln!("wifi: {WIFI_DIR}/{subdir}/ — firmware {fw_len} bytes, nvram {nv_len}, clm {clm_len}");
+    let firmware = read(FIRMWARE_FILE)?;
+    let nvram = read(NVRAM_FILE)?;
+    let clm = read(CLM_FILE)?;
+    logln!(
+        "wifi: {WIFI_DIR}/{subdir}/ — firmware {} bytes, nvram {}, clm {}",
+        firmware.len(),
+        nvram.len(),
+        clm.len()
+    );
+    // Dropped rather than unmounted: nothing was written, so there is
+    // nothing to sync, and what matters is that the SD driver inside it is
+    // gone before the controller is handed to SDIO.
+    drop(card);
 
-    let peripherals = unsafe { pac::Peripherals::steal() };
     let mut sdio = match Sdio::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, timer) {
         Ok(sdio) => sdio,
         Err(e) => {
@@ -571,10 +727,7 @@ fn join(timer: &Timer) -> Option<Wifi> {
         }
     }
 
-    // Safety: `load_files` has finished writing these; read-only now.
-    let firmware = &unsafe { &*addr_of!(FW_BUF) }[..fw_len];
-    let nvram = &unsafe { &*addr_of!(NV_BUF) }[..nv_len];
-    if let Err(e) = sdio.load_firmware(firmware, nvram, timer) {
+    if let Err(e) = sdio.load_firmware(&firmware, &nvram, timer) {
         logln!("wifi: firmware load failed: {e:?}");
         return None;
     }
@@ -589,8 +742,7 @@ fn join(timer: &Timer) -> Option<Wifi> {
 
     // The Cypress firmware will not scan or join until the regulatory
     // blob is loaded.
-    let clm = &unsafe { &*addr_of!(CLM_BUF) }[..clm_len];
-    if let Err(e) = wifi.load_clm(clm, timer) {
+    if let Err(e) = wifi.load_clm(&clm, timer) {
         logln!("wifi: CLM load failed: {e:?}");
         return None;
     }
@@ -612,13 +764,9 @@ fn join(timer: &Timer) -> Option<Wifi> {
     // Ethernet counterpart and applied where Linux applies it, rather
     // than an iovar poked in from an example on the strength of a name.
 
-    let config = &unsafe { &*addr_of!(CFG_BUF) }[..cfg_len];
-    let Some((ssid, passphrase)) = parse_config(config) else {
-        logln!("wifi: {WIFI_DIR}/{CONFIG_FILE} is missing or malformed; nothing to join");
-        return None;
-    };
+    let ssid = credentials.ssid.as_str();
     logln!("wifi: joining {ssid:?}...");
-    match wifi.join_wpa2(ssid, passphrase, timer) {
+    match wifi.join_wpa2(ssid, &credentials.passphrase, timer) {
         Ok(bssid) => {
             logln!(
                 "wifi: associated with {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -679,85 +827,4 @@ fn join(timer: &Timer) -> Option<Wifi> {
             None
         }
     }
-}
-
-/// A fixed timestamp for `embedded-sdmmc` (only used for file mtimes on
-/// writes, which this read-only path never does).
-struct FixedTime;
-
-impl TimeSource for FixedTime {
-    fn get_timestamp(&self) -> Timestamp {
-        Timestamp {
-            year_since_1970: 56,
-            zero_indexed_month: 0,
-            zero_indexed_day: 0,
-            hours: 0,
-            minutes: 0,
-            seconds: 0,
-        }
-    }
-}
-
-/// Mounts the boot partition and reads the firmware, nvram, CLM blob and
-/// credentials into the static buffers, returning their lengths. Consumes
-/// the SD driver, and with it the EMMC controller the radio is about to
-/// want.
-fn load_files(
-    sd: Sd,
-    subdir: &str,
-    timer: &Timer,
-) -> Result<(usize, usize, usize, usize), embedded_sdmmc::Error<SdCardError>> {
-    let volume_mgr = VolumeManager::new(SdCard::new(sd, timer), FixedTime);
-    let volume = volume_mgr.open_volume(VolumeIdx(0))?;
-    let root = volume.open_root_dir()?;
-    // Two bindings rather than one chained expression: the intermediate
-    // `Directory` borrows the volume manager, so a temporary would be
-    // dropped at the end of the statement while `wifi` still holds it.
-    let wifi_root = root.open_dir(WIFI_DIR)?;
-    let wifi = wifi_root.open_dir(subdir)?;
-
-    // Safety: single-threaded bare-metal; these buffers are touched only
-    // here and, after this returns, read-only in `join`.
-    let fw_len = read_file(&wifi, FIRMWARE_FILE, unsafe { &mut *addr_of_mut!(FW_BUF) })?;
-    let nv_len = read_file(&wifi, NVRAM_FILE, unsafe { &mut *addr_of_mut!(NV_BUF) })?;
-    let clm_len = read_file(&wifi, CLM_FILE, unsafe { &mut *addr_of_mut!(CLM_BUF) })?;
-    let cfg_len = read_file(&root, CONFIG_FILE, unsafe { &mut *addr_of_mut!(CFG_BUF) })?;
-    Ok((fw_len, nv_len, clm_len, cfg_len))
-}
-
-/// Reads the whole of `name` into `buf`, returning the byte count (or
-/// `buf.len()` if the file is larger).
-fn read_file<D, T, const A: usize, const B: usize, const C: usize>(
-    dir: &embedded_sdmmc::Directory<D, T, A, B, C>,
-    name: &str,
-    buf: &mut [u8],
-) -> Result<usize, embedded_sdmmc::Error<D::Error>>
-where
-    D: embedded_sdmmc::BlockDevice,
-    T: TimeSource,
-{
-    let file = dir.open_file_in_dir(name, Mode::ReadOnly)?;
-    let mut total = 0;
-    while !file.is_eof() && total < buf.len() {
-        let n = file.read(&mut buf[total..])?;
-        if n == 0 {
-            break;
-        }
-        total += n;
-    }
-    Ok(total)
-}
-
-/// Splits the credentials file — SSID on the first line, passphrase on the
-/// second — trimming end-of-line whitespace. `None` unless both lines are
-/// present, non-empty and valid UTF-8.
-fn parse_config(bytes: &[u8]) -> Option<(&str, &str)> {
-    let text = core::str::from_utf8(bytes).ok()?;
-    let mut lines = text.lines();
-    let ssid = lines.next()?.trim_end();
-    let passphrase = lines.next()?.trim_end();
-    if ssid.is_empty() || passphrase.is_empty() {
-        return None;
-    }
-    Some((ssid, passphrase))
 }

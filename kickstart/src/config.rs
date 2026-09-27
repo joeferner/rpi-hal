@@ -120,6 +120,92 @@ pub fn parse<C: DeserializeOwned>(text: &[u8]) -> Result<Parsed<C>, Problem> {
     Ok(Parsed { settings, unknown })
 }
 
+/// What [`load`] read off the card.
+#[cfg(feature = "storage")]
+#[derive(Debug)]
+pub struct Loaded<C> {
+    /// The settings, and the keys the schema did not name.
+    pub parsed: Parsed<C>,
+    /// The file as it was on the card, or `None` if there was no file and
+    /// the settings are the schema's defaults.
+    ///
+    /// Kept because a [`Problem`] found after loading — by a check in
+    /// [`value`] — needs the text back to say which line it is on.
+    pub text: Option<Vec<u8>>,
+}
+
+/// Reads and parses the settings file at `path` on `volume`.
+///
+/// **Absent is a state.** A missing file parses as empty text, so a
+/// schema with `#[serde(default)]`s boots on its defaults, and
+/// [`Loaded::text`] is `None` so the caller can say so. A file that exists
+/// and does not parse is an [`LoadError::Invalid`], and what to do about
+/// it — halt, or boot on defaults — is the caller's decision.
+///
+/// `path` is `/`-separated and matched case-insensitively against long
+/// and 8.3 names alike, so `kickstart.toml` finds the file whichever
+/// machine wrote the card.
+#[cfg(feature = "storage")]
+pub fn load<C, D>(
+    volume: &mut crate::storage::Volume<D>,
+    path: &str,
+) -> Result<Loaded<C>, LoadError<D::Error>>
+where
+    C: DeserializeOwned,
+    D: resident_fat::BlockDevice,
+{
+    let text = match volume.open(path) {
+        Ok(file) => Some(volume.read_all(&file).map_err(LoadError::Storage)?),
+        Err(resident_fat::Error::NotFound { .. }) => None,
+        Err(error) => return Err(LoadError::Storage(error)),
+    };
+    match parse(text.as_deref().unwrap_or_default()) {
+        Ok(parsed) => Ok(Loaded { parsed, text }),
+        Err(problem) => Err(LoadError::Invalid {
+            path: path.to_string(),
+            text: text.unwrap_or_default(),
+            problem,
+        }),
+    }
+}
+
+/// Why [`load`] produced no settings.
+#[cfg(feature = "storage")]
+#[derive(Debug)]
+pub enum LoadError<E> {
+    /// The card could not be read.
+    Storage(resident_fat::Error<E>),
+    /// The file was read and is not valid for the schema.
+    ///
+    /// Carries the path and the text so that printing it gives the
+    /// located form, `kickstart.toml:3:12: …`, with nothing else to keep
+    /// hold of.
+    Invalid {
+        /// The path the file was loaded from, as given to [`load`].
+        path: String,
+        /// The file's contents, which the problem's position is in.
+        text: Vec<u8>,
+        /// What is wrong, and where.
+        problem: Problem,
+    },
+}
+
+/// One line, for the console: the located problem, or the path and the
+/// storage error.
+#[cfg(feature = "storage")]
+impl<E: fmt::Debug> fmt::Display for LoadError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadError::Storage(error) => write!(f, "{error}"),
+            LoadError::Invalid {
+                path,
+                text,
+                problem,
+            } => write!(f, "{}", problem.report(path, text)),
+        }
+    }
+}
+
 /// Something wrong with the file, and where.
 ///
 /// Carries a byte range rather than a line and column, because the checks
@@ -516,6 +602,41 @@ pub mod value {
         }
     }
 
+    /// Longest SSID 802.11 allows, in bytes.
+    const SSID_MAX: usize = 32;
+
+    /// A Wi-Fi network name: 1 to 32 bytes, with no control characters.
+    ///
+    /// 802.11 treats an SSID as opaque bytes, so this is narrower than the
+    /// standard allows. It has to be: the radio driver takes a `&str`, and
+    /// a name that cannot be written in a text file is not one anybody
+    /// could have put in this one.
+    pub fn ssid(v: &str) -> Result<&str, Invalid> {
+        if v.is_empty() || v.len() > SSID_MAX || v.chars().any(char::is_control) {
+            return Err(Invalid::expected(
+                "a network name of 1 to 32 bytes, with no control characters",
+            ));
+        }
+        Ok(v)
+    }
+
+    /// A WPA2-PSK passphrase: 8 to 63 characters of printable ASCII,
+    /// spaces included, which is what 802.11i defines one to be.
+    ///
+    /// Refused here rather than at the join because of what a bad one
+    /// looks like there: the radio associates, the handshake fails, and
+    /// the console says only that the join did not complete. Everything
+    /// this rejects is a passphrase no access point could have been set
+    /// to.
+    pub fn passphrase(v: &str) -> Result<&str, Invalid> {
+        if !(8..=63).contains(&v.len()) || !v.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+            return Err(Invalid::expected(
+                "a WPA2 passphrase of 8 to 63 printable ASCII characters",
+            ));
+        }
+        Ok(v)
+    }
+
     /// `v` if it is non-empty printable ASCII with no spaces — the rule
     /// [`host`] and [`word`] share for different reasons.
     fn graphic(v: &str) -> Option<&str> {
@@ -794,6 +915,60 @@ presence_uv = 350000
         for bad in ["", "a", "@b", "a@", "a@b,", "a b@c"] {
             assert!(value::address(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// The template in the repository has to parse, and pass the checks
+    /// the `mdns` example runs, or the first thing somebody copies onto a
+    /// card is a file the board refuses.
+    #[test]
+    fn the_example_settings_file_is_valid() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Example {
+            hostname: Option<Spanned<String>>,
+            wifi: Option<Wifi>,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        struct Wifi {
+            ssid: Spanned<String>,
+            passphrase: Spanned<String>,
+        }
+
+        let text = include_bytes!("../kickstart.toml.example");
+        let parsed = parse::<Example>(text).unwrap();
+        assert!(parsed.unknown.is_empty(), "{:?}", parsed.unknown);
+        let example = parsed.settings;
+        assert_eq!(
+            value::label(example.hostname.unwrap().as_ref()),
+            Ok("kickstart")
+        );
+        let wifi = example.wifi.unwrap();
+        assert!(value::ssid(wifi.ssid.as_ref()).is_ok());
+        assert!(value::passphrase(wifi.passphrase.as_ref()).is_ok());
+    }
+
+    #[test]
+    fn ssid() {
+        assert_eq!(value::ssid("home"), Ok("home"));
+        assert_eq!(value::ssid("Café Wi-Fi"), Ok("Café Wi-Fi"));
+        assert_eq!(value::ssid(&"a".repeat(32)), Ok("a".repeat(32).as_str()));
+        for bad in ["", "a\tb", "a\nb"] {
+            assert!(value::ssid(bad).is_err(), "{bad:?}");
+        }
+        assert!(value::ssid(&"a".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn passphrase() {
+        assert_eq!(value::passphrase("12345678"), Ok("12345678"));
+        assert_eq!(
+            value::passphrase("p@ss #word \"q\" \\b"),
+            Ok("p@ss #word \"q\" \\b")
+        );
+        assert!(value::passphrase(&"a".repeat(63)).is_ok());
+        for bad in ["", "1234567", "tab\there!", "café1234"] {
+            assert!(value::passphrase(bad).is_err(), "{bad:?}");
+        }
+        assert!(value::passphrase(&"a".repeat(64)).is_err());
     }
 
     #[test]

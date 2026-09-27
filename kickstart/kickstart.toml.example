@@ -1,0 +1,32 @@
+# Settings for rpi-kickstart's examples.
+#
+# Copy this to `kickstart.toml` at the root of the SD card's boot
+# partition, beside `config.txt`, and fill it in. The copy is gitignored
+# here because it holds a Wi-Fi passphrase.
+#
+# Everything is optional, and so is the file. A key an example does not
+# know is reported on the console and skipped; a value that is present but
+# wrong is reported with its line and column, and that one setting falls
+# back to its default.
+#
+# Strings are quoted, so a `#` or a space inside one is part of the value,
+# not a comment. Inside "double quotes" a `\` starts an escape (`\"`, `\\`);
+# a passphrase full of backslashes is easier in 'single quotes', which
+# take everything literally.
+
+# The name the board answers to over mDNS, as `<hostname>.local`: letters,
+# digits and hyphens, up to 63, not starting or ending with a hyphen. A
+# trailing `.local` is accepted and dropped. Default: "kickstart".
+hostname = "kickstart"
+
+# The network to join when there is no Ethernet: a board with no Ethernet
+# chip (Zero W), or a 3B/3B+ with no cable in. Leave the table out and such
+# a board simply has no network.
+#
+# The radio also needs its firmware on the card, under wifi/43430/ (3B,
+# Zero W) or wifi/43455/ (3B+) -- see examples/mdns.rs for the files.
+[wifi]
+# 1 to 32 bytes.
+ssid = "your network"
+# WPA2: 8 to 63 printable ASCII characters, spaces allowed.
+passphrase = "your passphrase"

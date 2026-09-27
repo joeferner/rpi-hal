@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -146,6 +146,15 @@ serde = { version = "1.0", default-features = false, features = [
 # derive can only ignore one or refuse it.
 serde_ignored = { version = "0.1.14", default-features = false, optional = true }
 
+# The filesystem behind `storage`. `mbr` is what reads a partition table,
+# and a Pi's card always has one. The version has to be the one
+# `rpi-hal`'s `SdBlockDevice` implements the trait for: with two in the
+# graph, the adapter implements the other one's `BlockDevice` and
+# `storage::mount` refuses it with an error that names neither version.
+resident-fat = { version = "0.1.0", default-features = false, features = [
+    "mbr",
+], optional = true }
+
 # Bare-metal only, so that `cargo test` can build this crate for the host:
 # the config parser is pure, and its tests have nowhere else to run. None of
 # these compile for an OS target, and none of them are needed there -- they
@@ -164,10 +173,12 @@ serde_ignored = { version = "0.1.14", default-features = false, optional = true 
 # examples are written for; a consumer selects its own chip and is not
 # affected by this line.
 #
-# `embedded-sdmmc` is the `mdns` example's: the Wi-Fi firmware blobs come
-# off the card's FAT partition, and `rpi_hal::sd`'s `BlockDevice` adapter
-# is behind that feature.
-rpi-hal = { version = "0.8.0", features = ["bcm2837", "embedded-sdmmc"] }
+# Not `resident-fat`, although the `mdns` example mounts the card through
+# `rpi_hal::sd::SdBlockDevice`: `storage` forwards that feature, so it is on
+# exactly when the example's own features are. Named here it would be on
+# for every example, and `resident-fat` needs an allocator -- so `hello`,
+# which has none, would stop linking.
+rpi-hal = { version = "0.8.0", features = ["bcm2837"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -207,13 +218,6 @@ rpi-hal-embassy = { version = "0.8.0", features = [
     "wifi",
     "irq-dispatch",
 ] }
-# How the `mdns` example reads the Wi-Fi firmware, nvram, regulatory blob
-# and credentials off the card's FAT partition before handing the EMMC
-# controller to the SDIO driver. A dev edge and not a library one, which
-# is the whole argument in `net::Hardware::wifi`: where those files live
-# is the board's decision, so the crate takes the bring-up as a closure
-# and an example is what supplies one.
-embedded-sdmmc = { version = "0.9.0", default-features = false }
 embassy-executor = "0.10.0"
 # `dhcpv4` is an application choice, which is exactly why it is on this
 # side; the library's own `embassy-net` features union in with it.
@@ -288,6 +292,27 @@ heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:embedded-alloc"]
 # Needs an allocator, which is the application's: `heap` is one, and a
 # board with its own is equally served.
 config = ["dep:toml", "dep:serde", "dep:serde_ignored"]
+
+# Mounting the card's FAT volume (src/storage.rs), and with `config`,
+# `config::load` to read a settings file off it.
+#
+# Generic over `resident-fat`'s `BlockDevice`, so it needs no chip and
+# nothing from `rpi-hal`: which controller the card is on is the board's
+# choice, and it hands `mount` the device.
+#
+# Implies `console` for the reason `mdns` does. Where the volume was found
+# and what it costs in RAM are the lines that explain a board that boots
+# without its settings, and the only place they can go.
+#
+# Needs an allocator, like `config`: `resident-fat` keeps the allocation
+# table and directories on the heap.
+#
+# `rpi-hal?/resident-fat` turns on the HAL's `SdBlockDevice`, the adapter
+# from its SD driver to the trait `mount` takes, whenever `rpi-hal` is in
+# the build anyway. `?` for the reason the chip features use it: `storage`
+# alone must not pull in a HAL, since the card may be behind some other
+# driver entirely.
+storage = ["dep:resident-fat", "rpi-hal?/resident-fat", "console"]
 
 # An mDNS responder for one name (src/mdns.rs).
 #
@@ -390,7 +415,20 @@ name = "mdns"
 # Both interfaces, because the point of this example is that one image
 # runs on a 3B, a 3B+ and a Zero W -- the first two on Ethernet, the last
 # on the radio, and a 3B on either depending on whether a cable is in.
-required-features = ["mdns", "ethernet", "wifi", "console", "bcm2837"]
+#
+# `heap`, `storage` and `config` because its name and Wi-Fi credentials
+# come from `kickstart.toml` on the card, read through the crate's own
+# mount and settings loader.
+required-features = [
+    "mdns",
+    "ethernet",
+    "wifi",
+    "console",
+    "heap",
+    "storage",
+    "config",
+    "bcm2837",
+]
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding

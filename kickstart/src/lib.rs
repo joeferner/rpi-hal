@@ -70,7 +70,11 @@ pub mod mdns;
 /// questions and both are deadlines.
 #[cfg(feature = "net")]
 pub mod net;
+/// Mounting the card's FAT volume — see the module's own documentation
+/// for what it costs in RAM and why files are dated 1980 for now.
+#[cfg(feature = "storage")]
+pub mod storage;
 
 // The rest of the modules this crate is being assembled from -- clock,
-// storage, site, web, metrics, ota -- arrive one at a time, each behind
+// site, web, metrics, ota -- arrive one at a time, each behind
 // the feature named for it.

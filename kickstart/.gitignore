@@ -1,1 +1,3 @@
 target/
+# The filled-in copy of kickstart.toml.example: it holds a Wi-Fi passphrase.
+kickstart.toml

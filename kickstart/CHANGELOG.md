@@ -8,6 +8,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Mounting the card**, behind a `storage` feature: `storage::mount`
+  finds the first FAT partition, whichever slot it is in (or a bare
+  volume with no table), mounts it with `resident-fat` and logs where it
+  was and what its allocation table costs in RAM. Generic over
+  `resident-fat`'s `BlockDevice`, so the controller is the board's; the
+  feature forwards `rpi-hal?/resident-fat` so the HAL's `SdBlockDevice`
+  is there when the HAL is.
+
+  With `config` as well, `config::load` reads a settings file off the
+  volume. A missing file parses as empty — `Loaded::text` is `None` so
+  the caller can say so — and a file that does not parse is a
+  `LoadError::Invalid` that prints as `kickstart.toml:3:12: …`.
+
+- **`value::ssid` and `value::passphrase`**, for a `[wifi]` table.
+
+- **`kickstart.toml.example`**, the settings the `mdns` example reads.
+  That example now mounts the card once at boot through `storage`, takes
+  its hostname and Wi-Fi credentials from `kickstart.toml` (replacing
+  `WIFI.CFG`), and reads the radio's firmware off the same mount — onto
+  the heap, rather than into a 1 MiB static buffer. `embedded-sdmmc` is no
+  longer a dependency.
+
 - **Reading a settings file**, behind a `config` feature. The file is TOML
   and the schema is the board's own `#[derive(Deserialize)]` struct, so
   there is no key table and no trait to implement. `config::parse` takes
