@@ -17,39 +17,46 @@
 // the honest shape: `mdns::run` is three arguments and a spawn, and
 // everything above it is what a board has to have working first.
 //
-// Three pieces of plumbing are easy to miss and each produces the same
+// Two pieces of plumbing are easy to miss and each produces the same
 // silence -- a name that does not resolve, with nothing reported:
 //
 //   * `EthernetConfig::all_multicast`, below. The chip drops multicast
 //     before the host sees it, and every mDNS query and announcement is
 //     multicast. Nothing else a board does notices, because DHCP is
 //     broadcast -- which is why it takes a responder to surface it.
-//   * the `allmulti` iovar, which is the radio's version of the same
-//     thing. See `join`.
 //   * `Stack::join_multicast_group`, which `mdns::run` does itself.
 //
+// The radio has no counterpart to the first of those here, and `join`
+// says why not. Queries over Wi-Fi may therefore go unanswered even
+// though the board announces itself and is reachable; that belongs in
+// `rpi-hal`'s Wi-Fi driver rather than in this file.
+//
 // Wi-Fi needs four files on the boot partition, under 8.3 names. Three
-// are vendor blobs, in a `wifi` directory -- copied once and never looked
-// at again:
+// are vendor blobs, in a `wifi` directory under a subdirectory named for
+// the radio -- copied once and never looked at again. A 3B or a Zero W
+// wants `wifi/43430`:
 //
-//   wifi/FW.BIN    -- Broadcom's brcmfmac43430-sdio.bin
-//   wifi/NVRAM.TXT -- the matching nvram (brcmfmac43430-sdio.txt)
-//   wifi/CLM.DAT   -- the CLM regulatory blob (cyfmac43430-sdio.clm_blob)
+//   FW.BIN    -- Broadcom's brcmfmac43430-sdio.bin
+//   NVRAM.TXT -- the matching nvram (brcmfmac43430-sdio.txt)
+//   CLM.DAT   -- the CLM regulatory blob (cyfmac43430-sdio.clm_blob)
 //
-// and the fourth is the one a person edits, so it sits at the root beside
-// `config.txt` with the board's other settings:
+// and a 3B+ or a Pi 4 `wifi/43455`, with the 43455 files of the same
+// names -- including the board-specific nvram
+// (brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt for a 3B+). A
+// directory per radio is what lets one card boot any of them, since each
+// chip refuses the other's image.
 //
-//   WIFI.CFG       -- two lines: the SSID, then the WPA2 passphrase
+// The fourth file is the one a person edits, and is not per-radio, so it
+// sits at the root beside `config.txt` with the board's other settings:
 //
-// A board missing any of them simply has no Wi-Fi to fall back to, and the
-// walk reports that rather than failing.
+//   WIFI.CFG  -- two lines: the SSID, then the WPA2 passphrase
 //
-// **The radio has to be a BCM43430** -- a Pi 3B or a Zero W. `rpi-hal`'s
-// SDIO driver walks the backplane and remaps the RAM banks in a way that
-// is specific to that chip, and a Pi 3B+ or Zero 2 W carries a 43455/43436
-// instead. On one of those this falls through to the radio and fails
-// there, which is the honest outcome: the fallback works and there is no
-// driver on the other side of it.
+// A board missing any of them simply has no Wi-Fi to fall back to, and
+// the walk reports that rather than failing.
+//
+// A Zero 2 W's 43436 is a third radio again and `rpi-hal` does not drive
+// it, so that board reaches Wi-Fi and stops -- which is the honest
+// outcome: the fallback works and there is no driver on the far side.
 //
 // Verify it from another machine on the same link:
 //
@@ -115,26 +122,76 @@ const TX_QUEUE: usize = 4;
 /// spare so a failure here is not the first thing suspected.
 const SOCKETS: usize = 2;
 
-/// Directory on the FAT boot partition holding the Wi-Fi firmware files.
+/// Directory on the FAT boot partition holding the Wi-Fi firmware files,
+/// one subdirectory per radio — see [`radio`].
 const WIFI_DIR: &str = "WIFI";
-/// Firmware image, within [`WIFI_DIR`] (8.3 name).
+/// Firmware image, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const FIRMWARE_FILE: &str = "FW.BIN";
-/// Raw nvram config, within [`WIFI_DIR`] (8.3 name).
+/// Raw nvram config, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const NVRAM_FILE: &str = "NVRAM.TXT";
-/// CLM (regulatory) blob, within [`WIFI_DIR`] (8.3 name).
+/// CLM (regulatory) blob, within a [`WIFI_DIR`] subdirectory (8.3 name).
 const CLM_FILE: &str = "CLM.DAT";
 /// Network credentials: the SSID on the first line and the WPA2
 /// passphrase on the second (8.3 name).
 ///
-/// At the **root** of the boot partition rather than in [`WIFI_DIR`],
+/// At the **root** of the boot partition rather than under [`WIFI_DIR`],
 /// which is a distinction worth keeping: the three files above are vendor
-/// blobs that are copied once and never looked at again, while this is the
-/// one a person edits. It sits beside `config.txt`, where a board's other
-/// settings already live.
+/// blobs that are copied once and never looked at again, and they are
+/// per-radio, while this is the one a person edits and the network a
+/// board joins does not change with its silicon. It sits beside
+/// `config.txt`, where a board's other settings already live.
 const CONFIG_FILE: &str = "WIFI.CFG";
 
-/// Buffer for the firmware image (the 43430's is ~420KB); zeroed BSS.
-static mut FW_BUF: [u8; 512 * 1024] = [0; 512 * 1024];
+/// Which subdirectory of [`WIFI_DIR`] this board's blobs are in, and the
+/// chip id they are for. `None` for a board with no radio `rpi-hal`
+/// drives.
+///
+/// A directory per radio rather than one set of files, so that one card
+/// boots any Pi: a 3B and a 3B+ carry different silicon and each refuses
+/// the other's image. The names are the part numbers the firmware files
+/// are published under, since a directory somebody has to copy files into
+/// should be named the way the files are.
+///
+/// # Why the board and not the chip
+///
+/// Asking the radio what it is would need no table and never go stale,
+/// and it does not work. The chip id is only readable over the backplane,
+/// the backplane only once the one EMMC controller has been muxed off the
+/// card, and the card is where the firmware is — so it would mean
+/// bringing SDIO up, asking, reading the card, and bringing SDIO up a
+/// second time. The radio does not answer `CMD5` on that second pass:
+/// re-asserting an already-high `WL_ON` is not the power cycle it needs
+/// to enumerate again.
+///
+/// So this guesses from the board and [`join`] *verifies* against the
+/// chip id once SDIO is up, before any firmware is written. A wrong entry
+/// below is then one clear line naming both numbers rather than a
+/// download that fails several steps later for no visible reason.
+fn radio(board_revision: u32) -> Option<(&'static str, u32)> {
+    // Old-style revision codes are Pi 1s and have no radio at all. Worth
+    // rejecting rather than shifting: the fields below do not exist in
+    // them, so the bits would decode to a board at random.
+    if board_revision & (1 << 23) == 0 {
+        return None;
+    }
+    // Bits 4..11 of a new-style code are the board type.
+    match (board_revision >> 4) & 0xff {
+        // 3B, Zero W.
+        0x08 | 0x0c => Some(("43430", rpi_hal::sdio::BCM43438_CHIP_ID)),
+        // 3B+, 3A+, 4B.
+        0x0d | 0x0e | 0x11 => Some(("43455", rpi_hal::sdio::BCM43455_CHIP_ID)),
+        _ => None,
+    }
+}
+
+/// Buffer for the firmware image; zeroed BSS.
+///
+/// Sized for the largest image this loads rather than for the 43430's
+/// ~400KB, because a file that does not fit is read as far as the buffer
+/// goes and its truncated length reported — so an image short by a
+/// hundred kilobytes downloads, starts, and simply never answers, with
+/// nothing reported anywhere. A 43455's is 643,651 bytes.
+static mut FW_BUF: [u8; 1024 * 1024] = [0; 1024 * 1024];
 /// Buffer for the raw nvram text.
 static mut NV_BUF: [u8; 4096] = [0; 4096];
 /// Buffer for the CLM regulatory blob (~5KB).
@@ -272,7 +329,25 @@ pub extern "C" fn kmain() -> ! {
     let Some(interface) = net::discover(&mut hardware, timer, mac, &net::Config::default()) else {
         halt();
     };
-    logln!("net: using {}", interface.name());
+    // The address as well as the name, because they differ per interface
+    // and the stack is built from this one: the Ethernet chips take the
+    // board address the firmware mailbox reports, while the radio has its
+    // own. A stack built with the wrong one associates, takes a lease,
+    // announces itself — and then answers nothing sent to it, because
+    // every frame addressed to the chip is discarded a layer above as not
+    // ours. Worth one line to be able to compare against what a peer's
+    // ARP table says.
+    let interface_mac = interface.mac();
+    logln!(
+        "net: using {} at {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        interface.name(),
+        interface_mac[0],
+        interface_mac[1],
+        interface_mac[2],
+        interface_mac[3],
+        interface_mac[4],
+        interface_mac[5]
+    );
 
     // From here on the interrupts are live, so nothing above may be
     // blocking on the USB controller or the SDIO bus any more: both
@@ -413,7 +488,22 @@ fn join(timer: &Timer) -> Option<Wifi> {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
-    // The card first, and only once: the Pi has one EMMC controller and
+    // Which blobs this board needs, before anything touches the card —
+    // the mailbox needs no controller, which is exactly why the board and
+    // not the chip answers this. See `radio`.
+    let board_revision = match mailbox.board_revision() {
+        Ok(revision) => revision,
+        Err(e) => {
+            logln!("wifi: board revision read failed: {e:?}");
+            return None;
+        }
+    };
+    let Some((subdir, expected_chip_id)) = radio(board_revision) else {
+        logln!("wifi: board revision {board_revision:#010x} has no radio rpi-hal drives");
+        return None;
+    };
+
+    // The card next, and only once: the Pi has one EMMC controller and
     // `Sdio::init` re-muxes it onto the wireless pins, so every file the
     // radio needs has to be in RAM before it starts — and the card slot is
     // gone for the rest of the boot once it has.
@@ -424,14 +514,14 @@ fn join(timer: &Timer) -> Option<Wifi> {
             return None;
         }
     };
-    let (fw_len, nv_len, clm_len, cfg_len) = match load_files(sd, timer) {
+    let (fw_len, nv_len, clm_len, cfg_len) = match load_files(sd, subdir, timer) {
         Ok(lengths) => lengths,
         Err(e) => {
-            logln!("wifi: reading {WIFI_DIR}/ off the card failed: {e:?}");
+            logln!("wifi: reading {WIFI_DIR}/{subdir}/ off the card failed: {e:?}");
             return None;
         }
     };
-    logln!("wifi: firmware {fw_len} bytes, nvram {nv_len}, clm {clm_len}");
+    logln!("wifi: {WIFI_DIR}/{subdir}/ — firmware {fw_len} bytes, nvram {nv_len}, clm {clm_len}");
 
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut sdio = match Sdio::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, timer) {
@@ -441,6 +531,26 @@ fn join(timer: &Timer) -> Option<Wifi> {
             return None;
         }
     };
+
+    // The check on the guess `radio` made, and a bus liveness check
+    // besides. Giving up rather than warning: the blobs in hand are for
+    // another chip, and the download would either fail obscurely or --
+    // worse -- appear to work.
+    match sdio.chip_id(timer) {
+        Ok(id) if id == expected_chip_id => {}
+        Ok(id) => {
+            logln!(
+                "wifi: chip id {id:#06x}, but board revision {board_revision:#010x} said to \
+                 load {WIFI_DIR}/{subdir}/ (for {expected_chip_id:#06x}) — the board table \
+                 in `radio` is wrong for this Pi"
+            );
+            return None;
+        }
+        Err(e) => {
+            logln!("wifi: chip id read failed: {e:?}");
+            return None;
+        }
+    }
 
     // Safety: `load_files` has finished writing these; read-only now.
     let firmware = &unsafe { &*addr_of!(FW_BUF) }[..fw_len];
@@ -466,19 +576,22 @@ fn join(timer: &Timer) -> Option<Wifi> {
         return None;
     }
 
-    // The radio's version of `EthernetConfig::all_multicast`, and needed
-    // for exactly the same reason: the firmware filters multicast frames
-    // that are not addressed to a group it has been told about, and every
-    // mDNS query arrives at 224.0.0.251. Without it the responder
-    // announces, is heard, and then answers nothing it is asked.
+    // No `allmulti` iovar here, deliberately, and it is worth saying why
+    // rather than leaving its absence to be rediscovered.
     //
-    // Set here rather than in the driver because `rpi-hal`'s Wi-Fi driver
-    // has no multicast surface yet -- an iovar is what there is. A rejoin
-    // does not re-apply it, so a radio that reassociates may come back
-    // deaf to multicast while the link looks healthy.
-    if let Err(e) = wifi.set_iovar_u32("allmulti", 1, timer) {
-        logln!("wifi: could not ask the firmware for all multicast: {e:?}");
-    }
+    // The radio does need something like `EthernetConfig::all_multicast`:
+    // the firmware filters multicast the host has not asked for, and
+    // every mDNS query arrives at 224.0.0.251. But setting
+    // `allmulti` here -- before the join, which is not where Linux sets
+    // it -- left the board receiving broadcast and *no unicast at all*:
+    // 100 pings produced no rise in the driver's receive counter and one
+    // transmit. Whatever it did, it was not what it was reaching for, and
+    // a filter that costs the board every unicast frame is far worse than
+    // a responder that cannot be queried.
+    //
+    // The right home for this is `rpi-hal`'s Wi-Fi driver, alongside its
+    // Ethernet counterpart and applied where Linux applies it, rather
+    // than an iovar poked in from an example on the strength of a name.
 
     let config = &unsafe { &*addr_of!(CFG_BUF) }[..cfg_len];
     let Some((ssid, passphrase)) = parse_config(config) else {
@@ -497,6 +610,34 @@ fn join(timer: &Timer) -> Option<Wifi> {
                 bssid[4],
                 bssid[5]
             );
+
+            // Keep the receiver on, and set it *after* associating
+            // because the firmware resets this on every association.
+            //
+            // The default is `Fast`, which sleeps once a link has been
+            // idle a while and wakes for beacons. A board that answers
+            // rather than asks — a responder, a server — is idle by
+            // definition, and a dozing station gets its broadcast
+            // delivered after the DTIM beacon while the access point
+            // *buffers its unicast*. That reads as a board which takes a
+            // DHCP lease, announces itself, and then cannot be pinged,
+            // with the driver's receive counter still climbing on
+            // broadcast the whole time.
+            //
+            // The giveaway is the latency when it does answer: the first
+            // packet lost, the second a couple of hundred milliseconds,
+            // the third back to normal.
+            // Power save is left at the firmware's default, `Fast`, which
+            // is what `rpi-hal`'s own Wi-Fi examples run at. Turning it
+            // off keeps the receiver on and costs current; it also has to
+            // be re-applied after every association, since the firmware
+            // resets it — so it belongs with the runner's rejoin (see
+            // `rpi_hal_embassy::wifi::Reconnect`) rather than being set
+            // once here and silently lost on the first reconnect.
+            //
+            // What it costs to leave alone is wake-up latency on an idle
+            // board: the first packet after a quiet spell can be dropped
+            // and the second take a couple of hundred milliseconds.
             Some(wifi)
         }
         Err(e) => {
@@ -529,12 +670,17 @@ impl TimeSource for FixedTime {
 /// want.
 fn load_files(
     sd: Sd,
+    subdir: &str,
     timer: &Timer,
 ) -> Result<(usize, usize, usize, usize), embedded_sdmmc::Error<SdCardError>> {
     let volume_mgr = VolumeManager::new(SdCard::new(sd, timer), FixedTime);
     let volume = volume_mgr.open_volume(VolumeIdx(0))?;
     let root = volume.open_root_dir()?;
-    let wifi = root.open_dir(WIFI_DIR)?;
+    // Two bindings rather than one chained expression: the intermediate
+    // `Directory` borrows the volume manager, so a temporary would be
+    // dropped at the end of the statement while `wifi` still holds it.
+    let wifi_root = root.open_dir(WIFI_DIR)?;
+    let wifi = wifi_root.open_dir(subdir)?;
 
     // Safety: single-threaded bare-metal; these buffers are touched only
     // here and, after this returns, read-only in `join`.

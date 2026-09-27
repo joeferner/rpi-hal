@@ -101,11 +101,20 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
 # Pi presents to `embassy-net` -- USB Ethernet, the Wi-Fi adapter -- is
 # this one. Features are additive, so a board on some other medium adds
 # it alongside rather than being excluded by this.
+#
+# `auto-icmp-echo-reply` is what makes the interface answer a ping, and it
+# is here rather than left to the application because of what its absence
+# looks like: a board that takes a DHCP lease, announces itself over mDNS,
+# is reachable by every other means -- and does not answer `ping`. That is
+# the first thing anyone reaches for to check a board is alive, and
+# without this it reports the board as dead. It cost a long debugging
+# session on a board where nothing was wrong.
 embassy-net = { version = "0.9.1", default-features = false, features = [
     "udp",
     "multicast",
     "proto-ipv4",
     "medium-ethernet",
+    "auto-icmp-echo-reply",
 ], optional = true }
 embassy-time = { version = "0.5.1", default-features = false, optional = true }
 # Fixed-capacity `Vec` for building a response without the heap: `mdns`
