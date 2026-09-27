@@ -626,6 +626,37 @@ impl Wifi {
         self.ioctl_set_u32(WLC_SET_PM, mode as u32, timer)
     }
 
+    /// Whether to deliver every multicast frame, rather than only the
+    /// groups the firmware has been given a filter for.
+    ///
+    /// Off by the firmware's default, and the counterpart to
+    /// [`crate::usb::ethernet::Ethernet::set_all_multicast`] — a board
+    /// that runs the same protocols over either interface needs the same
+    /// thing turned on for both.
+    ///
+    /// # What it looks like when it is off
+    ///
+    /// A board that is entirely healthy and quietly deaf to a whole class
+    /// of traffic. Broadcast still arrives, so DHCP takes a lease;
+    /// transmit is unaffected, so an mDNS responder still announces
+    /// itself and fills every cache on the network; and unicast is
+    /// untouched, so the board answers a ping and a direct query. What
+    /// does not arrive is anything sent to a group — so the responder
+    /// answers no question anyone asks it, and `avahi-resolve` keeps
+    /// reporting the name from its cache while it does.
+    ///
+    /// Nothing reports an error at any layer, because nothing failed.
+    ///
+    /// # When to call it
+    ///
+    /// After joining, and again after every re-association: like
+    /// [`Self::set_power_management`], the firmware resets this when it
+    /// associates. A runner that rejoins by itself has to re-apply it or
+    /// the board comes back deaf to multicast on a link that looks fine.
+    pub fn set_all_multicast(&mut self, enabled: bool, timer: &Timer) -> Result<(), Error> {
+        self.set_iovar_u32("allmulti", u32::from(enabled), timer)
+    }
+
     /// Loads the chip's CLM (country/regulatory) blob — the data file the
     /// Cypress firmware needs before it will bring the radio up in a
     /// valid regulatory domain. Without it the interface comes up but
