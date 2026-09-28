@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -127,6 +127,12 @@ embassy-time = { version = "0.5.1", default-features = false, optional = true }
 # `Content` trait for *its* `heapless::String`. With two majors in one
 # graph those are unrelated types, and the error names neither version.
 heapless = { version = "0.8", default-features = false, optional = true }
+# The HTTP server behind `web`. `embassy` for its `embassy-net` socket loop
+# and `embassy-time` timeouts; not `json`, which is the board's to take
+# for its own API routes. 0.19 is what both boards this came from run.
+picoserve = { version = "0.19", default-features = false, features = [
+    "embassy",
+], optional = true }
 
 # The settings file's format, behind `config`, read (`parse`) and written
 # (`display`) by the same crate so that what one end emits the other
@@ -440,6 +446,23 @@ tls = [
 # dependency above for why it is its own feature.
 webpki-roots = ["tls", "dep:webpki-roots"]
 
+# Serving HTTP (src/web.rs): `web::serve`, the socket loop a pool of the
+# board's own tasks runs, and the pieces both boards wrote identically
+# around their routers -- `TextBody`, `StaticFile`, and with `site`,
+# `SiteFiles`, which serves the card's `/WWW` as the router's fallback.
+#
+# No router and no task. The routes are the application, and a task
+# cannot be generic; see the module's documentation.
+#
+# Needs an allocator: each task's buffers are sized by the board, at run
+# time, and come off the heap once when it starts.
+web = [
+    "dep:picoserve",
+    "dep:embassy-net",
+    "embassy-net/tcp",
+    "dep:embassy-time",
+]
+
 # An mDNS responder for one name (src/mdns.rs).
 #
 # Needs no chip and nothing from `rpi-hal`: it is written against
@@ -583,7 +606,7 @@ required-features = [
 ]
 
 # The card: the settings file read and written back, and `/WWW` loaded and
-# listed, on a board reached over Ethernet at its leased address.
+# served over HTTP, on a board reached over Ethernet at its leased address.
 [[example]]
 name = "site"
 required-features = [
@@ -593,6 +616,7 @@ required-features = [
     "storage",
     "config",
     "site",
+    "web",
     "bcm2837",
 ]
 

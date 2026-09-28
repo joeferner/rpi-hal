@@ -2,12 +2,14 @@
 #![no_main]
 
 // The card: mount it, read `kickstart.toml`, load the web assets under
-// `/WWW` into RAM, and come up on Ethernet at the address the lease gives.
+// `/WWW` into RAM, come up on Ethernet at the address the lease gives, and
+// serve them there over HTTP.
 //
 // What it shows is the storage side of a board -- `storage::mount`,
-// `config::load` and `config::save`, `site::load`. The assets are loaded
-// and listed but not served: serving is the web module's, which does not
-// exist yet, and it will be reached at the address on the `DHCP:` line.
+// `config::load` and `config::save`, `site::load` -- and the web module's
+// socket loop with `SiteFiles` as the whole router: `http://<address>/`
+// is `/WWW/index.html`, any other path is the file of that name, and a
+// path the card does not have is a 404.
 //
 // On the card, beside `config.txt`:
 //
@@ -16,7 +18,8 @@
 //                     check it and write it back, since nothing here
 //                     answers to a name -- and reports any key the schema
 //                     does not know.
-//   www/           -- optional: the web assets, one console line each.
+//   www/           -- optional: the web assets, one console line each. With
+//                     none, every path is a 404.
 //
 // A `hostname` written as `name.local` is accepted, and the file is then
 // saved back through `config::save` with the bare `name` -- which is how
@@ -36,9 +39,10 @@ extern crate alloc;
 use alloc::string::String;
 
 use common::settings::{self, Card, Settings};
+use picoserve::Router;
 use rpi_kickstart::config::{self, Spanned};
 use rpi_kickstart::site::{self, Site};
-use rpi_kickstart::{logln, net};
+use rpi_kickstart::{logln, net, web};
 use static_cell::StaticCell;
 
 mod common;
@@ -83,7 +87,21 @@ pub extern "C" fn kmain() -> ! {
     let mut hardware = net::Hardware::new().usb(usb.dwc2);
     let interface = common::discover(&mut hardware, &board, &usb);
 
-    common::start(&board, &usb, interface, |_, _| {})
+    common::start(&board, &usb, interface, |spawner, stack| {
+        for id in 0..common::WEB_POOL {
+            spawner.spawn(web_task(id, stack, site).unwrap());
+        }
+    })
+}
+
+// A task of the example's own, because a task cannot be generic -- and the
+// router is the example's too, since routing is what differs from board to
+// board. This one has no routes at all: `SiteFiles` is the fallback every
+// board's router is built over, and here it is the whole of it.
+#[embassy_executor::task(pool_size = common::WEB_POOL)]
+async fn web_task(id: usize, stack: embassy_net::Stack<'static>, site: &'static Site) -> ! {
+    let app = Router::from_service(web::SiteFiles(site));
+    web::serve(id, stack, &app, &web::ServeConfig::DEFAULT).await
 }
 
 /// When the settings file was last written: dated by the clock of the

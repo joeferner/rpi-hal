@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Serving HTTP**, behind a `web` feature. `web::serve(id, stack,
+  &router, &config)` is the `picoserve` socket loop, run by a pool of the
+  board's own tasks over the board's own router; `web::ServeConfig` carries
+  the port, the three buffer sizes and `picoserve`'s settings, since boards
+  disagree about the numbers, with `ServeConfig::DEFAULT` and
+  `web::TIMEOUTS`. `web::TextBody` and `web::StaticFile` are bodies with a
+  content type of their own, and with `site`, `web::SiteFiles(&site)`
+  serves the card's `/WWW` as the router's fallback. Moved from the water
+  sensor and the weather station, which had written all of it
+  identically. The `site` example now serves what it loads.
+
 - **The `[ntp]` and `[wifi]` tables, written once.** `config::NtpSettings`
   and `config::WifiSettings` are fields a board's own schema names, so
   every board's file spells them the same way and reports the same

@@ -59,11 +59,18 @@ const TX_QUEUE: usize = 4;
 
 /// Sockets the stack has room for — enough for the busiest example: the
 /// responder's UDP socket, the SNTP client's, the DNS one `embassy-net`
-/// opens to resolve names, the TLS check's TCP socket, and one spare so a
-/// failure here is not the first thing suspected. Too few is a request
-/// that fails with "could not be sent", which looks like a network problem
-/// and is not.
-const SOCKETS: usize = 5;
+/// opens to resolve names, the TLS check's TCP socket, the `site`
+/// example's pool of web servers, and one spare so a failure here is not
+/// the first thing suspected. Too few is a request that fails with "could
+/// not be sent", which looks like a network problem and is not — or, for a
+/// web server, a panic inside `embassy-net`.
+const SOCKETS: usize = 5 + WEB_POOL;
+
+/// How many web server tasks the `site` example runs, each holding one
+/// socket. Here rather than in that example because [`SOCKETS`] has to
+/// count them. Four covers a page load's burst of document, stylesheet,
+/// script and icon; a board with a larger site runs more.
+pub const WEB_POOL: usize = 4;
 
 static UART: StaticCell<Uart> = StaticCell::new();
 static TIMER: StaticCell<Timer> = StaticCell::new();

@@ -42,6 +42,7 @@
     feature = "site",
     feature = "storage",
     feature = "tls",
+    feature = "web",
     test
 ))]
 extern crate alloc;
@@ -89,7 +90,7 @@ pub mod site;
 #[cfg(feature = "sntp")]
 pub mod sntp;
 /// Mounting the card's FAT volume — see the module's own documentation
-/// for what it costs in RAM and why files are dated 1980 for now.
+/// for what it costs in RAM and what time the files it writes carry.
 #[cfg(feature = "storage")]
 pub mod storage;
 /// TLS client connections with real certificate verification — see the
@@ -97,7 +98,11 @@ pub mod storage;
 /// one of them an unaudited crypto provider.
 #[cfg(feature = "tls")]
 pub mod tls;
+/// Serving HTTP with `picoserve` — see the module's own documentation for
+/// why this is pieces of a router rather than a server task.
+#[cfg(feature = "web")]
+pub mod web;
 
 // The rest of the modules this crate is being assembled from --
-// web, metrics, ota -- arrive one at a time, each behind
-// the feature named for it.
+// metrics, ota -- arrive one at a time, each behind the feature named for
+// it.
