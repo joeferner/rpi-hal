@@ -38,7 +38,7 @@ resync_interval = "6h"
 # a board simply has no network.
 #
 # The radio also needs its firmware on the card, under wifi/43430/ (3B,
-# Zero W) or wifi/43455/ (3B+) -- see examples/mdns.rs for the files.
+# Zero W) or wifi/43455/ (3B+) -- see examples/wifi.rs for the files.
 [wifi]
 # 1 to 32 bytes.
 ssid = "your network"

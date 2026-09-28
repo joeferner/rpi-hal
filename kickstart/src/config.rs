@@ -1060,8 +1060,8 @@ presence_uv = 350000
     }
 
     /// The template in the repository has to parse, and pass the checks
-    /// the `mdns` example runs, or the first thing somebody copies onto a
-    /// card is a file the board refuses.
+    /// the examples run, or the first thing somebody copies onto a card is
+    /// a file the board refuses.
     #[test]
     fn the_example_settings_file_is_valid() {
         #[derive(Debug, serde::Deserialize)]

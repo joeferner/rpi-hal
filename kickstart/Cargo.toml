@@ -75,8 +75,8 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
     "tlsf",
 ], optional = true }
 
-# The network stack and the time API behind `mdns`, taken *directly*
-# rather than through `rpi-hal-embassy`.
+# The network stack and the time API behind `net`, `mdns`, `sntp` and
+# `tls`, taken *directly* rather than through `rpi-hal-embassy`.
 #
 # That is the answer to a question this crate deferred twice: everything
 # here wants `embassy-net` and `embassy-time` for their API, and nothing
@@ -87,15 +87,16 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
 # the API crates leaves that with the board, which is the same
 # pluggability rule the rest of this crate follows one level up.
 #
-# Three features, none of them optional for this module. `multicast` is
-# what provides `Stack::join_multicast_group`, without which smoltcp
-# drops a packet addressed to a group it has not joined before any socket
-# sees it. `udp` is the socket itself. `proto-ipv4` is what makes an
-# IPv4 address a type at all -- smoltcp's address and socket enums are
-# empty with no protocol selected, and the crate does not compile.
+# Only the floor is named on this line; each module that takes the stack
+# adds the socket types it uses in [features] below -- `mdns` UDP and
+# multicast, `sntp` UDP and DNS, `tls` TCP -- so a board pays for the
+# sockets it has. `dhcpv4` is the application's to choose and is unioned
+# in.
 #
-# Everything else -- `dhcpv4`, `tcp`, `dns` -- is the application's to
-# choose and is unioned in.
+# `proto-ipv4` is what makes an IPv4 address a type at all -- smoltcp's
+# address and socket enums are empty with no protocol selected, and the
+# crate does not compile.
+#
 # `medium-ethernet` is a floor rather than a choice: smoltcp refuses to
 # build a socket with no medium selected at all, and every interface a
 # Pi presents to `embassy-net` -- USB Ethernet, the Wi-Fi adapter -- is
@@ -108,10 +109,11 @@ embedded-alloc = { version = "0.6", default-features = false, features = [
 # is reachable by every other means -- and does not answer `ping`. That is
 # the first thing anyone reaches for to check a board is alive, and
 # without this it reports the board as dead. It cost a long debugging
-# session on a board where nothing was wrong.
+# session on a board where nothing was wrong -- and then a second time,
+# when a board that used `net` but none of the modules below it lost the
+# reply: this line was reached only through them, so the floor was not a
+# floor. `net` takes this dependency now for that reason alone.
 embassy-net = { version = "0.9.1", default-features = false, features = [
-    "udp",
-    "multicast",
     "proto-ipv4",
     "medium-ethernet",
     "auto-icmp-echo-reply",
@@ -399,7 +401,13 @@ tz = ["clock", "dep:tz-rs"]
 # Implies `console` for the reason `mdns` does: a clock that never sets
 # looks exactly like one nobody asked to set, and the console is the only
 # place that says which.
-sntp = ["clock", "dep:embassy-net", "embassy-net/dns", "console"]
+sntp = [
+    "clock",
+    "dep:embassy-net",
+    "embassy-net/udp",
+    "embassy-net/dns",
+    "console",
+]
 
 # TLS client connections over an `embassy-net` TCP socket, with real
 # certificate-chain verification (src/tls.rs).
@@ -449,7 +457,18 @@ webpki-roots = ["tls", "dep:webpki-roots"]
 # only evidence a responder is working: the failure mode is a name that
 # silently does not resolve. A module whose whole output is log lines
 # should not be able to be built without somewhere to put them.
-mdns = ["dep:embassy-net", "dep:embassy-time", "dep:heapless", "console"]
+#
+# `udp` and `multicast` are its sockets: `multicast` is what provides
+# `Stack::join_multicast_group`, without which smoltcp drops a packet
+# addressed to a group it has not joined before any socket sees it.
+mdns = [
+    "dep:embassy-net",
+    "embassy-net/udp",
+    "embassy-net/multicast",
+    "dep:embassy-time",
+    "dep:heapless",
+    "console",
+]
 
 # Finding an interface and getting the board onto the network
 # (src/net.rs).
@@ -468,7 +487,22 @@ mdns = ["dep:embassy-net", "dep:embassy-time", "dep:heapless", "console"]
 # is a build that cannot produce a network -- so src/net.rs refuses it
 # with a `compile_error!` rather than leaving a board to discover at run
 # time that every entry in its order reports "not compiled in".
-net = ["dep:rpi-hal", "console"]
+#
+# `dep:embassy-net` although nothing in src/net.rs uses it: every
+# interface this finds ends up under an `embassy-net` stack, and taking
+# the crate's line is what brings its floor -- `auto-icmp-echo-reply`
+# above all. Without it a board using `net` and none of the modules that
+# took the stack answered no ping, which is the one check anybody makes
+# first. Cargo unifies this with the application's own `embassy-net`, so
+# it costs no second copy.
+#
+# `embassy-net/icmp` because smoltcp refuses to compile with no socket
+# type at all, and with nothing else asking for one a `net`-only build of
+# this crate has none. A board never notices -- its own `embassy-net` line
+# brings `dhcpv4` or whatever it addresses itself with -- but naming
+# `dhcpv4` here would decide that for it. The ICMP socket is the cheapest
+# one and decides nothing.
+net = ["dep:rpi-hal", "dep:embassy-net", "embassy-net/icmp", "console"]
 
 # USB Ethernet as a `net` interface: a LAN9514 on a Pi 2B/3B, a LAN7800
 # on a 3B+ (src/net.rs).
@@ -533,32 +567,71 @@ required-features = ["entropy", "console", "bcm2837"]
 name = "heap"
 required-features = ["heap", "console", "bcm2837"]
 
+# The four network examples share their bring-up through
+# `examples/common/`, which is not an example itself: Cargo only
+# discovers `examples/*.rs` and `examples/*/main.rs`.
+
+# The responder over Ethernet, answering to the `hostname` in
+# `kickstart.toml` -- the only example that answers to a name; the others
+# are reached at the address on their `DHCP:` line. `heap`, `storage` and
+# `config` for reading that one setting off the card.
 [[example]]
 name = "mdns"
-# Both interfaces, because the point of this example is that one image
-# runs on a 3B, a 3B+ and a Zero W -- the first two on Ethernet, the last
-# on the radio, and a 3B on either depending on whether a cable is in.
-#
-# `heap`, `storage` and `config` because its name and Wi-Fi credentials
-# come from `kickstart.toml` on the card, read through the crate's own
-# mount and settings loader. `site` because it loads `/WWW` off the same
-# mount and lists it. `sntp` (and with it `clock`) so the board learns the
-# time once the network is up, and what it writes after that is dated.
-# `tls`, `webpki-roots` and `entropy` for the TLS check that runs once the
-# clock is set -- `entropy` being the `getrandom` backend `tls` needs.
 required-features = [
     "mdns",
+    "ethernet",
+    "console",
+    "heap",
+    "storage",
+    "config",
+    "bcm2837",
+]
+
+# The card: the settings file read and written back, and `/WWW` loaded and
+# listed, on a board reached over Ethernet at its leased address.
+[[example]]
+name = "site"
+required-features = [
+    "ethernet",
+    "console",
+    "heap",
+    "storage",
+    "config",
+    "site",
+    "bcm2837",
+]
+
+# The clock from SNTP, then TLS checked against it, over Ethernet.
+# `storage` and `config` for an optional `[ntp]` table; `entropy` because
+# it is the `getrandom` backend `tls` needs.
+[[example]]
+name = "ntp_tls"
+required-features = [
+    "ethernet",
+    "console",
+    "heap",
+    "storage",
+    "config",
+    "sntp",
+    "tls",
+    "webpki-roots",
+    "entropy",
+    "bcm2837",
+]
+
+# Both interfaces, because the point is that one image runs on a 3B, a 3B+
+# and a Zero W -- the first two on Ethernet, the last on the radio, and a
+# 3B on either depending on whether a cable is in. `storage` and `config`
+# for the firmware blobs and the `[wifi]` credentials.
+[[example]]
+name = "wifi"
+required-features = [
     "ethernet",
     "wifi",
     "console",
     "heap",
     "storage",
     "config",
-    "site",
-    "sntp",
-    "tls",
-    "webpki-roots",
-    "entropy",
     "bcm2837",
 ]
 

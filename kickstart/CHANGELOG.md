@@ -27,7 +27,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Moved from the water sensor and weather station, whose copies were
   identical; `TlsStream` gains `protocol_version`, `cipher_suite` and
-  `into_socket`. `examples/mdns.rs` runs a TLS check once the clock is
+  `into_socket`. `examples/ntp_tls.rs` runs a TLS check once the clock is
   set — `example.com` by its own name, which must verify and carry a
   request, and `www.google.com`'s front end asked for a name under the
   reserved `.example` domain, which must be refused by the client's name
@@ -57,8 +57,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   goes out from a dynamic source port, so an off-path forger has the port
   to guess as well as the nonce.
 
-  `examples/mdns.rs` runs it, with an optional `[ntp]` table in
-  `kickstart.toml`, and no longer takes a build-time timestamp.
+  `examples/ntp_tls.rs` runs it, with an optional `[ntp]` table in
+  `kickstart.toml`.
 
 - **The wall clock**, behind a `clock` feature: `clock::set(unix_millis)`
   is the sink every time source feeds — SNTP, an RTC, anything — and
@@ -96,7 +96,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now taken from the file name rather than the whole path, so a directory
   with a dot in it no longer lends its files one.
 
-  `examples/mdns.rs` loads and lists the site; nothing serves it yet.
+  `examples/site.rs` loads and lists the site; nothing serves it yet.
 
 - **Writing a settings file.** `config::render` serializes a schema to
   TOML and checks it round-trips — parse the text back as the schema,
@@ -109,7 +109,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comments and unknown keys do not survive a save. `toml`'s `display`
   feature is now on.
 
-  `examples/mdns.rs` uses it: a `hostname` written as `name.local` is
+  `examples/site.rs` uses it: a `hostname` written as `name.local` is
   saved back as `name`.
 
 - **Mounting the card**, behind a `storage` feature: `storage::mount`
@@ -127,12 +127,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`value::ssid` and `value::passphrase`**, for a `[wifi]` table.
 
-- **`kickstart.toml.example`**, the settings the `mdns` example reads.
-  That example now mounts the card once at boot through `storage`, takes
-  its hostname and Wi-Fi credentials from `kickstart.toml` (replacing
-  `WIFI.CFG`), and reads the radio's firmware off the same mount — onto
-  the heap, rather than into a 1 MiB static buffer. `embedded-sdmmc` is no
-  longer a dependency.
+- **`kickstart.toml.example`**, the settings the examples read, one file
+  and one schema for all of them. `examples/wifi.rs` takes its Wi-Fi
+  credentials from it (replacing `WIFI.CFG`) and reads the radio's
+  firmware off the same mount — onto the heap, rather than into a 1 MiB
+  static buffer. `embedded-sdmmc` is no longer a dependency.
+
+- **A board using `net` answers ping whatever else it enables.**
+  `auto-icmp-echo-reply` was on the crate's `embassy-net` line, which only
+  `mdns`, `sntp` or `tls` pulled in — so a board using `net` for its
+  interface and none of those took a lease, was reachable, and answered no
+  ping. `net` now takes that line itself. The line carries only the floor
+  (`proto-ipv4`, `medium-ethernet`, the echo reply), and each module adds
+  the sockets it uses: `mdns` UDP and multicast, `sntp` UDP and DNS, `tls`
+  TCP.
+
+- **Four network examples instead of one.** `mdns` (Ethernet, answering
+  to the settings' `hostname`), `site` (the settings file and
+  `/WWW`), `ntp_tls` (SNTP, then the TLS check) and `wifi` (Ethernet with
+  the radio as the fallback). Only `mdns` answers to a name; the others
+  are reached at their leased address. The bring-up they share — console,
+  heap, USB, `net::discover`, attaching the adapter, the stack, the
+  executor, the card and the settings schema — is in `examples/common/`,
+  which Cargo does not take for an example of its own.
 
 - **Reading a settings file**, behind a `config` feature. The file is TOML
   and the schema is the board's own `#[derive(Deserialize)]` struct, so
