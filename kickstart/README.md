@@ -27,8 +27,9 @@ named for it.
 | `heap` | A TLSF `#[global_allocator]`, sized from what the firmware reports |
 | `config` | A TOML settings file into the board's own schema, with `file:line:column` errors and the checks TOML cannot make |
 | `storage` | The card's FAT volume, mounted with `resident-fat`; with `config`, `config::load` reads the settings file off it |
+| `site` | Everything under `/WWW` on the card, read into RAM at boot and looked up by request path |
 
-Still to come: clock, site, web, metrics, ota.
+Still to come: clock, web, metrics, ota.
 
 The examples read their settings from `kickstart.toml` at the root of the
 card; copy `kickstart.toml.example` and fill it in.

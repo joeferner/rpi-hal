@@ -8,6 +8,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The board's web assets**, behind a `site` feature: `site::load`
+  walks `/WWW` on the card (four levels deep at most), reads every file
+  onto the heap and logs each with its size and modification time, and
+  `Site::get` looks one up by request path — case-insensitively, with
+  `/` and any path ending in `/` meaning that directory's `index.html`.
+  `load_with` takes a board's own `(extension, type)` table ahead of the
+  built-in one.
+
+  Moved from the water sensor and weather station, whose copies differed
+  only in the volume type. Two changes on the way: `load` returns an owned
+  `Site` instead of filling a `static mut`, so where it lives is the
+  board's choice; and a missing `/WWW` is still an empty site, but any
+  other read failure is returned rather than swallowed. The extension is
+  now taken from the file name rather than the whole path, so a directory
+  with a dot in it no longer lends its files one.
+
+  `examples/mdns.rs` loads and lists the site; nothing serves it yet.
+
 - **Writing a settings file.** `config::render` serializes a schema to
   TOML and checks it round-trips — parse the text back as the schema,
   serialize again, require the same text — so a schema whose `Serialize`

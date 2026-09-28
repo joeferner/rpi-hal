@@ -49,6 +49,10 @@
 // this example exercises writing as well as reading. The saved file is
 // regenerated whole, so it loses the template's comments.
 //
+//   www/           -- optional: the web assets, loaded into RAM at boot
+//                     and listed on the console. Nothing serves them
+//                     yet; they are what a board with a web server will.
+//
 // Wi-Fi needs three more files, all vendor blobs, in a `wifi` directory
 // under a subdirectory named for the radio -- copied once and never looked
 // at again. A 3B or a Zero W wants `wifi/43430`:
@@ -119,6 +123,7 @@ use rpi_hal_embassy::wifi::WifiRunner;
 use rpi_hal_embassy::{Executor, time_driver};
 use rpi_kickstart::config::{self, At, Problem, Spanned, value};
 use rpi_kickstart::net::{self, Interface};
+use rpi_kickstart::site::{self, Site};
 use rpi_kickstart::{console, heap, logln, mdns, storage};
 use static_cell::StaticCell;
 
@@ -283,6 +288,7 @@ static TIMER: StaticCell<Timer> = StaticCell::new();
 static STATE: StaticCell<ch::State<MTU, RX_QUEUE, TX_QUEUE>> = StaticCell::new();
 static RESOURCES: StaticCell<StackResources<SOCKETS>> = StaticCell::new();
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+static SITE: StaticCell<Site> = StaticCell::new();
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -387,6 +393,26 @@ pub extern "C" fn kmain() -> ! {
 
     let (mut card, credentials) = read_settings(&mut mailbox, timer);
     logln!("mdns: answering to {}.local", hostname());
+
+    // The web assets, off the same mount and before the radio might take
+    // the card. Nothing serves them yet -- that is the web module's, which
+    // does not exist -- so this is here to show what a board will serve:
+    // one line per file, and a count.
+    let site = SITE.init(match card.as_mut() {
+        Some(card) => site::load(card).unwrap_or_else(|e| {
+            logln!(
+                "site: reading /{} failed: {e}; serving no pages",
+                site::WWW_DIR
+            );
+            Site::default()
+        }),
+        None => Site::default(),
+    });
+    logln!(
+        "site: {} {}",
+        site.len(),
+        if site.len() == 1 { "file" } else { "files" }
+    );
 
     if !usb::power_on(&mut mailbox) {
         logln!("USB power-on failed");

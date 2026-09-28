@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -315,6 +315,14 @@ config = ["dep:toml", "dep:serde", "dep:serde_ignored"]
 # driver entirely.
 storage = ["dep:resident-fat", "rpi-hal?/resident-fat", "console"]
 
+# The board's web assets: everything under `/WWW` on the card, read into
+# RAM at boot and looked up by request path (src/site.rs).
+#
+# Only the loading and the lookup. Serving is the web module's, so a board
+# can put its pages behind whatever server it has; this needs nothing
+# beyond the volume `storage` mounted.
+site = ["storage"]
+
 # An mDNS responder for one name (src/mdns.rs).
 #
 # Needs no chip and nothing from `rpi-hal`: it is written against
@@ -419,7 +427,8 @@ name = "mdns"
 #
 # `heap`, `storage` and `config` because its name and Wi-Fi credentials
 # come from `kickstart.toml` on the card, read through the crate's own
-# mount and settings loader.
+# mount and settings loader. `site` because it loads `/WWW` off the same
+# mount and lists it.
 required-features = [
     "mdns",
     "ethernet",
@@ -428,6 +437,7 @@ required-features = [
     "heap",
     "storage",
     "config",
+    "site",
     "bcm2837",
 ]
 

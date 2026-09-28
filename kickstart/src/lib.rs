@@ -37,7 +37,7 @@
 #![no_std]
 #![deny(missing_docs)]
 
-#[cfg(feature = "config")]
+#[cfg(any(feature = "config", feature = "site"))]
 extern crate alloc;
 
 /// Reading a board's settings file — see the module's own documentation
@@ -70,11 +70,15 @@ pub mod mdns;
 /// questions and both are deadlines.
 #[cfg(feature = "net")]
 pub mod net;
+/// The board's web assets, read off the card into RAM — see the module's
+/// own documentation for why the site lives on the card at all.
+#[cfg(feature = "site")]
+pub mod site;
 /// Mounting the card's FAT volume — see the module's own documentation
 /// for what it costs in RAM and why files are dated 1980 for now.
 #[cfg(feature = "storage")]
 pub mod storage;
 
 // The rest of the modules this crate is being assembled from -- clock,
-// site, web, metrics, ota -- arrive one at a time, each behind
+// web, metrics, ota -- arrive one at a time, each behind
 // the feature named for it.
