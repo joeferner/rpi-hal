@@ -30,8 +30,9 @@ named for it.
 | `site` | Everything under `/WWW` on the card, read into RAM at boot and looked up by request path |
 | `clock` | The wall clock: one sink every time source sets and everything else reads, `None` until set; with `storage`, files are stamped with it |
 | `tz` | Local time over a `tz-rs` zone |
+| `sntp` | Sets `clock` from an NTP server, and keeps it set |
 
-Still to come: web, metrics, ota, sntp.
+Still to come: web, metrics, ota.
 
 The examples read their settings from `kickstart.toml` at the root of the
 card; copy `kickstart.toml.example` and fill it in.

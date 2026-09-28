@@ -41,8 +41,12 @@
 //
 //   kickstart.toml -- at the root, beside `config.txt`. Copy
 //                     `kickstart.toml.example` from this repository and
-//                     fill it in: `hostname`, and a `[wifi]` table with
-//                     `ssid` and `passphrase`.
+//                     fill it in: `hostname`, an optional `[ntp]` table,
+//                     and a `[wifi]` table with `ssid` and `passphrase`.
+//
+// Once the board has a lease, `sntp::run` sets the wall clock from the
+// `[ntp]` server -- `pool.ntp.org` unless the file says otherwise -- and
+// keeps re-syncing it. Files written after that carry a real date.
 //
 // A `hostname` written as `name.local` is accepted, and the file is then
 // saved back through `config::save` with the bare `name` -- which is how
@@ -124,7 +128,8 @@ use rpi_hal_embassy::{Executor, time_driver};
 use rpi_kickstart::config::{self, At, Problem, Spanned, value};
 use rpi_kickstart::net::{self, Interface};
 use rpi_kickstart::site::{self, Site};
-use rpi_kickstart::{clock, console, heap, logln, mdns, storage};
+use rpi_kickstart::sntp::{self, NtpConfig};
+use rpi_kickstart::{console, heap, logln, mdns, storage};
 use static_cell::StaticCell;
 
 /// The settings file, at the root of the card's FAT partition.
@@ -146,6 +151,15 @@ fn hostname() -> &'static str {
     critical_section::with(|cs| HOSTNAME.borrow(cs).get())
 }
 
+/// Where the clock comes from, once the settings have been read: the
+/// crate's defaults (`pool.ntp.org`, re-synced every 6 hours) unless
+/// `ntp_server` or `ntp_resync_interval` says otherwise.
+///
+/// A static for the same reason as [`HOSTNAME`]: it is decided during
+/// bring-up and read by a task spawned much later, and threading it through
+/// every call in between is noise.
+static NTP: Mutex<Cell<NtpConfig<'static>>> = Mutex::new(Cell::new(NtpConfig::DEFAULT));
+
 /// Everything this example reads from [`SETTINGS_FILE`]. Every key is
 /// optional, and so is the file.
 ///
@@ -157,9 +171,27 @@ struct Settings {
     /// The mDNS name, without `.local` (which is accepted and dropped).
     #[serde(skip_serializing_if = "Option::is_none")]
     hostname: Option<Spanned<String>>,
+    /// Where the clock comes from, if not the defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ntp: Option<NtpSettings>,
     /// The network to join if Ethernet does not answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     wifi: Option<WifiSettings>,
+}
+
+/// The `[ntp]` table. Every key is optional and falls back to
+/// `NtpConfig::DEFAULT`'s, so the table can name just the one it changes.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct NtpSettings {
+    /// The time server: a name, or an IPv4 address written out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server: Option<Spanned<String>>,
+    /// How long to wait after a failed sync, as `"30s"` / `"5m"` / `"1h"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_interval: Option<Spanned<String>>,
+    /// How long to wait after a successful one, likewise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resync_interval: Option<Spanned<String>>,
 }
 
 /// The `[wifi]` table.
@@ -183,6 +215,26 @@ impl Settings {
             .as_ref()
             .map(|name| value::label(name.as_ref()).at(name))
             .transpose()
+    }
+
+    /// The time server and re-sync interval, over the defaults. The server
+    /// is leaked once, at boot, since `sntp::run` borrows it for as long as
+    /// the program runs.
+    fn ntp(&self) -> Result<NtpConfig<'static>, Problem> {
+        let mut ntp = NtpConfig::DEFAULT;
+        let Some(settings) = &self.ntp else {
+            return Ok(ntp);
+        };
+        if let Some(server) = &settings.server {
+            ntp.server = String::from(value::host(server.as_ref()).at(server)?).leak();
+        }
+        if let Some(interval) = &settings.retry_interval {
+            ntp.retry_interval = value::duration(interval.as_ref()).at(interval)?;
+        }
+        if let Some(interval) = &settings.resync_interval {
+            ntp.resync_interval = value::duration(interval.as_ref()).at(interval)?;
+        }
+        Ok(ntp)
     }
 
     fn credentials(&self) -> Result<Option<Credentials>, Problem> {
@@ -221,9 +273,12 @@ const _: () = assert!(
 const RX_QUEUE: usize = 4;
 const TX_QUEUE: usize = 4;
 
-/// Sockets the stack has room for: the responder's UDP socket, and one
-/// spare so a failure here is not the first thing suspected.
-const SOCKETS: usize = 2;
+/// Sockets the stack has room for: the responder's UDP socket, the SNTP
+/// client's, the DNS one `embassy-net` opens to resolve the time server,
+/// and one spare so a failure here is not the first thing suspected. Too
+/// few is a sync that fails with "request could not be sent", which looks
+/// like a network problem and is not.
+const SOCKETS: usize = 4;
 
 /// Directory on the FAT boot partition holding the Wi-Fi firmware files,
 /// one subdirectory per radio — see [`radio`].
@@ -340,6 +395,14 @@ async fn mdns_task(stack: embassy_net::Stack<'static>) -> ! {
     mdns::run(stack, hostname).await
 }
 
+/// Keeps the wall clock set, which `sntp::run` does by calling
+/// `clock::set` on every answer.
+#[embassy_executor::task]
+async fn sntp_task(stack: embassy_net::Stack<'static>) -> ! {
+    let config = critical_section::with(|cs| NTP.borrow(cs).get());
+    sntp::run(stack, config).await
+}
+
 /// Reports the lease once, so there is an address to compare what
 /// `kickstart.local` resolves to against.
 #[embassy_executor::task]
@@ -391,26 +454,12 @@ pub extern "C" fn kmain() -> ! {
         }
     }
 
-    // The wall clock, which nothing in this example can learn -- there is
-    // no SNTP here yet -- so it takes the build's word for it, if the build
-    // gave one:
-    //
-    //     KICKSTART_UNIX_TIME=$(date +%s) scripts/build-example.sh mdns
-    //
-    // Minutes stale by the time the board boots, which is fine for what it
-    // is for: showing that a file the board writes carries the clock's
-    // time rather than 1980. A real board sets it from a real source.
-    match option_env!("KICKSTART_UNIX_TIME").map(str::parse::<u64>) {
-        Some(Ok(unix_seconds)) => {
-            clock::set(unix_seconds * 1_000);
-            if let Some(now) = clock::now() {
-                logln!("clock: {now}, from the build rather than a real source");
-            }
-        }
-        Some(Err(_)) => logln!("clock: KICKSTART_UNIX_TIME is not a number; not set"),
-        None => logln!("clock: not set; files this board writes are dated 1980"),
-    }
-
+    // The wall clock is unset until `sntp_task` has an answer, which is
+    // after DHCP. So anything written during bring-up -- a settings
+    // write-back included -- is dated 1980, and only what is written once
+    // the network has answered carries a real time. That is the fail-closed
+    // order, not a bug: a board must not have to wait for the network to
+    // write a file.
     let (mut card, credentials) = read_settings(&mut mailbox, timer);
     logln!("mdns: answering to {}.local", hostname());
 
@@ -620,6 +669,7 @@ fn run<S: FnOnce(Spawner)>(driver: ch::Device<'static, MTU>, spawn_interface: S)
         spawn_interface(spawner);
         spawner.spawn(report_task(stack).unwrap());
         spawner.spawn(mdns_task(stack).unwrap());
+        spawner.spawn(sntp_task(stack).unwrap());
     });
 }
 
@@ -707,6 +757,13 @@ fn read_settings(
         );
         None
     });
+    match settings.ntp() {
+        Ok(ntp) => critical_section::with(|cs| NTP.borrow(cs).set(ntp)),
+        Err(problem) => logln!(
+            "settings: {}; using the NTP defaults",
+            problem.report(SETTINGS_FILE, &text)
+        ),
+    }
     (Some(card), credentials)
 }
 

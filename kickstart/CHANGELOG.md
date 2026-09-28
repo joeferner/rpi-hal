@@ -8,6 +8,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Setting the clock from an NTP server**, behind an `sntp` feature:
+  `sntp::run(stack, NtpConfig)` waits for a lease, resolves the server
+  (or takes an IPv4 address as written), syncs, calls `clock::set`, and
+  repeats on the retry or re-sync interval — forever, logging every sync
+  and every failure. `NtpConfig::DEFAULT` is `pool.ntp.org`, 30 s and
+  6 h. A plain `async fn`, so the board wraps it in its own task.
+
+  The weather station's hand-rolled client rather than the water
+  sensor's three `sntpc` crates: a reply must come from the address asked
+  and echo the request's transmit timestamp, which stops an off-path
+  forgery. Host-tested — the request, every refusal (mode, leap 3,
+  kiss-of-death, stratum 16, a foreign nonce, no timestamp), the 2036 era
+  rollover and the round-trip correction. Fixed on the way: a server time
+  in 1968–1970 underflowed the NTP-to-Unix subtraction, a panic in a
+  debug build; it is now refused.
+
+  Every datagram it sets aside is logged with its source and why —
+  including a kiss of death's four-letter code — and a timeout says
+  whether anything arrived ("no reply" against "2 replies, none usable"),
+  and a failure names the address a pool name resolved to. Each request
+  goes out from a dynamic source port, so an off-path forger has the port
+  to guess as well as the nonce.
+
+  `examples/mdns.rs` runs it, with an optional `[ntp]` table in
+  `kickstart.toml`, and no longer takes a build-time timestamp.
+
 - **The wall clock**, behind a `clock` feature: `clock::set(unix_millis)`
   is the sink every time source feeds — SNTP, an RTC, anything — and
   `now_unix_millis`, `now_unix` and `now` read it back, all `None` until

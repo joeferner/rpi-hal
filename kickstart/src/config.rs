@@ -1067,7 +1067,14 @@ presence_uv = 350000
         #[derive(Debug, serde::Deserialize)]
         struct Example {
             hostname: Option<Spanned<String>>,
+            ntp: Option<Ntp>,
             wifi: Option<Wifi>,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        struct Ntp {
+            server: Spanned<String>,
+            retry_interval: Spanned<String>,
+            resync_interval: Spanned<String>,
         }
         #[derive(Debug, serde::Deserialize)]
         struct Wifi {
@@ -1086,6 +1093,22 @@ presence_uv = 350000
         let wifi = example.wifi.unwrap();
         assert!(value::ssid(wifi.ssid.as_ref()).is_ok());
         assert!(value::passphrase(wifi.passphrase.as_ref()).is_ok());
+
+        // The template says its `[ntp]` values are the defaults, and that
+        // has to stay true.
+        let ntp = example.ntp.unwrap();
+        let server = value::host(ntp.server.as_ref()).unwrap();
+        let retry = value::duration(ntp.retry_interval.as_ref()).unwrap();
+        let resync = value::duration(ntp.resync_interval.as_ref()).unwrap();
+        #[cfg(feature = "sntp")]
+        {
+            let defaults = crate::sntp::NtpConfig::DEFAULT;
+            assert_eq!(server, defaults.server);
+            assert_eq!(retry, defaults.retry_interval);
+            assert_eq!(resync, defaults.resync_interval);
+        }
+        #[cfg(not(feature = "sntp"))]
+        let _ = (server, retry, resync);
     }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]

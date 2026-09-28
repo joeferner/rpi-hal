@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -362,6 +362,20 @@ clock = ["dep:embassy-time"]
 # UTC and pays for no parser.
 tz = ["clock", "dep:tz-rs"]
 
+# Setting the clock from an NTP server (src/sntp.rs): one source for
+# `clock` among possible others, so a board with an RTC leaves it off and
+# keeps `clock`.
+#
+# `embassy-net/dns` because a server is usually a name. It is on the
+# `embassy-net` line for this module only, rather than for every one that
+# takes the stack: a board whose only network module is `mdns` resolves
+# nothing and should not carry a resolver.
+#
+# Implies `console` for the reason `mdns` does: a clock that never sets
+# looks exactly like one nobody asked to set, and the console is the only
+# place that says which.
+sntp = ["clock", "dep:embassy-net", "embassy-net/dns", "console"]
+
 # An mDNS responder for one name (src/mdns.rs).
 #
 # Needs no chip and nothing from `rpi-hal`: it is written against
@@ -467,8 +481,8 @@ name = "mdns"
 # `heap`, `storage` and `config` because its name and Wi-Fi credentials
 # come from `kickstart.toml` on the card, read through the crate's own
 # mount and settings loader. `site` because it loads `/WWW` off the same
-# mount and lists it. `clock` so what it writes back is dated -- from a
-# build-time timestamp, since it has no time source of its own.
+# mount and lists it. `sntp` (and with it `clock`) so the board learns the
+# time once the network is up, and what it writes after that is dated.
 required-features = [
     "mdns",
     "ethernet",
@@ -478,7 +492,7 @@ required-features = [
     "storage",
     "config",
     "site",
-    "clock",
+    "sntp",
     "bcm2837",
 ]
 

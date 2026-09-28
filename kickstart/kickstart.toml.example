@@ -19,6 +19,20 @@
 # trailing `.local` is accepted and dropped. Default: "kickstart".
 hostname = "kickstart"
 
+# Where the wall clock comes from, once the board has an address. The
+# values below are the defaults, so the whole table can be left out; name
+# only the key you change. Durations are a whole number above zero and a
+# unit: `s`, `m` or `h`.
+[ntp]
+# A name, or an IPv4 address written out -- a router is often a good time
+# server, and an address needs no DNS.
+server = "pool.ntp.org"
+# How long to wait after a failed sync before trying again.
+retry_interval = "30s"
+# How long to wait after a successful one. Asking a public server more
+# often than every few hours is discourteous rather than useful.
+resync_interval = "6h"
+
 # The network to join when there is no Ethernet: a board with no Ethernet
 # chip (Zero W), or a 3B/3B+ with no cable in. Leave the table out and such
 # a board simply has no network.

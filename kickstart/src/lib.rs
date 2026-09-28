@@ -78,6 +78,10 @@ pub mod net;
 /// own documentation for why the site lives on the card at all.
 #[cfg(feature = "site")]
 pub mod site;
+/// Setting the clock from an NTP server — see the module's own
+/// documentation for what its reply checks do and do not protect against.
+#[cfg(feature = "sntp")]
+pub mod sntp;
 /// Mounting the card's FAT volume — see the module's own documentation
 /// for what it costs in RAM and why files are dated 1980 for now.
 #[cfg(feature = "storage")]
