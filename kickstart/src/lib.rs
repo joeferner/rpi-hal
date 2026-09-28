@@ -37,7 +37,13 @@
 #![no_std]
 #![deny(missing_docs)]
 
-#[cfg(any(feature = "config", feature = "site", feature = "storage", test))]
+#[cfg(any(
+    feature = "config",
+    feature = "site",
+    feature = "storage",
+    feature = "tls",
+    test
+))]
 extern crate alloc;
 
 /// The wall clock — see the module's own documentation for why it is a
@@ -86,6 +92,11 @@ pub mod sntp;
 /// for what it costs in RAM and why files are dated 1980 for now.
 #[cfg(feature = "storage")]
 pub mod storage;
+/// TLS client connections with real certificate verification — see the
+/// module's own documentation for the three things a Pi has to supply,
+/// one of them an unaudited crypto provider.
+#[cfg(feature = "tls")]
+pub mod tls;
 
 // The rest of the modules this crate is being assembled from --
 // web, metrics, ota -- arrive one at a time, each behind

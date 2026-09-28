@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -166,6 +166,31 @@ resident-fat = { version = "0.1.0", default-features = false, features = [
 tz-rs = { version = "0.7", default-features = false, features = [
     "alloc",
 ], optional = true }
+
+# TLS behind `tls` (src/tls.rs).
+#
+# `default-features = false` is not optional -- the default set is `std`.
+# Turning it off takes `alloc` with it, which `rustls` itself refuses
+# ("Rustls currently does not support alloc-less environments"), so
+# `alloc` comes back through the crypto provider below.
+rustls = { version = "0.23", default-features = false, optional = true }
+# The crypto provider. `ring` and `aws-lc-rs` both want a C toolchain, so
+# for a bare-metal ARM target this is the one that builds at all. It is
+# pre-release and unaudited: the protocol handling and chain verification
+# above it are real `rustls`, the primitives here are not audited ones.
+# The module documentation says so, and so should anything built on it.
+rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = [
+    "alloc",
+], optional = true }
+# Mozilla's trust anchor set, compiled in, behind `webpki-roots`. Separate
+# from `tls` because it is most of the size, and a board talking to one
+# private server needs one anchor.
+webpki-roots = { version = "1.0", default-features = false, optional = true }
+# The `Read`/`Write` traits `TlsStream` is written against at both ends:
+# consumed from `embassy-net`'s TCP socket, presented to whatever speaks a
+# protocol over it. 0.7 because that is the major `embassy-net`
+# implements, and a socket implementing 0.6 does not satisfy a 0.7 bound.
+embedded-io-async = { version = "0.7", default-features = false, optional = true }
 
 # Bare-metal only, so that `cargo test` can build this crate for the host:
 # the config parser is pure, and its tests have nowhere else to run. None of
@@ -376,6 +401,42 @@ tz = ["clock", "dep:tz-rs"]
 # place that says which.
 sntp = ["clock", "dep:embassy-net", "embassy-net/dns", "console"]
 
+# TLS client connections over an `embassy-net` TCP socket, with real
+# certificate-chain verification (src/tls.rs).
+#
+# Implies `clock`, which it checks certificate validity against, and
+# forwards `embassy-net/tcp` for the socket. It does *not* imply `sntp`:
+# what sets the clock is the board's choice, and a board with an RTC has
+# no use for one.
+#
+# Nor `entropy`, although it needs what that provides. The crypto
+# primitives reach randomness through `getrandom`, which has no backend
+# on a bare-metal target -- `entropy` registers the hardware generator as
+# one, and a board forgetting it gets a link error on
+# `__getrandom_custom`. Implying it would pull `rpi-hal` into a module
+# that otherwise reaches nothing of it, and that is what lets this one's
+# configuration be tested on the host.
+#
+# It does enable `getrandom`'s `custom`, through the dependency above that
+# already names it: without that the RustCrypto crates' own `getrandom`
+# edge has no backend for this target and refuses to compile at all.
+# `custom` only defers the choice to a registered symbol, which is what
+# makes "forgot `entropy`" a link error naming the symbol rather than a
+# compile error inside a crate three levels down.
+tls = [
+    "clock",
+    "dep:rustls",
+    "dep:rustls-rustcrypto",
+    "dep:getrandom",
+    "dep:embedded-io-async",
+    "dep:embassy-net",
+    "embassy-net/tcp",
+]
+
+# Mozilla's root set for `tls`, as `tls::client_config()`. See the
+# dependency above for why it is its own feature.
+webpki-roots = ["tls", "dep:webpki-roots"]
+
 # An mDNS responder for one name (src/mdns.rs).
 #
 # Needs no chip and nothing from `rpi-hal`: it is written against
@@ -483,6 +544,8 @@ name = "mdns"
 # mount and settings loader. `site` because it loads `/WWW` off the same
 # mount and lists it. `sntp` (and with it `clock`) so the board learns the
 # time once the network is up, and what it writes after that is dated.
+# `tls`, `webpki-roots` and `entropy` for the TLS check that runs once the
+# clock is set -- `entropy` being the `getrandom` backend `tls` needs.
 required-features = [
     "mdns",
     "ethernet",
@@ -493,6 +556,9 @@ required-features = [
     "config",
     "site",
     "sntp",
+    "tls",
+    "webpki-roots",
+    "entropy",
     "bcm2837",
 ]
 

@@ -31,6 +31,8 @@ named for it.
 | `clock` | The wall clock: one sink every time source sets and everything else reads, `None` until set; with `storage`, files are stamped with it |
 | `tz` | Local time over a `tz-rs` zone |
 | `sntp` | Sets `clock` from an NTP server, and keeps it set |
+| `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
+| `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
 
 Still to come: web, metrics, ota.
 

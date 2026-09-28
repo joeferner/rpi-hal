@@ -112,7 +112,6 @@ use critical_section::Mutex;
 use embassy_executor::Spawner;
 use embassy_net::{Config, StackResources};
 use rpi_hal::mailbox::Mailbox;
-use rpi_hal::rng::Rng;
 use rpi_hal::sd::{Sd, SdBlockDevice};
 use rpi_hal::sdio::Sdio;
 use rpi_hal::usb::dwc2::Dwc2Host;
@@ -129,7 +128,8 @@ use rpi_kickstart::config::{self, At, Problem, Spanned, value};
 use rpi_kickstart::net::{self, Interface};
 use rpi_kickstart::site::{self, Site};
 use rpi_kickstart::sntp::{self, NtpConfig};
-use rpi_kickstart::{console, heap, logln, mdns, storage};
+use rpi_kickstart::tls::{self, TlsStream};
+use rpi_kickstart::{clock, console, entropy, heap, logln, mdns, storage};
 use static_cell::StaticCell;
 
 /// The settings file, at the root of the card's FAT partition.
@@ -274,11 +274,11 @@ const RX_QUEUE: usize = 4;
 const TX_QUEUE: usize = 4;
 
 /// Sockets the stack has room for: the responder's UDP socket, the SNTP
-/// client's, the DNS one `embassy-net` opens to resolve the time server,
-/// and one spare so a failure here is not the first thing suspected. Too
-/// few is a sync that fails with "request could not be sent", which looks
-/// like a network problem and is not.
-const SOCKETS: usize = 4;
+/// client's, the DNS one `embassy-net` opens to resolve names, the TLS
+/// check's TCP socket, and one spare so a failure here is not the first
+/// thing suspected. Too few is a sync that fails with "request could not
+/// be sent", which looks like a network problem and is not.
+const SOCKETS: usize = 5;
 
 /// Directory on the FAT boot partition holding the Wi-Fi firmware files,
 /// one subdirectory per radio — see [`radio`].
@@ -401,6 +401,150 @@ async fn mdns_task(stack: embassy_net::Stack<'static>) -> ! {
 async fn sntp_task(stack: embassy_net::Stack<'static>) -> ! {
     let config = critical_section::with(|cs| NTP.borrow(cs).get());
     sntp::run(stack, config).await
+}
+
+/// One half of the TLS check: connect to `host`'s address, verify the
+/// certificate against `name`, and whether that must succeed.
+struct TlsCheck {
+    host: &'static str,
+    name: &'static str,
+    must_verify: bool,
+}
+
+/// The TLS check.
+///
+/// The first case is any public server speaking TLS 1.3, by its own name;
+/// this one exists for being used in examples.
+///
+/// The second is the one that matters — a TLS layer that accepts
+/// everything also passes the first — and it has to be built with care,
+/// because two obvious versions of it prove nothing:
+///
+/// * **A made-up name under the first host's domain** passes, correctly:
+///   `example.com`'s certificate also names `*.example.com`. That was this
+///   check's first form, and it reported a wrong name accepted when the
+///   name was right.
+/// * **A test site's deliberately bad certificate** — `badssl.com` and its
+///   kin — is refused for the wrong reason: those servers do not speak TLS
+///   1.3, and this configuration speaks nothing else.
+///
+/// So: a large front-end that completes a 1.3 handshake with its own valid
+/// certificate for a name it does not host, asked for a name under
+/// `.example`, which RFC 2606 reserves and no publicly trusted certificate
+/// can cover. The chain verifies, the name does not, and only the client's
+/// check can refuse it.
+const TLS_CHECKS: [TlsCheck; 2] = [
+    TlsCheck {
+        host: "example.com",
+        name: "example.com",
+        must_verify: true,
+    },
+    TlsCheck {
+        host: "www.google.com",
+        name: "kickstart-wrong-name.example",
+        must_verify: false,
+    },
+];
+
+/// Runs [`TLS_CHECKS`] once the clock is set, and says how each went.
+#[embassy_executor::task]
+async fn tls_task(stack: embassy_net::Stack<'static>) {
+    // Certificate validity is checked against the clock, and every
+    // handshake fails closed until it is set. Waiting says so, where
+    // trying would only log a handshake failure with no clue attached.
+    stack.wait_config_up().await;
+    if clock::now_unix().is_none() {
+        logln!("tls: waiting for the clock");
+        while clock::now_unix().is_none() {
+            embassy_time::Timer::after_millis(500).await;
+        }
+    }
+
+    let config = tls::client_config();
+    logln!("tls: {} trust anchors", tls::trust_anchor_count());
+
+    for TlsCheck {
+        host,
+        name,
+        must_verify,
+    } in TLS_CHECKS
+    {
+        let address = match stack
+            .dns_query(host, embassy_net::dns::DnsQueryType::A)
+            .await
+        {
+            Ok(addresses) if !addresses.is_empty() => addresses[0],
+            other => {
+                logln!("tls: {host} did not resolve ({other:?})");
+                continue;
+            }
+        };
+        logln!("tls: {name}: connecting to {host} at {address}");
+
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 1024];
+        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
+        socket.set_timeout(Some(embassy_time::Duration::from_secs(15)));
+        if let Err(e) = socket.connect((address, 443)).await {
+            logln!("tls: {name}: TCP connect failed: {e:?}");
+            continue;
+        }
+
+        let started = embassy_time::Instant::now();
+        match TlsStream::connect(socket, config.clone(), name).await {
+            Ok(mut stream) => {
+                let took = started.elapsed().as_millis();
+                logln!(
+                    "tls: {name}: handshake in {took} ms, {:?}, {:?}{}",
+                    stream.protocol_version(),
+                    stream.cipher_suite().map(|suite| suite.suite()),
+                    if must_verify {
+                        ""
+                    } else {
+                        " -- ACCEPTED A WRONG NAME"
+                    }
+                );
+                logln!("tls: {name}: {}", head(&mut stream, name).await);
+            }
+            Err(e) => logln!(
+                "tls: {name}: refused: {e}{}",
+                if must_verify {
+                    " -- A GOOD HOST WAS REFUSED"
+                } else {
+                    ", as it must be"
+                }
+            ),
+        }
+    }
+}
+
+/// Sends `HEAD /` over `stream` and returns the response's status line, or
+/// what went wrong. Enough to show application data both ways, which a
+/// handshake alone does not.
+async fn head(stream: &mut TlsStream<'_>, host: &str) -> String {
+    use embedded_io_async::{Read, Write};
+
+    let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    if let Err(e) = stream.write_all(request.as_bytes()).await {
+        return format!("request failed: {e}");
+    }
+    let mut response = [0u8; 256];
+    let mut len = 0;
+    while len < response.len() {
+        match stream.read(&mut response[len..]).await {
+            Ok(0) => break,
+            Ok(n) => len += n,
+            Err(e) => return format!("response failed: {e}"),
+        }
+        if response[..len].contains(&b'\n') {
+            break;
+        }
+    }
+    let line = response[..len]
+        .split(|&b| b == b'\r' || b == b'\n')
+        .next()
+        .unwrap_or(&[]);
+    String::from_utf8_lossy(line).into_owned()
 }
 
 /// Reports the lease once, so there is an address to compare what
@@ -651,10 +795,14 @@ fn attach_ethernet<E: EthernetAsync + 'static>(
 /// in because this function has no way to name the opaque `SpawnToken` a
 /// task returns.
 fn run<S: FnOnce(Spawner)>(driver: ch::Device<'static, MTU>, spawn_interface: S) -> ! {
-    // A random seed keeps TCP initial sequence numbers and the DHCP
-    // transaction ID from repeating across boots.
-    let mut rng = Rng::new();
-    let seed = (u64::from(rng.next_u32()) << 32) | u64::from(rng.next_u32());
+    // A random seed keeps TCP initial sequence numbers, the DHCP
+    // transaction ID and the first dynamic port from repeating across
+    // boots. From `entropy` rather than an `Rng` of this example's own:
+    // that module holds the one generator TLS also draws from, and a
+    // second instance would arm a second warm-up on the same hardware.
+    let mut seed = [0u8; 8];
+    entropy::fill(&mut seed);
+    let seed = u64::from_le_bytes(seed);
 
     let resources = RESOURCES.init(StackResources::new());
     let (stack, runner) =
@@ -670,6 +818,7 @@ fn run<S: FnOnce(Spawner)>(driver: ch::Device<'static, MTU>, spawn_interface: S)
         spawner.spawn(report_task(stack).unwrap());
         spawner.spawn(mdns_task(stack).unwrap());
         spawner.spawn(sntp_task(stack).unwrap());
+        spawner.spawn(tls_task(stack).unwrap());
     });
 }
 

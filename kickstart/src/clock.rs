@@ -97,6 +97,33 @@ pub fn now() -> Option<DateTime> {
     now_unix().map(DateTime::from_unix)
 }
 
+/// This clock, as the `rustls` time provider that checks certificate
+/// validity — what `tls::client_config_with` installs, and what a board
+/// building its own `ClientConfig` passes.
+///
+/// Before the clock is set it reports `None`, which `rustls` turns into a
+/// handshake failure. That is the correct outcome: with no clock there is
+/// no way to tell an expired certificate from a valid one, and guessing
+/// would defeat the verification TLS is there for.
+#[cfg(feature = "tls")]
+pub fn rustls_time_provider() -> impl rustls::time_provider::TimeProvider {
+    WallClock
+}
+
+/// [`rustls_time_provider`]'s type.
+#[cfg(feature = "tls")]
+#[derive(Debug)]
+struct WallClock;
+
+#[cfg(feature = "tls")]
+impl rustls::time_provider::TimeProvider for WallClock {
+    fn current_time(&self) -> Option<rustls::pki_types::UnixTime> {
+        now_unix_millis().map(|millis| {
+            rustls::pki_types::UnixTime::since_unix_epoch(core::time::Duration::from_millis(millis))
+        })
+    }
+}
+
 /// A UTC date and time, broken out for display.
 ///
 /// `u64` fields, wider than any of them needs, because everything here is
@@ -383,10 +410,27 @@ mod tests {
         driver.advance(Duration::from_secs(10));
         assert_eq!(now_unix_millis(), None);
         assert_eq!(now(), None);
+        // Here rather than in a test of its own, since it reads the same
+        // shared datum: unset is `None`, which is what fails TLS closed.
+        #[cfg(feature = "tls")]
+        let provider = {
+            use rustls::time_provider::TimeProvider;
+            let provider = rustls_time_provider();
+            assert_eq!(provider.current_time(), None);
+            provider
+        };
 
         set(1_790_000_000_123);
         assert_eq!(now_unix_millis(), Some(1_790_000_000_123));
         assert_eq!(now_unix(), Some(1_790_000_000));
+        #[cfg(feature = "tls")]
+        {
+            use rustls::time_provider::TimeProvider;
+            assert_eq!(
+                provider.current_time().map(|t| t.as_secs()),
+                Some(1_790_000_000)
+            );
+        }
 
         // The clock runs with the monotonic counter, not with calls to `set`.
         driver.advance(Duration::from_millis(1_500));

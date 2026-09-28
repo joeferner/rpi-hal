@@ -8,6 +8,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TLS client connections**, behind a `tls` feature: `rustls` in
+  `no_std` + `alloc` with real certificate-chain verification, and
+  `tls::TlsStream` driving its unbuffered state machine over an
+  `embassy-net` TCP socket, as `embedded-io-async` `Read` and `Write`.
+  `tls::client_config_with(roots)` builds a TLS 1.3-only configuration
+  over the board's own trust anchors; with `webpki-roots`,
+  `tls::client_config()` uses Mozilla's set, compiled in. Validity is
+  checked against `clock` through `clock::rustls_time_provider()`, so
+  every handshake fails closed until something has set the time.
+
+  The crypto provider is `rustls-rustcrypto`, pre-release and
+  unaudited — the only one that builds for a bare-metal target without a
+  C toolchain. `tls` needs a `getrandom` backend and deliberately does
+  not imply `entropy`, which is one; without it the image fails to link on
+  `__getrandom_custom`. About 1.2 MB of image, most of it the trust
+  anchors and the primitives.
+
+  Moved from the water sensor and weather station, whose copies were
+  identical; `TlsStream` gains `protocol_version`, `cipher_suite` and
+  `into_socket`. `examples/mdns.rs` runs a TLS check once the clock is
+  set — `example.com` by its own name, which must verify and carry a
+  request, and `www.google.com`'s front end asked for a name under the
+  reserved `.example` domain, which must be refused by the client's name
+  check — and seeds the stack from `entropy::fill` rather than an `Rng`
+  of its own.
+
 - **Setting the clock from an NTP server**, behind an `sntp` feature:
   `sntp::run(stack, NtpConfig)` waits for a lease, resolves the server
   (or takes an IPv4 address as written), syncs, calls `clock::set`, and
