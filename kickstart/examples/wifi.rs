@@ -54,11 +54,12 @@ extern crate alloc;
 use alloc::format;
 use alloc::vec::Vec;
 
-use common::settings::{self, Card, Credentials};
+use common::settings::{self, Card};
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::sdio::Sdio;
 use rpi_hal::wifi::Wifi;
 use rpi_hal::{pac, timer::Timer};
+use rpi_kickstart::config::WifiNetwork;
 use rpi_kickstart::{logln, net};
 
 mod common;
@@ -84,9 +85,9 @@ pub extern "C" fn kmain() -> ! {
 
     let loaded = settings::read(&mut board);
     let mut card = loaded.card;
-    let mut credentials = None;
+    let mut network = None;
     if let Some((settings, text)) = loaded.settings {
-        credentials = settings.credentials().unwrap_or_else(|problem| {
+        network = settings.wifi().unwrap_or_else(|problem| {
             logln!(
                 "settings: {}; no Wi-Fi",
                 problem.report(settings::FILE, &text)
@@ -97,7 +98,7 @@ pub extern "C" fn kmain() -> ! {
 
     let usb = common::usb(&mut board);
     let timer = board.timer;
-    let mut bring_up_wifi = || join(timer, card.take(), credentials.as_ref());
+    let mut bring_up_wifi = || join(timer, card.take(), network);
     let mut hardware = net::Hardware::new().usb(usb.dwc2).wifi(&mut bring_up_wifi);
     let interface = common::discover(&mut hardware, &board, &usb);
 
@@ -156,10 +157,10 @@ fn radio(board_revision: u32) -> Option<(&'static str, u32)> {
 /// — where the files live, what they are called, how the credentials are
 /// spelled — and a crate that decided them would be deciding for boards
 /// that keep their firmware somewhere else entirely.
-fn join(timer: &Timer, card: Option<Card>, credentials: Option<&Credentials>) -> Option<Wifi> {
-    // Checked first, because without them nothing below is worth doing --
+fn join(timer: &Timer, card: Option<Card>, network: Option<WifiNetwork>) -> Option<Wifi> {
+    // Checked first, because without one nothing below is worth doing --
     // and doing it gives the card slot away for nothing.
-    let Some(credentials) = credentials else {
+    let Some(network) = network else {
         logln!(
             "wifi: no [wifi] table in {}; nothing to join",
             settings::FILE
@@ -261,9 +262,9 @@ fn join(timer: &Timer, card: Option<Card>, credentials: Option<&Credentials>) ->
         return None;
     }
 
-    let ssid = credentials.ssid.as_str();
+    let ssid = network.ssid;
     logln!("wifi: joining {ssid:?}...");
-    match wifi.join_wpa2(ssid, &credentials.passphrase, timer) {
+    match wifi.join_wpa2(ssid, network.passphrase, timer) {
         Ok(bssid) => {
             logln!("wifi: associated with {}", common::Mac(bssid));
 

@@ -141,8 +141,11 @@ toml = { version = "1.1", default-features = false, features = [
 # The trait a schema implements through its derive. `alloc` because a
 # schema of owned strings is the ordinary case, and `DeserializeOwned` is
 # what lets `config::parse` return settings that outlive the text.
+# `derive` for the tables this crate writes once for every board --
+# `config::NtpSettings` and `config::WifiSettings`.
 serde = { version = "1.0", default-features = false, features = [
     "alloc",
+    "derive",
 ], optional = true }
 # Collects the keys a schema did not name as it deserializes, which is how
 # an unknown key is reported rather than silently dropped -- serde's own
@@ -266,14 +269,6 @@ embassy-net = { version = "0.9.1", default-features = false, features = [
 # For the console's clock in that example, which is the form a board on
 # Embassy actually uses.
 embassy-time = { version = "0.5.1", default-features = false }
-
-[dev-dependencies]
-# `derive` for the test schemas in src/config.rs. The library needs only
-# the trait; a board's own `serde` line is where the derive comes from.
-serde = { version = "1.0", default-features = false, features = [
-    "alloc",
-    "derive",
-] }
 
 # Host only, the mirror of the table above: a time driver for the `clock`
 # tests, which advance a mock counter under `set` and `now`. On a Pi it

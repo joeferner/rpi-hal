@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The `[ntp]` and `[wifi]` tables, written once.** `config::NtpSettings`
+  and `config::WifiSettings` are fields a board's own schema names, so
+  every board's file spells them the same way and reports the same
+  located errors. `WifiSettings::check` gives a `config::WifiNetwork`;
+  with `sntp`, `NtpSettings::check` gives an `sntp::NtpConfig` over the
+  defaults. Both checked forms have a `leak()` for the `'static` a radio
+  or `sntp::run` holds them for, and neither `Debug` shows the
+  passphrase. Also `config::unspanned` for building a schema to save, and
+  `value::duration_text`, the inverse of `value::duration`. Moved from
+  the weather station and the examples, which each had their own.
+
 - **TLS client connections**, behind a `tls` feature: `rustls` in
   `no_std` + `alloc` with real certificate-chain verification, and
   `tls::TlsStream` driving its unbuffered state machine over an

@@ -39,38 +39,10 @@ pub struct Settings {
     pub hostname: Option<Spanned<String>>,
     /// Where the clock comes from, if not the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ntp: Option<NtpSettings>,
+    pub ntp: Option<config::NtpSettings>,
     /// The network to join if Ethernet does not answer.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wifi: Option<WifiSettings>,
-}
-
-/// The `[ntp]` table. Every key is optional and falls back to
-/// `NtpConfig::DEFAULT`'s, so the table can name just the one it changes.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct NtpSettings {
-    /// The time server: a name, or an IPv4 address written out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub server: Option<Spanned<String>>,
-    /// How long to wait after a failed sync, as `"30s"` / `"5m"` / `"1h"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_interval: Option<Spanned<String>>,
-    /// How long to wait after a successful one, likewise.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resync_interval: Option<Spanned<String>>,
-}
-
-/// The `[wifi]` table.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct WifiSettings {
-    pub ssid: Spanned<String>,
-    pub passphrase: Spanned<String>,
-}
-
-/// The network credentials, once checked.
-pub struct Credentials {
-    pub ssid: String,
-    pub passphrase: String,
+    pub wifi: Option<config::WifiSettings>,
 }
 
 impl Settings {
@@ -83,38 +55,23 @@ impl Settings {
             .transpose()
     }
 
-    /// The time server and intervals, over the defaults. The server is
-    /// leaked once, at boot, since `sntp::run` borrows it for as long as
-    /// the program runs.
+    /// The time server and intervals, over the defaults. Leaked once, at
+    /// boot, since `sntp::run` borrows the server for as long as the
+    /// program runs.
     #[cfg(feature = "sntp")]
     pub fn ntp(&self) -> Result<rpi_kickstart::sntp::NtpConfig<'static>, Problem> {
-        let mut ntp = rpi_kickstart::sntp::NtpConfig::DEFAULT;
-        let Some(settings) = &self.ntp else {
-            return Ok(ntp);
-        };
-        if let Some(server) = &settings.server {
-            ntp.server = String::from(value::host(server.as_ref()).at(server)?).leak();
+        match &self.ntp {
+            Some(ntp) => Ok(ntp.check()?.leak()),
+            None => Ok(rpi_kickstart::sntp::NtpConfig::DEFAULT),
         }
-        if let Some(interval) = &settings.retry_interval {
-            ntp.retry_interval = value::duration(interval.as_ref()).at(interval)?;
-        }
-        if let Some(interval) = &settings.resync_interval {
-            ntp.resync_interval = value::duration(interval.as_ref()).at(interval)?;
-        }
-        Ok(ntp)
     }
 
-    /// The `[wifi]` credentials, checked.
-    pub fn credentials(&self) -> Result<Option<Credentials>, Problem> {
-        let Some(wifi) = &self.wifi else {
-            return Ok(None);
-        };
-        Ok(Some(Credentials {
-            ssid: value::ssid(wifi.ssid.as_ref()).at(&wifi.ssid)?.into(),
-            passphrase: value::passphrase(wifi.passphrase.as_ref())
-                .at(&wifi.passphrase)?
-                .into(),
-        }))
+    /// The `[wifi]` network, checked and leaked for the radio to hold.
+    pub fn wifi(&self) -> Result<Option<config::WifiNetwork<'static>>, Problem> {
+        self.wifi
+            .as_ref()
+            .map(|wifi| Ok(wifi.check()?.leak()))
+            .transpose()
     }
 }
 

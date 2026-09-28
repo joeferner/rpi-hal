@@ -92,6 +92,13 @@ use serde::de::DeserializeOwned;
 /// `into_inner()`.
 pub use toml::Spanned;
 
+/// A value for a schema that was not read from a file, for building one to
+/// save. The span is never read on the way out,
+/// and the next load gives the written file's own.
+pub fn unspanned<T>(value: T) -> Spanned<T> {
+    Spanned::new(0..0, value)
+}
+
 /// What [`parse`] produced from a file that was valid.
 #[derive(Debug)]
 pub struct Parsed<C> {
@@ -550,6 +557,8 @@ impl<T> At<T> for Result<T, Invalid> {
 /// a range check on a number is one comparison the application can write
 /// with an [`Invalid`] of its own.
 pub mod value {
+    use alloc::format;
+    use alloc::string::String;
     use core::time::Duration;
 
     use super::Invalid;
@@ -589,6 +598,23 @@ pub mod value {
         Ok(Duration::from_secs(
             count.checked_mul(multiplier).ok_or(EXPECTED)?,
         ))
+    }
+
+    /// `duration` in [`duration`]'s syntax, in the largest unit that
+    /// divides it exactly — so six hours comes back as `6h` rather than
+    /// `21600s`. Whole seconds; a fraction is dropped.
+    ///
+    /// For a settings page to show a value, and for a save to write one
+    /// back the way it was written rather than expanded into seconds.
+    pub fn duration_text(duration: Duration) -> String {
+        let seconds = duration.as_secs();
+        if seconds != 0 && seconds.is_multiple_of(60 * 60) {
+            format!("{}h", seconds / (60 * 60))
+        } else if seconds != 0 && seconds.is_multiple_of(60) {
+            format!("{}m", seconds / 60)
+        } else {
+            format!("{seconds}s")
+        }
     }
 
     /// A name this board will *answer* to over mDNS: letters, digits and
@@ -783,6 +809,160 @@ pub mod value {
     /// [`host`] and [`word`] share for different reasons.
     fn graphic(v: &str) -> Option<&str> {
         (!v.is_empty() && v.bytes().all(|b| b.is_ascii_graphic())).then_some(v)
+    }
+}
+
+/// The `[ntp]` table: where the clock comes from, and how often it is
+/// asked.
+///
+/// The tables here are ones every board that has them writes the same way,
+/// so they are written once: a board's schema names one as a field, and
+/// the file, the checks and the errors are the same on each.
+///
+/// ```ignore
+/// #[derive(serde::Serialize, serde::Deserialize)]
+/// struct Settings {
+///     #[serde(skip_serializing_if = "Option::is_none")]
+///     ntp: Option<config::NtpSettings>,
+///     #[serde(skip_serializing_if = "Option::is_none")]
+///     wifi: Option<config::WifiSettings>,
+/// }
+/// ```
+///
+/// Every key is optional and falls back to
+/// [`NtpConfig::DEFAULT`](crate::sntp::NtpConfig::DEFAULT)'s, so the table
+/// can name just the one it changes.
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
+pub struct NtpSettings {
+    /// The time server: a name, or an IPv4 address written out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<Spanned<String>>,
+    /// How long to wait after a failed sync, as `"30s"` / `"5m"` / `"1h"`
+    /// — see [`value::duration`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_interval: Option<Spanned<String>>,
+    /// How long to wait after a successful one, likewise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resync_interval: Option<Spanned<String>>,
+}
+
+#[cfg(feature = "sntp")]
+impl NtpSettings {
+    /// The semantic half: the server as a [`value::host`] and the
+    /// intervals as [`value::duration`]s, over the defaults.
+    ///
+    /// Borrows the server from the table. [`crate::sntp::run`] borrows it
+    /// in turn for as long as it runs, which is usually forever, so a
+    /// board typically copies it somewhere `'static` once, at boot.
+    pub fn check(&self) -> Result<crate::sntp::NtpConfig<'_>, Problem> {
+        let mut ntp = crate::sntp::NtpConfig::DEFAULT;
+        if let Some(server) = &self.server {
+            ntp.server = value::host(server.as_ref()).at(server)?;
+        }
+        if let Some(interval) = &self.retry_interval {
+            ntp.retry_interval = value::duration(interval.as_ref()).at(interval)?;
+        }
+        if let Some(interval) = &self.resync_interval {
+            ntp.resync_interval = value::duration(interval.as_ref()).at(interval)?;
+        }
+        Ok(ntp)
+    }
+}
+
+// Here rather than in `sntp`, which needs no allocator without this.
+#[cfg(feature = "sntp")]
+impl crate::sntp::NtpConfig<'_> {
+    /// This configuration, with the server copied somewhere that lasts as
+    /// long as the program — which is how long [`crate::sntp::run`] holds
+    /// it. Leaks the name: a few bytes, once, at boot.
+    pub fn leak(&self) -> crate::sntp::NtpConfig<'static> {
+        crate::sntp::NtpConfig {
+            server: String::from(self.server).leak(),
+            retry_interval: self.retry_interval,
+            resync_interval: self.resync_interval,
+        }
+    }
+}
+
+/// The `[wifi]` table: the network to join, and what to authenticate
+/// with.
+///
+/// Both fields, or no table. Leaving the table out is how a card says it
+/// wants no network; an SSID with no passphrase is a half-finished edit,
+/// and is a missing field reported at its line rather than something the
+/// board has to notice at the join.
+///
+/// Its `Debug` leaves the passphrase out, as [`WifiNetwork`]'s does.
+#[derive(Serialize, serde::Deserialize)]
+pub struct WifiSettings {
+    /// The SSID, as it is broadcast.
+    pub ssid: Spanned<String>,
+    /// The WPA2-PSK passphrase.
+    pub passphrase: Spanned<String>,
+}
+
+impl WifiSettings {
+    /// A table to save, from values that were not read from a file.
+    pub fn new(ssid: impl Into<String>, passphrase: impl Into<String>) -> Self {
+        WifiSettings {
+            ssid: unspanned(ssid.into()),
+            passphrase: unspanned(passphrase.into()),
+        }
+    }
+
+    /// The semantic half: the SSID as a [`value::ssid`] and the passphrase
+    /// as a [`value::passphrase`].
+    pub fn check(&self) -> Result<WifiNetwork<'_>, Problem> {
+        Ok(WifiNetwork {
+            ssid: value::ssid(self.ssid.as_ref()).at(&self.ssid)?,
+            passphrase: value::passphrase(self.passphrase.as_ref()).at(&self.passphrase)?,
+        })
+    }
+}
+
+/// Says which network, and never what the passphrase is.
+impl fmt::Debug for WifiSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WifiSettings")
+            .field("ssid", self.ssid.as_ref())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A Wi-Fi network to join, once [`WifiSettings::check`] has passed it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct WifiNetwork<'a> {
+    /// The SSID, as it is broadcast.
+    pub ssid: &'a str,
+    /// The WPA2-PSK passphrase.
+    ///
+    /// Never logged: the console is a wire somebody can clip onto, and
+    /// this is the one value in a settings file that grants anything. The
+    /// `Debug` impl leaves it out for that reason.
+    pub passphrase: &'a str,
+}
+
+impl WifiNetwork<'_> {
+    /// This network, copied somewhere that lasts as long as the program.
+    ///
+    /// Leaks both strings: a few dozen bytes, once at boot, for a value
+    /// that a radio's reconnect loop holds forever. A board that applies
+    /// saved settings without a restart leaks them again per save, which
+    /// is still bytes.
+    pub fn leak(&self) -> WifiNetwork<'static> {
+        WifiNetwork {
+            ssid: String::from(self.ssid).leak(),
+            passphrase: String::from(self.passphrase).leak(),
+        }
+    }
+}
+
+/// Says which network, and never what the passphrase is.
+impl fmt::Debug for WifiNetwork<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WifiNetwork")
+            .field("ssid", &self.ssid)
+            .finish_non_exhaustive()
     }
 }
 
@@ -1067,19 +1247,8 @@ presence_uv = 350000
         #[derive(Debug, serde::Deserialize)]
         struct Example {
             hostname: Option<Spanned<String>>,
-            ntp: Option<Ntp>,
-            wifi: Option<Wifi>,
-        }
-        #[derive(Debug, serde::Deserialize)]
-        struct Ntp {
-            server: Spanned<String>,
-            retry_interval: Spanned<String>,
-            resync_interval: Spanned<String>,
-        }
-        #[derive(Debug, serde::Deserialize)]
-        struct Wifi {
-            ssid: Spanned<String>,
-            passphrase: Spanned<String>,
+            ntp: Option<NtpSettings>,
+            wifi: Option<WifiSettings>,
         }
 
         let text = include_bytes!("../kickstart.toml.example");
@@ -1090,25 +1259,92 @@ presence_uv = 350000
             value::label(example.hostname.unwrap().as_ref()),
             Ok("kickstart")
         );
-        let wifi = example.wifi.unwrap();
-        assert!(value::ssid(wifi.ssid.as_ref()).is_ok());
-        assert!(value::passphrase(wifi.passphrase.as_ref()).is_ok());
+        assert!(example.wifi.unwrap().check().is_ok());
 
-        // The template says its `[ntp]` values are the defaults, and that
-        // has to stay true.
+        // The template writes every `[ntp]` key and says the values are the
+        // defaults, and both have to stay true.
         let ntp = example.ntp.unwrap();
-        let server = value::host(ntp.server.as_ref()).unwrap();
-        let retry = value::duration(ntp.retry_interval.as_ref()).unwrap();
-        let resync = value::duration(ntp.resync_interval.as_ref()).unwrap();
+        assert!(ntp.server.is_some());
+        assert!(ntp.retry_interval.is_some());
+        assert!(ntp.resync_interval.is_some());
         #[cfg(feature = "sntp")]
         {
+            let checked = ntp.check().unwrap();
             let defaults = crate::sntp::NtpConfig::DEFAULT;
-            assert_eq!(server, defaults.server);
-            assert_eq!(retry, defaults.retry_interval);
-            assert_eq!(resync, defaults.resync_interval);
+            assert_eq!(checked.server, defaults.server);
+            assert_eq!(checked.retry_interval, defaults.retry_interval);
+            assert_eq!(checked.resync_interval, defaults.resync_interval);
         }
-        #[cfg(not(feature = "sntp"))]
-        let _ = (server, retry, resync);
+    }
+
+    /// A bad value in a shared table is located at the value, like one in
+    /// a board's own schema.
+    #[test]
+    fn shared_tables_locate_their_problems() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Board {
+            #[allow(dead_code)]
+            ntp: Option<NtpSettings>,
+            wifi: Option<WifiSettings>,
+        }
+        let text = b"[wifi]\nssid = \"home\"\npassphrase = \"short\"\n";
+        let wifi = parse::<Board>(text).unwrap().settings.wifi.unwrap();
+        let problem = wifi.check().unwrap_err();
+        assert_eq!(
+            problem.locate(text),
+            Some(Location {
+                line: 3,
+                column: 14
+            })
+        );
+
+        // An SSID with no passphrase is a missing field, not a network.
+        assert!(parse::<Board>(b"[wifi]\nssid = \"home\"\n").is_err());
+
+        #[cfg(feature = "sntp")]
+        {
+            let text = b"[ntp]\nresync_interval = \"0s\"\n";
+            let ntp = parse::<Board>(text).unwrap().settings.ntp.unwrap();
+            let problem = ntp.check().unwrap_err();
+            assert_eq!(problem.locate(text).map(|at| at.line), Some(2));
+
+            let text = b"[ntp]\nserver = \"time.local\"\n";
+            let ntp = parse::<Board>(text).unwrap().settings.ntp.unwrap();
+            let checked = ntp.check().unwrap();
+            assert_eq!(checked.server, "time.local");
+            assert_eq!(
+                checked.resync_interval,
+                crate::sntp::NtpConfig::DEFAULT.resync_interval
+            );
+        }
+    }
+
+    /// Neither table's `Debug`, nor the checked network's, shows the
+    /// passphrase.
+    #[test]
+    fn debug_never_shows_the_passphrase() {
+        let wifi = WifiSettings::new("home", "correct horse");
+        let shown = format!("{wifi:?} {:?}", wifi.check().unwrap());
+        assert!(shown.contains("home"), "{shown}");
+        assert!(!shown.contains("horse"), "{shown}");
+    }
+
+    #[test]
+    fn durations_are_written_in_their_largest_exact_unit() {
+        for (seconds, text) in [
+            (0, "0s"),
+            (30, "30s"),
+            (90, "90s"),
+            (300, "5m"),
+            (6 * 60 * 60, "6h"),
+            (25 * 60, "25m"),
+        ] {
+            let written = value::duration_text(Duration::from_secs(seconds));
+            assert_eq!(written, text);
+            if seconds != 0 {
+                assert_eq!(value::duration(&written), Ok(Duration::from_secs(seconds)));
+            }
+        }
     }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
