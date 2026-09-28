@@ -16,11 +16,19 @@
 //!
 //! # Timestamps
 //!
-//! Nothing here sets the volume's clock yet, so every file written carries
-//! the FAT epoch, 1980-01-01. That is `resident-fat`'s default and a real
-//! date rather than a failure: a write must not depend on whether anything
-//! has learnt the time. Once this crate has a clock, `mount` is where it
-//! gets installed.
+//! With the `clock` feature, `mount` gives the volume a clock that reads
+//! [`crate::clock`], so a file written once something has set the time
+//! carries that time. Before then — and without the feature — it carries
+//! the FAT epoch, 1980-01-01. That is not a concession: a write must not
+//! depend on whether the network has answered, and a file dated 1980 beats
+//! one that refuses to be written. It is also how a board reading the card
+//! tells a file written by something that knew the time from one that did
+//! not.
+//!
+//! The stamp is UTC. FAT timestamps carry no zone and operating systems
+//! read them as local time, so a PC east or west of Greenwich shows these
+//! files that many hours off; a board has no zone to convert with until a
+//! `tz` one is read off the card, which is after the card is mounted.
 
 use core::fmt;
 
@@ -66,6 +74,21 @@ impl<E: fmt::Debug> fmt::Display for Error<E> {
 /// of it.
 pub type Volume<D> = FileSystem<D>;
 
+/// What the volume stamps on the entries it writes: [`crate::clock`]'s
+/// time once something has set it, and the FAT epoch before that — see
+/// the module documentation for why the fallback is the right answer.
+///
+/// Deliberately not uptime, which would stamp every file a few seconds
+/// after 1980 with an air of precision it has not earned.
+#[cfg(feature = "clock")]
+fn fat_now() -> resident_fat::DateTime {
+    match crate::clock::now_unix() {
+        // Clamped into FAT's range by `from_unix_seconds` itself.
+        Some(seconds) => resident_fat::DateTime::from_unix_seconds(seconds as i64),
+        None => resident_fat::DateTime::EPOCH,
+    }
+}
+
 /// Mounts the FAT volume on `device`, and says on the console what it
 /// found.
 ///
@@ -100,6 +123,13 @@ pub fn mount<D: BlockDevice>(mut device: D) -> Result<Volume<D>, Error<D::Error>
             logln!("storage: FAT volume with no partition table");
             volume
         }
+    };
+
+    #[cfg(feature = "clock")]
+    let volume = {
+        let mut volume = volume;
+        volume.set_clock(alloc::boxed::Box::new(resident_fat::FnClock::new(fat_now)));
+        volume
     };
 
     let clusters = volume.fat().cluster_count();

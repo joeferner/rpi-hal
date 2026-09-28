@@ -124,7 +124,7 @@ use rpi_hal_embassy::{Executor, time_driver};
 use rpi_kickstart::config::{self, At, Problem, Spanned, value};
 use rpi_kickstart::net::{self, Interface};
 use rpi_kickstart::site::{self, Site};
-use rpi_kickstart::{console, heap, logln, mdns, storage};
+use rpi_kickstart::{clock, console, heap, logln, mdns, storage};
 use static_cell::StaticCell;
 
 /// The settings file, at the root of the card's FAT partition.
@@ -391,6 +391,26 @@ pub extern "C" fn kmain() -> ! {
         }
     }
 
+    // The wall clock, which nothing in this example can learn -- there is
+    // no SNTP here yet -- so it takes the build's word for it, if the build
+    // gave one:
+    //
+    //     KICKSTART_UNIX_TIME=$(date +%s) scripts/build-example.sh mdns
+    //
+    // Minutes stale by the time the board boots, which is fine for what it
+    // is for: showing that a file the board writes carries the clock's
+    // time rather than 1980. A real board sets it from a real source.
+    match option_env!("KICKSTART_UNIX_TIME").map(str::parse::<u64>) {
+        Some(Ok(unix_seconds)) => {
+            clock::set(unix_seconds * 1_000);
+            if let Some(now) = clock::now() {
+                logln!("clock: {now}, from the build rather than a real source");
+            }
+        }
+        Some(Err(_)) => logln!("clock: KICKSTART_UNIX_TIME is not a number; not set"),
+        None => logln!("clock: not set; files this board writes are dated 1980"),
+    }
+
     let (mut card, credentials) = read_settings(&mut mailbox, timer);
     logln!("mdns: answering to {}.local", hostname());
 
@@ -641,6 +661,26 @@ fn read_settings(
         logln!("settings: no {SETTINGS_FILE} on the card; using defaults");
         return (Some(card), None);
     };
+    // When the file was last written, which is how a save by an earlier
+    // boot shows up: dated by the clock that board had, or 1980 if none.
+    if let Ok(root) = card.root_dir()
+        && let Some(entry) = root.get(SETTINGS_FILE)
+    {
+        let at = entry.modified();
+        if at == resident_fat::DateTime::EPOCH {
+            logln!("settings: {SETTINGS_FILE} carries no timestamp");
+        } else {
+            logln!(
+                "settings: {SETTINGS_FILE} last written {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                at.year,
+                at.month,
+                at.day,
+                at.hour,
+                at.minute,
+                at.second
+            );
+        }
+    }
     for key in &loaded.parsed.unknown {
         logln!("settings: {SETTINGS_FILE}: ignoring unknown key `{key}`");
     }

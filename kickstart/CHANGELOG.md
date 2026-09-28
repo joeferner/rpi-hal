@@ -8,6 +8,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The wall clock**, behind a `clock` feature: `clock::set(unix_millis)`
+  is the sink every time source feeds — SNTP, an RTC, anything — and
+  `now_unix_millis`, `now_unix` and `now` read it back, all `None` until
+  something has set it, so anything needing a date fails closed rather
+  than believing it is 1970. What is stored is the Unix time at
+  `embassy-time`'s zero, so a read is one atomic load plus the monotonic
+  counter and a re-sync just moves the datum. `DateTime` and
+  `days_from_civil` are Hinnant's civil-date algorithms, host-tested over
+  every day FAT can store.
+
+  With `storage`, `mount` now installs a clock on the volume, so a file
+  written after the time is set carries that time rather than 1980 —
+  which the weather station's own `storage` never did.
+
+  `tz` adds `LocalTime` and `utc_offset` over a `tz-rs` zone, separately,
+  so a board with no zone file pays for no parser.
+
+  Taken from the weather station's `clock.rs` — milliseconds, `epoch_day`,
+  local time — rather than the water sensor's seconds-only one.
+
 - **The board's web assets**, behind a `site` feature: `site::load`
   walks `/WWW` on the card (four levels deep at most), reads every file
   onto the heap and logs each with its size and modification time, and

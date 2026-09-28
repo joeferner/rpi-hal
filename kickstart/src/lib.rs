@@ -37,9 +37,13 @@
 #![no_std]
 #![deny(missing_docs)]
 
-#[cfg(any(feature = "config", feature = "site"))]
+#[cfg(any(feature = "config", feature = "site", feature = "storage", test))]
 extern crate alloc;
 
+/// The wall clock — see the module's own documentation for why it is a
+/// sink with no source of its own, and why it reads `None` until set.
+#[cfg(feature = "clock")]
+pub mod clock;
 /// Reading a board's settings file — see the module's own documentation
 /// for why the semantic checks run after parsing rather than inside it.
 #[cfg(feature = "config")]
@@ -79,6 +83,6 @@ pub mod site;
 #[cfg(feature = "storage")]
 pub mod storage;
 
-// The rest of the modules this crate is being assembled from -- clock,
+// The rest of the modules this crate is being assembled from --
 // web, metrics, ota -- arrive one at a time, each behind
 // the feature named for it.

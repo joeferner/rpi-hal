@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -156,6 +156,17 @@ resident-fat = { version = "0.1.0", default-features = false, features = [
     "mbr",
 ], optional = true }
 
+# Local time behind `tz`: the IANA zone database's own file format, parsed
+# on the board. `alloc` and not `std` -- `from_tz_data` takes a TZif file's
+# bytes as a slice, and the `std` half is the part that resolves zone
+# *names* against `/usr/share/zoneinfo`, which no board has. A parser
+# rather than a baked table because daylight-saving rules are political
+# data that change a few times a year somewhere, and the fix for one should
+# be replacing 3 KB on a card rather than rebuilding a kernel.
+tz-rs = { version = "0.7", default-features = false, features = [
+    "alloc",
+], optional = true }
+
 # Bare-metal only, so that `cargo test` can build this crate for the host:
 # the config parser is pure, and its tests have nowhere else to run. None of
 # these compile for an OS target, and none of them are needed there -- they
@@ -236,6 +247,18 @@ serde = { version = "1.0", default-features = false, features = [
     "alloc",
     "derive",
 ] }
+
+# Host only, the mirror of the table above: a time driver for the `clock`
+# tests, which advance a mock counter under `set` and `now`. On a Pi it
+# would be a second `embassy-time` driver beside `rpi-hal-embassy`'s, and
+# two is a duplicate symbol.
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+embassy-time = { version = "0.5.1", default-features = false, features = [
+    "mock-driver",
+] }
+# The mock driver takes a `critical_section` lock, and on a Pi the
+# implementation is `rpi-hal`'s; on the host it is this one.
+critical-section = { version = "1.2.0", features = ["std"] }
 
 [features]
 # Nothing is on by default, and that is the crate's whole arrangement: a
@@ -322,6 +345,22 @@ storage = ["dep:resident-fat", "rpi-hal?/resident-fat", "console"]
 # can put its pages behind whatever server it has; this needs nothing
 # beyond the volume `storage` mounted.
 site = ["storage"]
+
+# The wall clock: one sink every time source sets and every reader reads
+# (src/clock.rs), plus the civil-date arithmetic.
+#
+# `embassy-time` for its `Instant` and nothing else. Which driver is
+# underneath is the board's; the API crate decides none of that.
+#
+# No time *source* here -- `sntp` will be one, and a board with an RTC
+# calls `clock::set` itself -- so turning off a source never turns this
+# off. With `storage`, `mount` stamps files with this time.
+clock = ["dep:embassy-time"]
+
+# Local time: `LocalTime` and `utc_offset` over a `tz-rs` zone
+# (src/clock.rs). Separate from `clock` so a board with no zone file shows
+# UTC and pays for no parser.
+tz = ["clock", "dep:tz-rs"]
 
 # An mDNS responder for one name (src/mdns.rs).
 #
@@ -428,7 +467,8 @@ name = "mdns"
 # `heap`, `storage` and `config` because its name and Wi-Fi credentials
 # come from `kickstart.toml` on the card, read through the crate's own
 # mount and settings loader. `site` because it loads `/WWW` off the same
-# mount and lists it.
+# mount and lists it. `clock` so what it writes back is dated -- from a
+# build-time timestamp, since it has no time source of its own.
 required-features = [
     "mdns",
     "ethernet",
@@ -438,6 +478,7 @@ required-features = [
     "storage",
     "config",
     "site",
+    "clock",
     "bcm2837",
 ]
 

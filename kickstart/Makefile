@@ -33,7 +33,7 @@ ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
 # `bcm2837` is the one named because the examples are Pi 2/3 images. A
 # board is free to select another; what this list covers is that the
 # modules compile, and none of them is chip-conditional.
-FEATURES := console,entropy,heap,config,storage,site,mdns,ethernet,wifi,bcm2837
+FEATURES := console,entropy,heap,config,storage,site,clock,tz,mdns,ethernet,wifi,bcm2837
 
 # The machine running the build. Tests run there, because that is the only
 # place `cargo test` has to run them: the bare-metal targets have no test
@@ -43,7 +43,7 @@ HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 # The modules whose tests are pure and so build for the host. Not
 # $(FEATURES): most of those reach `rpi-hal`, which compiles only for a
 # Pi, and a module that does cannot be tested this way at all.
-TEST_FEATURES := config,site
+TEST_FEATURES := config,site,clock,tz
 
 # Twice, because a feature-gated module is not compiled at all without its
 # feature: the plain pass proves the crate is usable with nothing turned
