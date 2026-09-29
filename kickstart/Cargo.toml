@@ -166,6 +166,9 @@ serde_ignored = { version = "0.1.14", default-features = false, optional = true 
 resident-fat = { version = "0.1.0", default-features = false, features = [
     "mbr",
 ], optional = true }
+# The async mutex behind `storage::Shared`, so a task waiting for the card
+# yields rather than spins. 0.7 to match what the boards' own lines name.
+embassy-sync = { version = "0.7", default-features = false, optional = true }
 
 # Local time behind `tz`: the IANA zone database's own file format, parsed
 # on the board. `alloc` and not `std` -- `from_tz_data` takes a TZif file's
@@ -364,7 +367,15 @@ config = ["dep:toml", "dep:serde", "dep:serde_ignored"]
 # the build anyway. `?` for the reason the chip features use it: `storage`
 # alone must not pull in a HAL, since the card may be behind some other
 # driver entirely.
-storage = ["dep:resident-fat", "rpi-hal?/resident-fat", "console"]
+#
+# `embassy-sync` for `storage::Shared`, the mutex a mounted volume sits
+# behind once several tasks want it.
+storage = [
+    "dep:resident-fat",
+    "rpi-hal?/resident-fat",
+    "dep:embassy-sync",
+    "console",
+]
 
 # The board's web assets: everything under `/WWW` on the card, read into
 # RAM at boot and looked up by request path (src/site.rs).

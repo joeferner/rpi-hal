@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`storage::Shared`**, the mounted card behind an async mutex, for once
+  several tasks want it: a settings save from one web task, an update
+  from another. A board declares it as a `static` — a `static` cannot be
+  generic, so this is a type rather than one of the crate's — and
+  `install`s the volume at bring-up, then reaches it with `with(|volume|
+  …)`. `Shared::new` is `unsafe`: the volume's block device is not `Send`,
+  and the three conditions that make sharing it sound (one core, no
+  interrupt handler on the card, nothing reaching it but this) are the
+  board's to promise, once, where its code shows it. `storage` now takes
+  `embassy-sync`. Moved from the water sensor and the weather station,
+  whose copies were the same wrapper with the same safety argument.
+
 - **Writing Prometheus's text exposition format**, behind a `metrics`
   feature: the writer, not the series. `metrics::Exposition` writes a
   family's `# HELP`/`# TYPE` preamble (`Kind::Counter` or `Kind::Gauge`,
