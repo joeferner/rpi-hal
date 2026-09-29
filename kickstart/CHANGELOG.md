@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Writing Prometheus's text exposition format**, behind a `metrics`
+  feature: the writer, not the series. `metrics::Exposition` writes a
+  family's `# HELP`/`# TYPE` preamble (`Kind::Counter` or `Kind::Gauge`,
+  help escaped), `sample(name, labels, value)` with every label value
+  escaped on the way out, and `sample_fixed` for an integer in a sub-unit
+  as a decimal in the base unit — the sign kept between -1 and 0, and no
+  float formatter. Values are any integer or a `bool`. `build_info` and
+  `uptime` are the two families every board publishes word for word, and
+  with `web`, `into_body()` is the response, with `metrics::CONTENT_TYPE`.
+  Moved from the water sensor and the weather station, whose copies were
+  the same functions; only the water sensor's escaped labels, by hand.
+
 - **Serving HTTP**, behind a `web` feature. `web::serve(id, stack,
   &router, &config)` is the `picoserve` socket loop, run by a pool of the
   board's own tasks over the board's own router; `web::ServeConfig` carries

@@ -39,6 +39,7 @@
 
 #[cfg(any(
     feature = "config",
+    feature = "metrics",
     feature = "site",
     feature = "storage",
     feature = "tls",
@@ -76,6 +77,11 @@ pub mod heap;
 /// for the half of the multicast plumbing the board still has to do.
 #[cfg(feature = "mdns")]
 pub mod mdns;
+/// Writing Prometheus's text exposition format — see the module's own
+/// documentation for decimals without a float formatter, and why a label
+/// value is only ever written escaped.
+#[cfg(feature = "metrics")]
+pub mod metrics;
 /// Getting a board onto the network, whichever way it can — see the
 /// module's own documentation for why "is Ethernet available" is two
 /// questions and both are deadlines.
@@ -103,6 +109,5 @@ pub mod tls;
 #[cfg(feature = "web")]
 pub mod web;
 
-// The rest of the modules this crate is being assembled from --
-// metrics, ota -- arrive one at a time, each behind the feature named for
-// it.
+// The rest of the modules this crate is being assembled from -- ota
+// first -- arrive one at a time, each behind the feature named for it.

@@ -34,8 +34,9 @@ named for it.
 | `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
+| `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
 
-Still to come: metrics, ota.
+Still to come: ota.
 
 The examples read their settings from `kickstart.toml` at the root of the
 card; copy `kickstart.toml.example` and fill it in.

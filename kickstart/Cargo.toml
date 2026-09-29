@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "metrics", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -462,6 +462,17 @@ web = [
     "embassy-net/tcp",
     "dep:embassy-time",
 ]
+
+# Writing Prometheus's text exposition format (src/metrics.rs): the
+# writer, not the series. `metrics::Exposition` writes a family's
+# preamble, samples with escaped labels, and fixed-point decimals without
+# a float formatter; `build_info` and `uptime` are the two families every
+# board publishes word for word.
+#
+# `embassy-time` for `uptime`'s `Instant`. Needs an allocator: the
+# document is a `String`. With `web`, `Exposition::into_body` is the
+# response.
+metrics = ["dep:embassy-time"]
 
 # An mDNS responder for one name (src/mdns.rs).
 #
