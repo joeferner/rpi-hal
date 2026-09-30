@@ -10,6 +10,16 @@ wire protocol; this is a library, its consumers are firmware projects in
 other repositories, and tying it to that version would bump their
 dependency every time a command-line flag was renamed.
 
+## [Unreleased]
+
+### Changed
+
+- **`resident-fat` 0.1 → 0.3**, behind `apply`. **Breaking** for a board
+  using `apply`: it hands `apply` a 0.3 `FileSystem`, so its own
+  `resident-fat` — and the HAL whose block device sits under it — moves
+  with this. Nothing in this package's source changed; the format half,
+  which the CLI uses, has no `resident-fat` in it at all.
+
 ## [0.2.0] - 2026-09-02
 
 ### Added
