@@ -6,6 +6,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`resident-fat` 0.3.** `storage::mount` is `resident-fat`'s
+  `mount_first_fat` now, plus its console lines, and `storage::Error` is
+  `resident-fat`'s own error, whose `NoFatPartition` replaces the case
+  this crate had. A board's own `resident-fat`, and the HAL whose block
+  device it mounts, move to 0.3 with it.
+- **`config::save` replaces the file without a window where it is half
+  written.** It writes the settings beside the file
+  (`config::STAGING_SUFFIX`, `weather.toml.new`), syncs, reads them back
+  and compares, then renames the checked copy over the file and syncs
+  again — so a reset at any point leaves the old settings or the new,
+  never a truncated file that is valid TOML with its tail loading as
+  defaults. `SaveError::Rename` is the new step; everything before it
+  leaves the settings file untouched.
+
 ### Added
 
 - **`storage::Shared`**, the mounted card behind an async mutex, for once

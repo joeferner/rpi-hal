@@ -163,7 +163,10 @@ serde_ignored = { version = "0.1.14", default-features = false, optional = true 
 # `rpi-hal`'s `SdBlockDevice` implements the trait for: with two in the
 # graph, the adapter implements the other one's `BlockDevice` and
 # `storage::mount` refuses it with an error that names neither version.
-resident-fat = { version = "0.1.0", default-features = false, features = [
+# 0.3 for `mount_first_fat`, which `storage::mount` is, and `rename`, which
+# is how `config::save` replaces the file without a window where it is
+# half written.
+resident-fat = { version = "0.3.0", default-features = false, features = [
     "mbr",
 ], optional = true }
 # The async mutex behind `storage::Shared`, so a task waiting for the card
@@ -675,6 +678,15 @@ required-features = [
     "config",
     "bcm2837",
 ]
+
+# **Temporary.** `resident-fat` 0.3 is a new major, and `rpi-hal`'s
+# `SdBlockDevice`, which the examples mount through `storage::mount`, has to
+# implement the same one -- the published `rpi-hal` 0.8.0 implements 0.1's.
+# This builds against a local `rpi-hal` whose `resident-fat` is 0.3 until
+# the release that carries it (0.9.0), and then goes, with the version
+# requirements above moving to that release.
+[patch.crates-io]
+rpi-hal = { path = "../rpi-hal" }
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding

@@ -1157,9 +1157,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "resident-fat"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8e9d9402fec47df435439edd966dc2e24d6594067f2b0b04fc65d4392fd9179"
+checksum = "5778b62737f65c9a68a12406db200854dfda2ffcb5a548f24a03d6c1d0217dc0"
 dependencies = [
  "thiserror",
 ]
@@ -1203,8 +1203,6 @@ dependencies = [
 [[package]]
 name = "rpi-hal"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15f875a03f8a2bf7d80fae459332a7b77b2f93b96e79950338b1d5f037ff07e7"
 dependencies = [
  "bcm2711-lpa",
  "bcm2835-lpa",

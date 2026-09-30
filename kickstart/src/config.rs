@@ -286,17 +286,22 @@ impl core::error::Error for RenderError {}
 ///
 /// 1. **Rendered and checked before anything is written** — see
 ///    [`render`]. Nothing reaches the card that would not load.
-/// 2. **Written and synced.** The allocation table is held in RAM and
-///    reaches the card when a sync says so; without it the file reads back
-///    correctly now and is gone at the next boot.
-/// 3. **Read back and compared.** A write the card accepted and did not
-///    store is otherwise discovered at the reboot that was meant to apply
-///    it.
+/// 2. **Written beside the file, and synced** — to `path` with
+///    [`STAGING_SUFFIX`] on the end. The allocation table is held in RAM
+///    and reaches the card when a sync says so; without it the file reads
+///    back correctly now and is gone at the next boot.
+/// 3. **Read back and compared**, still beside the file. A write the card
+///    accepted and did not store is otherwise discovered at the reboot
+///    that was meant to apply it — and here it is discovered while `path`
+///    still holds the settings it did before.
+/// 4. **Renamed over `path`, and synced.** `resident-fat`'s rename
+///    replaces a file so that `path` names a whole one at every write, the
+///    old or the new, and never part of either.
 ///
-/// Not atomic. The file is replaced in place, so a reset in the middle of
-/// step 2 can leave it truncated. `load` reports that as invalid when the
-/// cut lands mid-value, but a cut between lines is valid TOML, and the keys
-/// after it load as their defaults.
+/// So a reset at any point leaves `path` the old settings or the new ones,
+/// never a truncated file that happens to be valid TOML with the keys
+/// after the cut loading as their defaults. What it can leave is the
+/// staging file beside it, which the next save replaces.
 ///
 /// The text comes back so a caller serving the settings, or reporting a
 /// [`Problem`] found in them later, has the bytes that are now on the card.
@@ -311,34 +316,52 @@ where
     D: resident_fat::BlockDevice,
 {
     let text = render(settings).map_err(SaveError::Render)?.into_bytes();
-    let file = volume.write_file(path, &text).map_err(SaveError::Write)?;
+    let staging = format!("{path}{STAGING_SUFFIX}");
+    let file = volume
+        .write_file(&staging, &text)
+        .map_err(SaveError::Write)?;
     volume.sync().map_err(SaveError::Sync)?;
     let stored = volume.read_all(&file).map_err(SaveError::ReadBack)?;
     if stored != text {
         return Err(SaveError::Mismatch);
     }
+    volume.rename(&staging, path).map_err(SaveError::Rename)?;
+    volume.sync().map_err(SaveError::Sync)?;
     Ok(text)
 }
 
+/// What [`save`] appends to the settings file's name for the copy it
+/// writes, checks, and renames over it — `weather.toml` is staged as
+/// `weather.toml.new`.
+///
+/// A long name, which is what lets it be the file's own name plus a
+/// suffix rather than an 8.3 guess at one; a board reading its card from a
+/// PC sees exactly which file it belongs to.
+#[cfg(feature = "storage")]
+pub const STAGING_SUFFIX: &str = ".new";
+
 /// Why [`save`] did not leave the settings on the card, by step.
 ///
-/// Which step failed is the diagnosis: [`Render`](Self::Render) means the
-/// card was not touched, and everything after it means the file may no
-/// longer be what it was.
+/// Which step failed is the diagnosis. Up to [`Rename`](Self::Rename), the
+/// settings file itself was not touched: everything before it happens to
+/// the staged copy beside it. A [`Sync`](Self::Sync) after the rename is
+/// the one case where the file is the new settings but may not stay so.
 #[cfg(feature = "storage")]
 #[derive(Debug)]
 pub enum SaveError<E> {
     /// The settings could not be rendered; nothing was written.
     Render(RenderError),
-    /// Writing the file failed.
+    /// Writing the staged copy failed.
     Write(resident_fat::Error<E>),
-    /// The file was written but syncing the allocation table failed, so
-    /// it may not survive a reset.
+    /// Syncing the allocation table failed, so what was written may not
+    /// survive a reset.
     Sync(resident_fat::Error<E>),
-    /// The file could not be read back to check it.
+    /// The staged copy could not be read back to check it.
     ReadBack(resident_fat::Error<E>),
-    /// The file read back differs from what was written.
+    /// The staged copy read back differs from what was written.
     Mismatch,
+    /// The checked copy could not be renamed over the settings file.
+    Rename(resident_fat::Error<E>),
 }
 
 /// One line, for the console.
@@ -351,6 +374,12 @@ impl<E: fmt::Debug> fmt::Display for SaveError<E> {
             SaveError::Sync(error) => write!(f, "written, but sync failed: {error}"),
             SaveError::ReadBack(error) => write!(f, "written, but reading it back failed: {error}"),
             SaveError::Mismatch => f.write_str("written, but reads back different"),
+            SaveError::Rename(error) => {
+                write!(
+                    f,
+                    "written and checked, but not renamed into place: {error}"
+                )
+            }
         }
     }
 }

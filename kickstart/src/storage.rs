@@ -39,44 +39,17 @@
 //! that: a `static` the board declares, holding the volume behind an async
 //! mutex, reached with `with`.
 
-use core::fmt;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use resident_fat::mbr::{MAX_PARTITIONS, PartitionTable};
 use resident_fat::{BlockDevice, FileSystem};
 
 use crate::logln;
 
-/// Why [`mount`] found nothing to mount.
-#[derive(Debug)]
-pub enum Error<E> {
-    /// The card has a partition table and none of its entries is FAT.
-    ///
-    /// Its own case rather than `resident-fat`'s `NoPartitionTable`,
-    /// which would be the wrong diagnosis: there *is* a table, and the fix
-    /// is a different one — the card was imaged with something other than
-    /// a Pi's layout, or its FAT partition was retyped.
-    NoFatPartition,
-    /// The filesystem could not be mounted, or the device failed under it.
-    Fat(resident_fat::Error<E>),
-}
-
-impl<E> From<resident_fat::Error<E>> for Error<E> {
-    fn from(error: resident_fat::Error<E>) -> Self {
-        Error::Fat(error)
-    }
-}
-
-/// One line, for the console.
-impl<E: fmt::Debug> fmt::Display for Error<E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::NoFatPartition => f.write_str("no FAT partition on the card"),
-            Error::Fat(error) => write!(f, "{error}"),
-        }
-    }
-}
+/// Why [`mount`] found nothing to mount: `resident-fat`'s own error, which
+/// has a case for each way a card goes wrong — including
+/// `NoFatPartition`, a table with nothing FAT in it, told apart from a card
+/// with no table at all — and prints as one line for the console.
+pub type Error<E> = resident_fat::Error<E>;
 
 /// A mounted FAT volume.
 ///
@@ -201,28 +174,15 @@ fn fat_now() -> resident_fat::DateTime {
 /// cluster, for as long as the volume is mounted — so the heap has to be
 /// up first. The console line gives the figure, since it is the resource
 /// this spends.
-pub fn mount<D: BlockDevice>(mut device: D) -> Result<Volume<D>, Error<D::Error>> {
-    let volume = match PartitionTable::read(&mut device)? {
-        Some(table) => {
-            // By slot rather than through `first_fat`, because the slot is
-            // what `mount_partition` takes -- and it, unlike mounting at
-            // the partition's first block, holds the volume to the
-            // partition's length.
-            let Some(slot) = (0..MAX_PARTITIONS)
-                .find(|&slot| table.get(slot).is_some_and(|partition| partition.is_fat()))
-            else {
-                return Err(Error::NoFatPartition);
-            };
-            let volume = FileSystem::mount_partition(device, slot)?;
-            logln!("storage: FAT volume in partition {slot}");
-            volume
-        }
-        None => {
-            let volume = FileSystem::mount(device)?;
-            logln!("storage: FAT volume with no partition table");
-            volume
-        }
-    };
+pub fn mount<D: BlockDevice>(device: D) -> Result<Volume<D>, Error<D::Error>> {
+    // Which of the two layouts the card has, and holding a partition's
+    // volume to the partition's length, are `resident-fat`'s -- see
+    // `mount_first_fat`. Where the volume starts is what says which it was.
+    let volume = FileSystem::mount_first_fat(device)?;
+    match volume.first_block() {
+        0 => logln!("storage: FAT volume with no partition table"),
+        block => logln!("storage: FAT volume at block {block}"),
+    }
 
     #[cfg(feature = "clock")]
     let volume = {
