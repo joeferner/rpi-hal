@@ -123,7 +123,12 @@ embedded-sdmmc = { version = "0.9.0", default-features = false, optional = true 
 # crate provides needs neither. Note that this one uses `alloc`, so a binary
 # enabling the feature has to register a `#[global_allocator]` -- see the
 # feature's comment below.
-resident-fat = { version = "0.1.0", default-features = false, optional = true }
+#
+# A public dependency: `SdBlockDevice` and `SdhostBlockDevice` implement its
+# `BlockDevice`, so a consumer's `resident-fat` must be this same major or
+# the adapters implement a trait its filesystem does not take. Moving the
+# major is therefore a breaking change here.
+resident-fat = { version = "0.3.0", default-features = false, optional = true }
 # `medium-ethernet` is what the `phy::Device` adapter needs; `proto-ipv4`
 # and `socket-udp` are the minimum on top of that for smoltcp itself to
 # compile at all (its address and socket enums are empty with no protocol/
@@ -148,7 +153,7 @@ embedded-alloc = "0.6.0"
 # block device and has no opinion on what is written across it. Cargo unions
 # this with the optional dependency above when building the example, the
 # same arrangement as `smoltcp` below.
-resident-fat = { version = "0.1.0", default-features = false, features = [
+resident-fat = { version = "0.3.0", default-features = false, features = [
     "mbr",
 ] }
 # The DHCP/ICMP features the `usb_ethernet_smoltcp` example's stack needs,

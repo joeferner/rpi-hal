@@ -4,6 +4,19 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`resident-fat` 0.1 → 0.3**, behind the `resident-fat` feature.
+  **Breaking** for a consumer of that feature: `sd::SdBlockDevice` and
+  `sdhost::SdhostBlockDevice` implement 0.3's `BlockDevice`, so the
+  consumer's own `resident-fat` must move to 0.3 as well, or its
+  filesystem takes a trait the adapters no longer implement. The trait
+  itself did not change between the two, so nothing in this crate's
+  source did either; 0.3 adds `mount_first_fat`, `rename` and a
+  counting device wrapper.
+
 ## [0.8.0] - 2026-09-27
 
 ### Fixed
