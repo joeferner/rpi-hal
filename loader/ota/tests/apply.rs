@@ -14,8 +14,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use resident_fat::counted::{Counted, Counters};
 use resident_fat::{BlockDevice, FileSystem};
 use rpi_loader_ota::apply::{Progress, Report, apply};
+use rpi_loader_ota::measure::{Measure, Outcome};
 use rpi_loader_ota::{Entry, Format, Role, encode};
 
 /// Thirty-four megabytes, which is the smallest that yields a *correct*
@@ -445,4 +447,108 @@ fn a_failed_install_leaves_a_volume_fsck_accepts() {
     // not half-written into the directory.
     assert_eq!(read(&mut volume, "SMALL.TXT"), b"fits");
     fsck(volume.device(), "failed");
+}
+
+/// A clock that advances 10 ms each time it is read, so every phase
+/// `Measure` times has a known, non-zero length.
+fn ticking() -> impl FnMut() -> u64 {
+    let mut now = 0;
+    move || {
+        now += 10;
+        now
+    }
+}
+
+#[test]
+fn measure_records_each_entry_and_the_kernel() {
+    let kernel = vec![0x42u8; 20_480];
+    let entries = [
+        file("WWW/INDEX.HTM", b"<html>"),
+        Entry {
+            role: Role::Kernel,
+            path: "KERNEL7.IMG",
+            data: &kernel,
+        },
+    ];
+    let bytes = encode(&FORMAT, &entries).unwrap();
+    let mut volume = FileSystem::mount(blank_volume("measure")).expect("mounting");
+
+    let mut measure = Measure::new(ticking());
+    apply(&mut volume, &FORMAT, &bytes, &mut measure).expect("applying");
+    let recorded = measure.entries();
+    assert_eq!(recorded.len(), 2);
+    assert!(
+        recorded
+            .iter()
+            .all(|entry| matches!(entry.outcome, Outcome::Written { .. })),
+        "{recorded:?}"
+    );
+    // The kernel is written last, and it is the one `kernel()` finds.
+    assert_eq!(recorded[1].path, "KERNEL7.IMG");
+    let (write, verify) = measure.kernel().expect("the kernel was written");
+    assert_eq!((write.bytes, write.ms, verify.ms), (20_480, 10, 10));
+    // 20 KiB in 10 ms.
+    assert_eq!(write.rate_kib_s(), 2000);
+    let line = format!("{}", recorded[1]);
+    assert!(
+        line.starts_with("/KERNEL7.IMG (20480 bytes): write 10 ms (2000 KiB/s), verify 10 ms"),
+        "{line}"
+    );
+
+    // The same bundle again: nothing to write, and each entry says so.
+    let mut again = Measure::new(ticking());
+    apply(&mut volume, &FORMAT, &bytes, &mut again).expect("applying again");
+    assert!(
+        again
+            .entries()
+            .iter()
+            .all(|entry| matches!(entry.outcome, Outcome::Unchanged { .. })),
+        "{:?}",
+        again.entries()
+    );
+    assert_eq!(again.kernel(), None, "an unchanged kernel was not written");
+    assert!(format!("{}", again.entries()[0]).contains("unchanged, not rewritten"));
+}
+
+#[test]
+fn measure_counts_card_commands_when_given_counters() {
+    let counters = Counters::new();
+    let kernel = vec![0x24u8; 64 * 1024];
+    let entries = [Entry {
+        role: Role::Kernel,
+        path: "KERNEL7.IMG",
+        data: &kernel,
+    }];
+    let bytes = encode(&FORMAT, &entries).unwrap();
+    let mut volume = FileSystem::mount(Counted::new(blank_volume("counted"), &counters))
+        .expect("mounting");
+
+    let mut measure = Measure::counting(ticking(), &counters);
+    apply(&mut volume, &FORMAT, &bytes, &mut measure).expect("applying");
+
+    let (write, verify) = measure.kernel().expect("the kernel was written");
+    let (write, verify) = (write.counts.unwrap(), verify.counts.unwrap());
+    assert!(write.write_calls > 0, "{write}");
+    assert_eq!(verify.write_calls, 0, "a read-back writes nothing: {verify}");
+    assert!(verify.read_blocks >= 128, "the whole kernel was read back: {verify}");
+    let total = measure.counts().unwrap();
+    assert!(total.write_calls >= write.write_calls, "{total}");
+}
+
+/// What was done before a failure is still there to report.
+#[test]
+fn measure_keeps_what_happened_before_a_failure() {
+    let huge = vec![0x11u8; IMAGE_BYTES as usize + 1024 * 1024];
+    let entries = [file("SMALL.TXT", b"fits"), file("HUGE.BIN", &huge)];
+    let bytes = encode(&FORMAT, &entries).unwrap();
+    let mut volume = FileSystem::mount(blank_volume("measure-failed")).expect("mounting");
+
+    let mut measure = Measure::new(ticking());
+    apply(&mut volume, &FORMAT, &bytes, &mut measure).expect_err("should not fit");
+    let recorded = measure.entries();
+    assert!(matches!(recorded[0].outcome, Outcome::Written { .. }), "{recorded:?}");
+    let last = recorded.last().unwrap();
+    assert_eq!(last.path, "HUGE.BIN");
+    assert_eq!(last.outcome, Outcome::Unfinished { write: None });
+    assert!(format!("{last}").ends_with("write did not finish"));
 }

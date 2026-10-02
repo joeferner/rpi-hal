@@ -9,9 +9,11 @@
 //!
 //! The transport and the reboot: how a bundle arrived is application
 //! shaped, and a crate that took it would be choosing the web framework.
-//! And the measurement — [`Progress`] reports what happened and the caller
+//! And the clock — [`Progress`] reports what happened and the caller
 //! decides what to time, which is what keeps an async runtime's clock and
-//! whatever counts device commands out of this crate.
+//! whatever counts device commands out of this crate. The timing itself is
+//! [`crate::measure::Measure`], a `Progress` that takes the clock as a
+//! function, for a caller that wants what every board measures.
 //!
 //! # Why it writes the way it does
 //!

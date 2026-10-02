@@ -12,6 +12,20 @@ dependency every time a command-line flag was renamed.
 
 ## [Unreleased]
 
+### Added
+
+- **`measure::Measure`**, behind `apply`: a `Progress` that times each
+  entry's write and read-back, with the clock passed in as a function
+  (`|| Instant::now().as_millis()`), so no runtime's clock reaches this
+  crate. It records rather than logs — a `measure::Timed` per entry, with
+  its `Outcome` (written, unchanged, or unfinished when the install
+  failed on it) and one-line `Display` — and the record outlives a
+  failed install. `Measure::kernel()` is the kernel's write and verify,
+  the figure comparable between updates; `measure::Phase::rate_kib_s`
+  turns one into a rate. `Measure::counting` also records each phase's
+  card commands from a `resident_fat::counted::Counters`. Moved from the
+  two boards, each of which had written its own.
+
 ### Changed
 
 - **`resident-fat` 0.1 → 0.3**, behind `apply`. **Breaking** for a board

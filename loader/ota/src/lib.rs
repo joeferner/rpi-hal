@@ -69,6 +69,9 @@ pub mod bundle;
 #[cfg(feature = "apply")]
 pub mod apply;
 
+#[cfg(feature = "apply")]
+pub mod measure;
+
 pub use bundle::{Bundle, Checksum, Entry, Error, Format, Role, checksum};
 
 #[cfg(feature = "alloc")]
