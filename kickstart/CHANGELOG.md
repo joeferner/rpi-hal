@@ -4,7 +4,9 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-10-02
+
+The first release.
 
 ### Added
 
@@ -43,12 +45,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   water sensor and the weather station, whose routes did the same thing
   and answered in two shapes.
 
-
 - **`resident-fat` 0.3.** `storage::mount` is `resident-fat`'s
-  `mount_first_fat` now, plus its console lines, and `storage::Error` is
-  `resident-fat`'s own error, whose `NoFatPartition` replaces the case
-  this crate had. A board's own `resident-fat`, and the HAL whose block
-  device it mounts, move to 0.3 with it.
+  `mount_first_fat`, plus its console lines, and `storage::Error` is
+  `resident-fat`'s own error. A board's own `resident-fat`, and the HAL
+  whose block device it mounts, have to be on 0.3 as well.
+
 - **`config::save` replaces the file without a window where it is half
   written.** It writes the settings beside the file
   (`config::STAGING_SUFFIX`, `weather.toml.new`), syncs, reads them back
@@ -57,8 +58,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never a truncated file that is valid TOML with its tail loading as
   defaults. `SaveError::Rename` is the new step; everything before it
   leaves the settings file untouched.
-
-### Added
 
 - **`storage::Shared`**, the mounted card behind an async mutex, for once
   several tasks want it: a settings save from one web task, an update
@@ -345,7 +344,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   region's lower bound is `__bss_end`, a symbol only `rt`'s linker script
   defines.
 
-- **`rpi-hal` raised to 0.7.0**, which is where `mem::heap_region` lives.
+- **Built on `rpi-hal` 0.9** (`mem::heap_region`, `resident-fat` 0.3)
+  and **`rpi-loader-ota` 0.3** (`measure`), with `rpi-hal-embassy` 0.9 for
+  the examples.
 
 - **Hardware entropy and the `getrandom` backend**, behind an `entropy`
   feature: `entropy::fill` for callers who want bytes, and
@@ -402,3 +403,5 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `rpi-hal`'s `rpi-link.x` on the linker search path, and both load
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
+
+[0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0
