@@ -61,8 +61,9 @@ flag here is no reason to bump their dependency.
 - **New files are stamped with the FAT epoch (1980-01-01)** rather than a
   made-up 2026-01-01. The loader has no clock, and a fixed date that
   looks real is worse than one that is plainly a default.
-- **`rpi-hal` 0.8.0**, up from 0.6.0, for its `resident-fat` feature and
-  `sd::SdBlockDevice`.
+- **`rpi-hal` 0.9.0**, up from 0.6.0, for its `resident-fat` feature and
+  `sd::SdBlockDevice`, on `resident-fat` 0.3 — whose `mount_first_fat`
+  is now how the volume is found.
 - **The firmware now has a heap**, running from the top of the loader's
   stack to the top of the ARM's RAM. That is above where `mem-write` is
   allowed to write, so a kernel being loaded cannot overwrite it.

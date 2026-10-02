@@ -48,18 +48,20 @@ publish = false
 # `I2c::<BSC0>::init_id` and BSC0 muxed to its GPIO0/1 (HAT ID bus)
 # routing; 0.6.0 for the `bcm2835` feature below, which is where that
 # chip's peripheral map and ARMv6 boot code arrived; 0.8.0 for the
-# `resident-fat` feature and its `sd::SdBlockDevice`.
-rpi-hal = { version = "0.8.0", default-features = false, features = ["resident-fat"] }
+# `resident-fat` feature and its `sd::SdBlockDevice`; 0.9.0 for that
+# feature on `resident-fat` 0.3.
+rpi-hal = { version = "0.9.0", default-features = false, features = ["resident-fat"] }
 # The FAT layer itself. rpi-hal only provides the `BlockDevice` adapter, so
 # the loader depends on this directly for the `FileSystem` it drives. Must
-# be the same version rpi-hal 0.8.0 pins: under a different one, rpi-hal's
+# be the same major rpi-hal 0.9.0 pins: under a different one, rpi-hal's
 # adapter implements a different crate's `BlockDevice` trait and nothing
 # here would mount.
 #
-# `mbr` adds `FileSystem::mount_partition`, which reads the partition table
-# and finds the volume behind it -- the shape every card an imaging tool
-# writes has.
-resident-fat = { version = "0.1.0", default-features = false, features = ["mbr"] }
+# `mbr` adds `FileSystem::mount_first_fat`, which reads the partition table
+# and mounts the first FAT volume in it, or the whole card when there is no
+# table -- the shape every card an imaging tool writes has, and the
+# formatted-bare one besides.
+resident-fat = { version = "0.3.0", default-features = false, features = ["mbr"] }
 # `resident-fat` keeps the allocation table and every directory it reads in
 # RAM, through `alloc`, so the loader needs a `#[global_allocator]` -- and
 # only a final binary may register one. `LlffHeap` because it takes its

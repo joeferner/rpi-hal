@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal::i2c::I2c as _;
-use resident_fat::mbr::PartitionTable;
 use resident_fat::{FatError, FileSystem};
 use rpi_hal::i2c::I2c;
 use rpi_hal::mailbox::Mailbox;
@@ -806,15 +805,7 @@ fn mount(timer: &Timer) -> Result<Volume<'_>, u8> {
     // `sd.rs` "BCM2711" doc section.
     let emmc = unsafe { Sd::steal_emmc() };
     let sd = Sd::init(&peripherals.GPIO, emmc, &mut mailbox, timer).map_err(|_| ERR_SD_INIT)?;
-    let mut device = SdBlockDevice::new(sd, timer);
-    let volume = match PartitionTable::read(&mut device).map_err(err_code)? {
-        Some(table) => {
-            let index = table.first_fat().ok_or(ERR_NO_VOLUME)?.index;
-            FileSystem::mount_partition(device, index)
-        }
-        None => FileSystem::mount(device),
-    };
-    volume.map_err(err_code)
+    FileSystem::mount_first_fat(SdBlockDevice::new(sd, timer)).map_err(err_code)
 }
 
 /// Gives [`HEAP`] everything from the top of the loader's stack to the top
@@ -1001,7 +992,10 @@ fn err_code(e: FsError) -> u8 {
         Error::DirectoryFull | Error::Fat(FatError::DiskFull { .. }) => ERR_NO_SPACE,
         Error::OutOfMemory { .. } => ERR_NO_MEMORY,
         Error::Device(_) => ERR_CARD,
-        Error::Boot(_) | Error::NoPartitionTable | Error::NoSuchPartition { .. } => ERR_NO_VOLUME,
+        Error::Boot(_)
+        | Error::NoPartitionTable
+        | Error::NoSuchPartition { .. }
+        | Error::NoFatPartition => ERR_NO_VOLUME,
         _ => ERR_FS,
     }
 }
