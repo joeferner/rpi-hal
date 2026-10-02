@@ -520,8 +520,8 @@ fn measure_counts_card_commands_when_given_counters() {
         data: &kernel,
     }];
     let bytes = encode(&FORMAT, &entries).unwrap();
-    let mut volume = FileSystem::mount(Counted::new(blank_volume("counted"), &counters))
-        .expect("mounting");
+    let mut volume =
+        FileSystem::mount(Counted::new(blank_volume("counted"), &counters)).expect("mounting");
 
     let mut measure = Measure::counting(ticking(), &counters);
     apply(&mut volume, &FORMAT, &bytes, &mut measure).expect("applying");
@@ -529,8 +529,14 @@ fn measure_counts_card_commands_when_given_counters() {
     let (write, verify) = measure.kernel().expect("the kernel was written");
     let (write, verify) = (write.counts.unwrap(), verify.counts.unwrap());
     assert!(write.write_calls > 0, "{write}");
-    assert_eq!(verify.write_calls, 0, "a read-back writes nothing: {verify}");
-    assert!(verify.read_blocks >= 128, "the whole kernel was read back: {verify}");
+    assert_eq!(
+        verify.write_calls, 0,
+        "a read-back writes nothing: {verify}"
+    );
+    assert!(
+        verify.read_blocks >= 128,
+        "the whole kernel was read back: {verify}"
+    );
     let total = measure.counts().unwrap();
     assert!(total.write_calls >= write.write_calls, "{total}");
 }
@@ -546,7 +552,10 @@ fn measure_keeps_what_happened_before_a_failure() {
     let mut measure = Measure::new(ticking());
     apply(&mut volume, &FORMAT, &bytes, &mut measure).expect_err("should not fit");
     let recorded = measure.entries();
-    assert!(matches!(recorded[0].outcome, Outcome::Written { .. }), "{recorded:?}");
+    assert!(
+        matches!(recorded[0].outcome, Outcome::Written { .. }),
+        "{recorded:?}"
+    );
     let last = recorded.last().unwrap();
     assert_eq!(last.path, "HUGE.BIN");
     assert_eq!(last.outcome, Outcome::Unfinished { write: None });
