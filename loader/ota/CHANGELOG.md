@@ -10,7 +10,7 @@ wire protocol; this is a library, its consumers are firmware projects in
 other repositories, and tying it to that version would bump their
 dependency every time a command-line flag was renamed.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-02
 
 ### Added
 
@@ -22,7 +22,9 @@ dependency every time a command-line flag was renamed.
   failed on it) and one-line `Display` — and the record outlives a
   failed install. `Measure::kernel()` is the kernel's write and verify,
   the figure comparable between updates; `measure::Phase::rate_kib_s`
-  turns one into a rate. `Measure::counting` also records each phase's
+  turns one into a rate, and `measure::rate_kib_s(bytes, ms)` does the
+  same for figures that are not phases of an install, such as how fast
+  the bundle arrived. `Measure::counting` also records each phase's
   card commands from a `resident_fat::counted::Counters`. Moved from the
   two boards, each of which had written its own.
 
@@ -111,5 +113,6 @@ First release.
   same way the packer checksummed the entry, and can skip rewriting one
   whose bytes have not changed.
 
+[0.3.0]: https://github.com/joeferner/rpi-loader/releases/tag/ota-v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-loader/releases/tag/ota-v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/ota-v0.1.0
