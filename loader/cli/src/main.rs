@@ -548,14 +548,9 @@ fn hat_image_length(link: &mut Link, address: u8, offset: u32) -> Result<u32> {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Ctrl-C sets a flag rather than killing the process, so the terminal
-    // can leave cleanly and a transfer can unwind instead of stranding
-    // the device mid-chunk. Every loop that could block forever polls it.
+    // Set by the Ctrl-C handler `run` installs once it is about to open the
+    // serial link; see there for why it is not installed sooner.
     let interrupted = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&interrupted);
-    if let Err(e) = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst)) {
-        eprintln!("Warning: could not install the Ctrl-C handler: {e}");
-    }
 
     match run(cli, Arc::clone(&interrupted)) {
         Ok(()) if interrupted.load(Ordering::SeqCst) => ExitCode::from(EXIT_INTERRUPTED),
@@ -605,6 +600,20 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
     let device = cli.device.as_deref().ok_or_else(|| {
         anyhow!("no serial device given; pass --device (e.g. --device /dev/ttyUSB0)")
     })?;
+
+    // From here on, Ctrl-C sets a flag rather than killing the process, so
+    // the terminal can leave cleanly and a transfer can unwind instead of
+    // stranding the device mid-chunk. Every loop on the link that could
+    // block forever polls it.
+    //
+    // Not before: the commands above have nothing to unwind, and none of
+    // them polls the flag, so a handler installed for them only makes
+    // Ctrl-C do nothing — a bundle upload waiting on the board ignored it.
+    let flag = Arc::clone(&interrupted);
+    if let Err(e) = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst)) {
+        eprintln!("Warning: could not install the Ctrl-C handler: {e}");
+    }
+
     let mut link = Link::open(device, interrupted)?;
     if cli.command.needs_handshake() {
         link.handshake()?;

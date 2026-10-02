@@ -396,11 +396,18 @@ fn post(url: &str, bytes: &[u8]) -> Result<()> {
         .new_agent();
 
     let started = Instant::now();
-    let mut response = agent
+    let mut progress = Progress::new(bytes, started);
+    // Content-Length set by hand, because a body read from a `Read` is
+    // otherwise sent chunked, and the board's route reads a body of the
+    // length it was told. ureq keeps a length set this way and sends the
+    // body as is.
+    let sent = agent
         .post(url)
         .content_type("application/octet-stream")
-        .send(bytes)
-        .with_context(|| format!("posting to {url}"))?;
+        .header("Content-Length", bytes.len().to_string())
+        .send(ureq::SendBody::from_reader(&mut progress));
+    progress.finish();
+    let mut response = sent.with_context(|| format!("posting to {url}"))?;
     let status = response.status();
 
     let mut body = String::new();
@@ -423,4 +430,88 @@ fn post(url: &str, bytes: &[u8]) -> Result<()> {
         bail!("the board rejected the bundle ({status})");
     }
     Ok(())
+}
+
+/// How often the progress line is redrawn.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The bundle as the upload's body, drawing how much of it has gone.
+///
+/// "Gone" is what ureq has taken to write to the socket, which runs ahead
+/// of what the board has received by whatever the kernel's send buffer
+/// holds — so the line reaches 100% a moment before the last byte lands,
+/// and [`Progress::finish`] says what the wait after that is for.
+///
+/// Drawn only on a terminal: a carriage-return redraw in a log is a few
+/// hundred copies of one line.
+struct Progress<'a> {
+    bytes: &'a [u8],
+    sent: usize,
+    started: Instant,
+    drawn: Option<Instant>,
+    terminal: bool,
+}
+
+impl<'a> Progress<'a> {
+    fn new(bytes: &'a [u8], started: Instant) -> Self {
+        Self {
+            bytes,
+            sent: 0,
+            started,
+            drawn: None,
+            terminal: std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        }
+    }
+
+    /// Redraws the line, at most every [`PROGRESS_INTERVAL`] unless `force`.
+    fn draw(&mut self, force: bool) {
+        if !self.terminal {
+            return;
+        }
+        let now = Instant::now();
+        if !force && self.drawn.is_some_and(|at| now - at < PROGRESS_INTERVAL) {
+            return;
+        }
+        self.drawn = Some(now);
+
+        let total = self.bytes.len();
+        let percent = (self.sent * 100).checked_div(total).unwrap_or(100);
+        let elapsed = (now - self.started).as_secs_f64();
+        let rate = if elapsed > 0.0 {
+            self.sent as f64 / 1024.0 / elapsed
+        } else {
+            0.0
+        };
+        let mut out = std::io::stdout();
+        // Trailing spaces so a shorter line covers a longer one's tail.
+        let _ = write!(
+            out,
+            "\r  {:.1} / {:.1} MB  {percent:>3}%  {rate:.0} KiB/s    ",
+            self.sent as f64 / 1e6,
+            total as f64 / 1e6,
+        );
+        let _ = out.flush();
+    }
+
+    /// Ends the line, once the body has been taken or the send has failed.
+    fn finish(&mut self) {
+        if !self.terminal {
+            return;
+        }
+        self.draw(true);
+        if self.sent == self.bytes.len() {
+            println!("\n  sent; waiting for the board to install it");
+        } else {
+            println!();
+        }
+    }
+}
+
+impl Read for Progress<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = (&self.bytes[self.sent..]).read(buf)?;
+        self.sent += n;
+        self.draw(false);
+        Ok(n)
+    }
 }

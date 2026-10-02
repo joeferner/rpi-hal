@@ -15,6 +15,20 @@ flag here is no reason to bump their dependency.
 
 ## [Unreleased]
 
+### Added
+
+- **`bundle --upload` shows its progress**: megabytes sent, percent and
+  rate on one redrawn line, then a note that the wait which follows is
+  the board installing. Drawn only when stdout is a terminal.
+
+### Fixed
+
+- **Ctrl-C stops `bundle --upload`.** The Ctrl-C handler, which only sets
+  a flag the serial commands poll, was installed for every command, so a
+  `bundle` that never polls it ignored Ctrl-C for as long as the body was
+  still being sent. It is now installed only once a command is about to
+  open the serial link.
+
 ### Changed
 
 - **The `sd-*` commands use `resident-fat` in place of `embedded-sdmmc`,
