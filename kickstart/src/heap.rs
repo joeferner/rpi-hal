@@ -21,7 +21,7 @@
 //! exactly one, and every crate in it allocates through this one.
 //!
 //! That is why it is behind a feature, off by default, the same as
-//! [`entropy`](crate::entropy)'s `getrandom` backend. A board that wants
+//! [`crate::entropy`]'s `getrandom` backend. A board that wants
 //! a different allocator — or a different region, or no heap at all —
 //! leaves the feature alone and declares its own, and nothing here
 //! competes with it. There is no way to make such a choice overridable;

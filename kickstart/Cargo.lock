@@ -1293,7 +1293,9 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal"
-version = "0.8.0"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf79fc28c60a7868108fc3b5c11962a91a65673ba5b416be550afec00b40e70f"
 dependencies = [
  "bcm2711-lpa",
  "bcm2835-lpa",
@@ -1308,9 +1310,9 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal-embassy"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1844f1d2a92cc75e73e495ca8a3f5f34b6821619d80fa660284e17acddd1b5d5"
+checksum = "ef6f496ea44faa327b5b7687e05ba95506a98ded3b9f45f87dc90dbac707be5d"
 dependencies = [
  "critical-section",
  "embassy-executor",
@@ -1354,7 +1356,9 @@ dependencies = [
 
 [[package]]
 name = "rpi-loader-ota"
-version = "0.2.0"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8410ff96368ec8957653448087d27af5442f229dace7f715aa8d9868fa75d36e"
 dependencies = [
  "crc",
  "resident-fat",

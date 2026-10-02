@@ -52,7 +52,7 @@ critical-section = { version = "1.2.0", default-features = false, optional = tru
 # silently rather than failing. In practice an application's own `rpi-hal`
 # line already names one and cargo unifies it; the forwarding features
 # below exist for builds of *this* crate, which have no such line.
-rpi-hal = { version = "0.8.0", default-features = false, optional = true }
+rpi-hal = { version = "0.9.0", default-features = false, optional = true }
 
 # The randomness interface the RustCrypto primitives under `rustls` reach
 # through. `custom` is the feature that lets a target with no OS supply
@@ -136,7 +136,7 @@ picoserve = { version = "0.19", default-features = false, features = [
 # The bundle format, the install, and the timing around it, behind `ota`
 # -- shared with the `rpi-loader` CLI that packs a bundle, so the two ends
 # cannot disagree about the format. `apply` is the install half.
-rpi-loader-ota = { version = "0.2", default-features = false, features = [
+rpi-loader-ota = { version = "0.3", default-features = false, features = [
     "apply",
 ], optional = true }
 
@@ -241,7 +241,7 @@ png = { version = "0.18", optional = true }
 # exactly when the example's own features are. Named here it would be on
 # for every example, and `resident-fat` needs an allocator -- so `hello`,
 # which has none, would stop linking.
-rpi-hal = { version = "0.8.0", features = ["bcm2837"] }
+rpi-hal = { version = "0.9.0", features = ["bcm2837"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -276,7 +276,7 @@ getrandom = { version = "0.2", default-features = false, features = [
 # `__irq_handler` that services the System Timer and USB, without which
 # the first `embassy-time` deadline livelocks the core. None of the other
 # examples defines one, so there is nothing for it to collide with.
-rpi-hal-embassy = { version = "0.8.0", features = [
+rpi-hal-embassy = { version = "0.9.0", features = [
     "embassy-net-driver",
     "wifi",
     "irq-dispatch",
@@ -720,20 +720,6 @@ required-features = [
     "config",
     "bcm2837",
 ]
-
-# **Temporary.** `resident-fat` 0.3 is a new major, and `rpi-hal`'s
-# `SdBlockDevice`, which the examples mount through `storage::mount`, has to
-# implement the same one -- the published `rpi-hal` 0.8.0 implements 0.1's.
-# This builds against a local `rpi-hal` whose `resident-fat` is 0.3 until
-# the release that carries it (0.9.0), and then goes, with the version
-# requirements above moving to that release.
-#
-# `rpi-loader-ota` the same way: `ota` uses its `measure`, and `apply` on
-# resident-fat 0.3, which the published 0.2.0 predates. Its next release
-# (0.3.0) carries both.
-[patch.crates-io]
-rpi-hal = { path = "../rpi-hal" }
-rpi-loader-ota = { path = "../rpi-loader/ota" }
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding
