@@ -9,9 +9,9 @@
 //! ([`crate::mini_uart`]).
 //!
 //! This drives the H4 (UART) HCI transport: each packet is prefixed with
-//! a one-byte type ([`H4_COMMAND`](crate::bluetooth::H4_COMMAND)/
-//! [`H4_ACL`](crate::bluetooth::H4_ACL)/
-//! [`H4_EVENT`](crate::bluetooth::H4_EVENT)), and HCI
+//! a one-byte type ([`H4_COMMAND`]/
+//! [`H4_ACL`]/
+//! [`H4_EVENT`]), and HCI
 //! commands are answered by Command Complete / Command Status events.
 //! Flow control (RTS/CTS) is handled in hardware by the PL011, so the
 //! simple H4 framing is enough — the reliability layer H5 adds is only
@@ -20,13 +20,13 @@
 //! Out of reset the controller runs a minimal ROM HCI at 115200 baud and
 //! does nothing useful until Broadcom's patch/config firmware — a `.hcd`
 //! "patchram" blob — is downloaded into its RAM over HCI and launched
-//! ([`Bluetooth::load_firmware`](crate::bluetooth::Bluetooth::load_firmware)).
+//! ([`Bluetooth::load_firmware`]).
 //! This mirrors the Wi-Fi side's
 //! [`crate::sdio::Sdio::load_firmware`]: the controller is inert until its
 //! blob is running. After that the usual informational commands answer
 //! with real data
-//! ([`Bluetooth::read_local_version`](crate::bluetooth::Bluetooth::read_local_version)
-//! / [`Bluetooth::read_bd_addr`](crate::bluetooth::Bluetooth::read_bd_addr)) —
+//! ([`Bluetooth::read_local_version`]
+//! / [`Bluetooth::read_bd_addr`]) —
 //! the proof the controller is alive.
 //!
 //! The patchram sequence follows Linux's `hci_bcm`/`btbcm`
@@ -38,27 +38,27 @@
 //! On top of the controller bring-up, this module carries the LE
 //! connection transport in both roles. As a *peripheral*, connectable
 //! advertising yields a connection
-//! ([`Bluetooth::poll`](crate::bluetooth::Bluetooth::poll) surfacing
-//! [`Event::Connected`](crate::bluetooth::Event::Connected) with
-//! [`Role::Peripheral`](crate::bluetooth::Role::Peripheral)); as a *central*,
-//! [`Bluetooth::connect`](crate::bluetooth::Bluetooth::connect) initiates a
+//! ([`Bluetooth::poll`] surfacing
+//! [`Event::Connected`] with
+//! [`Role::Peripheral`]); as a *central*,
+//! [`Bluetooth::connect`] initiates a
 //! connection to an advertiser by address, which the controller reports the
-//! same way (with [`Role::Central`](crate::bluetooth::Role::Central)). Either
+//! same way (with [`Role::Central`]). Either
 //! way ACL data then flows both ways
-//! ([`Bluetooth::send_acl`](crate::bluetooth::Bluetooth::send_acl) /
-//! [`Event::Acl`](crate::bluetooth::Event::Acl)) with credit-based
+//! ([`Bluetooth::send_acl`] /
+//! [`Event::Acl`]) with credit-based
 //! host-to-controller flow control
-//! ([`Bluetooth::le_read_buffer_size`](crate::bluetooth::Bluetooth::le_read_buffer_size)),
+//! ([`Bluetooth::le_read_buffer_size`]),
 //! and links can be torn down
-//! ([`Bluetooth::disconnect`](crate::bluetooth::Bluetooth::disconnect) /
-//! [`Event::Disconnected`](crate::bluetooth::Event::Disconnected)). The
+//! ([`Bluetooth::disconnect`] /
+//! [`Event::Disconnected`]). The
 //! protocol layers *above* ACL — L2CAP, and above it SDP/RFCOMM for Classic
 //! or ATT/GATT/SMP for LE — live in the
-//! submodules: [`l2cap`](crate::bluetooth::l2cap) framing,
-//! [`gatt`](crate::bluetooth::gatt) (a GATT server) and
-//! [`gatt_client`](crate::bluetooth::gatt_client) (a GATT client, for the
-//! central role), and [`smp`](crate::bluetooth::smp) pairing.
-//! [`Event::Acl`](crate::bluetooth::Event::Acl) hands the raw L2CAP bytes to
+//! submodules: [`l2cap`] framing,
+//! [`gatt`] (a GATT server) and
+//! [`gatt_client`] (a GATT client, for the
+//! central role), and [`smp`] pairing.
+//! [`Event::Acl`] hands the raw L2CAP bytes to
 //! whichever of those owns the channel.
 
 use crate::mailbox::{Mailbox, EXPANDER_BT_ON};

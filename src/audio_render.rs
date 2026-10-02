@@ -12,7 +12,7 @@
 //! H.264 block.
 //!
 //! The same component also feeds the 3.5 mm jack, as
-//! [`Destination::Local`](crate::audio_render::Destination::Local). That
+//! [`Destination::Local`]. That
 //! path is already reachable without the
 //! firmware, by driving the PWM hardware directly ([`crate::pwm`]'s
 //! `audio`), and the two are worth telling apart: the PWM route owns the
@@ -65,7 +65,7 @@
 //! interleaved sample by sample — the same shape [`crate::pcm`] and
 //! [`crate::pwm`]'s audio paths take, and what
 //! [`ENCODING_PCM_SIGNED_LE`](crate::mmal::ENCODING_PCM_SIGNED_LE) means at
-//! the [`BITS_PER_SAMPLE`](crate::audio_render::BITS_PER_SAMPLE) this
+//! the [`BITS_PER_SAMPLE`] this
 //! module asks for. A stereo frame is two samples, left first.
 //!
 //! Buffers are the caller's, as `&'static mut [u8]`, and ownership moves

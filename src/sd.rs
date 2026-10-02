@@ -68,12 +68,12 @@
 //! none of them — and this controller doesn't implement the SDHCI
 //! present-state bits either. So an empty slot is found the only way
 //! available: [`init`](crate::sd::Sd::init) asks, gets no answer, and
-//! returns [`Error::NoCard`](crate::sd::Error::NoCard).
+//! returns [`Error::NoCard`].
 //! `examples/sd_presence.rs` shows it happening, card in and card out.
 //!
 //! # Async
 //!
-//! Under the `async` feature the same [`Sd`](crate::sd::Sd) also carries
+//! Under the `async` feature the same [`Sd`] also carries
 //! interrupt-driven twins of the transfer methods — `read_blocks_async`
 //! and friends — which park on the controller's interrupt rather than
 //! spinning on `INTERRUPT`, so an executor gets the card's own thinking

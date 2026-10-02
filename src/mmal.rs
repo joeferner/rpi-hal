@@ -17,10 +17,10 @@
 //! ## Buffer flow
 //!
 //! Buffers move by *handing over ownership*, in both directions, and the
-//! API mirrors that: [`Mmal::send_buffer`](crate::mmal::Mmal::send_buffer)
+//! API mirrors that: [`Mmal::send_buffer`]
 //! takes a `&'static mut [u8]`, and the same slice comes back out of
-//! [`Mmal::poll`](crate::mmal::Mmal::poll) as
-//! [`Event::Buffer`](crate::mmal::Event::Buffer) once the firmware is
+//! [`Mmal::poll`] as
+//! [`Event::Buffer`] once the firmware is
 //! finished with it. Between those
 //! two points the memory belongs to the VideoCore and this core must not
 //! touch it — which is exactly what moving the slice into the driver
@@ -31,14 +31,14 @@
 //! a bulk transfer of the payload out of ARM memory, and the buffer comes
 //! back empty once consumed. A buffer sent to an *output* port is empty,
 //! and comes back with the firmware announcing a length, followed by a
-//! bulk transfer *into* it — so [`Event::Buffer`](crate::mmal::Event::Buffer)
+//! bulk transfer *into* it — so [`Event::Buffer`]
 //! for an output port only appears once the data has actually landed and
 //! been invalidated out of this core's cache.
 //!
 //! Ports also raise asynchronous
-//! [`Event::PortEvent`](crate::mmal::Event::PortEvent)s — a decoder
+//! [`Event::PortEvent`]s — a decoder
 //! discovering the real frame size mid-stream is the important one; see
-//! [`EVENT_FORMAT_CHANGED`](crate::mmal::EVENT_FORMAT_CHANGED).
+//! [`EVENT_FORMAT_CHANGED`].
 //!
 //! ## Scope
 //!

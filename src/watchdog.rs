@@ -25,20 +25,20 @@
 //!
 //! `PM_WDOG` is a 20-bit tick count clocked at a fixed 65536 Hz, so the
 //! representable range tops out around 16 seconds — see
-//! [`MAX_TIMEOUT_MS`](crate::watchdog::MAX_TIMEOUT_MS). There's no way to
+//! [`MAX_TIMEOUT_MS`]. There's no way to
 //! ask for a longer single timeout; a caller needing to survive a longer
 //! expected stall must re-arm
-//! ([`Watchdog::feed`](crate::watchdog::Watchdog::feed)) more often than
+//! ([`Watchdog::feed`]) more often than
 //! that, not request one
 //! long period.
 //!
 //! ## Stopping
 //!
-//! [`Watchdog::disable`](crate::watchdog::Watchdog::disable) writes
+//! [`Watchdog::disable`] writes
 //! `PM_RSTC_RESET`, the same "reset type" value Linux's driver uses to stop
 //! the watchdog — distinct from the `WRCFG_FULL_RESET` type
-//! [`Watchdog::start`](crate::watchdog::Watchdog::start)/
-//! [`Watchdog::feed`](crate::watchdog::Watchdog::feed) arm.
+//! [`Watchdog::start`]/
+//! [`Watchdog::feed`] arm.
 //! Broadcom hasn't published what every `PM_RSTC` reset-type encoding
 //! means; this one is taken on faith from the reference driver rather
 //! than independently derived.

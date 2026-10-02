@@ -1,31 +1,31 @@
 //! Blocking driver for the BCM2835 BSC I2C controllers.
 //!
-//! Generic over the BSC instance: [`I2c<BSC1>`](crate::i2c::I2c) drives I2C1 on
+//! Generic over the BSC instance: [`I2c<BSC1>`] drives I2C1 on
 //! GPIO2 (SDA1)/GPIO3 (SCL1), the general-purpose bus on the 40-pin header,
-//! and [`I2c<BSC0>`](crate::i2c::I2c) drives BSC0, on either of its two
+//! and [`I2c<BSC0>`] drives BSC0, on either of its two
 //! routings — GPIO44 (SDA0)/GPIO45 (SCL0), the one the camera/display
-//! connectors use on a Pi 3 ([`I2c::<BSC0>::init`](crate::i2c::I2c::init)),
+//! connectors use on a Pi 3 ([`I2c::<BSC0>::init`]),
 //! or GPIO0 (ID_SD)/GPIO1 (ID_SC), the HAT ID EEPROM bus on the 40-pin
-//! header ([`I2c::<BSC0>::init_id`](crate::i2c::I2c::init_id)). The
+//! header ([`I2c::<BSC0>::init_id`]). The
 //! register layout is identical across instances (both deref to the same PAC
 //! register block); only the pin mux and the peripheral token differ, so
 //! the transfer logic is shared and each routing gets its own constructor.
 //!
 //! With the `async` feature the same type also implements
 //! `embedded_hal_async::i2c::I2c`, driven by the controller's own
-//! interrupts rather than by polling — see [`on_irq`](crate::i2c::on_irq)
+//! interrupts rather than by polling — see [`on_irq`]
 //! for what the application has to wire up, and note that a timeout there
 //! is the caller's `with_timeout` rather than the deadline below.
 //!
 //! Every blocking transfer is bounded against the System Timer, which is why
-//! [`I2c::init`](crate::i2c::I2c::init) takes a [`Timer`](crate::timer::Timer). I2C is the one
+//! [`I2c::init`] takes a [`Timer`]. I2C is the one
 //! bus in this crate where a *foreign* device — not silicon on the same
 //! die — decides whether a transfer ever finishes, and a device that
 //! acknowledges its address and then stops driving sets neither `S.ERR`
 //! nor `S.DONE`. An unbounded poll of `S` is then infinite, and since this
 //! is a blocking driver it takes the rest of the program with it (an
 //! executor, a network stack, a watchdog kick). Bounding the wait turns
-//! that into an [`Error::Timeout`](crate::i2c::Error::Timeout) the caller
+//! that into an [`Error::Timeout`] the caller
 //! can log, retry, or ignore.
 
 use core::ops::Deref;

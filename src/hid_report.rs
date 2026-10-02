@@ -2,7 +2,7 @@
 //! (from [`sdp`](crate::bluetooth::sdp) on Classic, a Report Map
 //! characteristic on LE, or a USB
 //! [GET_DESCRIPTOR(REPORT)](crate::usb::control::get_report_descriptor)) into a
-//! flat [`Field`](crate::hid_report::Field) map, so reports can be decoded without a hand-written
+//! flat [`Field`] map, so reports can be decoded without a hand-written
 //! per-device layout.
 //!
 //! It sits at the crate root rather than under one transport because it is the
@@ -13,7 +13,7 @@
 //! This is pure logic with no transport dependency: feed it `&[u8]`, get back
 //! the input fields — each with its report ID, bit offset, size, HID
 //! `usage_page`/`usage`, and logical range. A consumer then reads each field
-//! out of a received report by [`Field::extract`](crate::hid_report::Field::extract) and interprets it by its
+//! out of a received report by [`Field::extract`] and interprets it by its
 //! usage (X/Y axes, buttons, hat, …).
 //!
 //! # What it models
@@ -22,7 +22,7 @@
 //! page, logical min/max, report size/count, report ID) and *local* state
 //! (the usages for the next field), which a **Main** item (Input/Output/
 //! Feature) then commits into fields. This parser tracks that state and emits
-//! one [`Field`](crate::hid_report::Field) per **Input** element (the device→host direction — buttons,
+//! one [`Field`] per **Input** element (the device→host direction — buttons,
 //! axes). Output (rumble/LEDs) and Feature items advance nothing here and are
 //! skipped, as are constant (padding) fields.
 //!
@@ -33,12 +33,12 @@
 //! and the usage-range form (`Usage Minimum`/`Maximum`, e.g. Buttons 1–10).
 //! Collections are followed only far enough to report the descriptor's
 //! Application usage — what kind of device it is
-//! ([`ReportDescriptor::application_usage`](crate::hid_report::ReportDescriptor::application_usage)) — since a field's meaning comes
+//! ([`ReportDescriptor::application_usage`]) — since a field's meaning comes
 //! from its own usage, not the collection nesting around it. Not handled:
 //! Push/Pop of global state, array (non-variable) inputs like a keyboard
 //! keycode array, and long items — none of which a game controller's input
 //! reports use. Bit offsets are relative to the report *payload*; when
-//! [`ReportDescriptor::uses_report_ids`](crate::hid_report::ReportDescriptor::uses_report_ids) is set, that payload starts after the
+//! [`ReportDescriptor::uses_report_ids`] is set, that payload starts after the
 //! one-byte
 //! report ID.
 

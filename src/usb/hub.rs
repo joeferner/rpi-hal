@@ -1,7 +1,8 @@
 //! Driving a USB hub's downstream ports, built on the hub-class control
 //! requests in [`crate::usb::control`]. Wraps the raw `wPortStatus`
-//! bitmap ([`PortStatus`](crate::usb::hub::PortStatus)) and the hub
-//! bring-up / port-reset sequences ([`Hub`]) so [`enumerate`] — and any
+//! bitmap ([`PortStatus`]) and the hub
+//! bring-up / port-reset sequences ([`Hub`]) so
+//! [`enumerate`](crate::usb::enumerate) — and any
 //! caller reaching
 //! devices behind a hub — works in named terms instead of bit masks and
 //! descriptor offsets.

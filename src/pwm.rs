@@ -1,8 +1,8 @@
 //! Blocking driver for the BCM System PWM controller — two independent
 //! duty-cycle channels sharing one clock. Named `RNG1`/`DAT1`/`CTL`'s
 //! `*1` bits and `RNG2`/`DAT2`/`CTL`'s `*2` bits in the PAC (matching
-//! this module's [`Channel1`](crate::pwm::Channel1)/
-//! [`Channel2`](crate::pwm::Channel2)); the BCM2835 ARM
+//! this module's [`Channel1`]/
+//! [`Channel2`]); the BCM2835 ARM
 //! Peripherals datasheet calls the same two channels "PWM0"/"PWM1"
 //! (0-indexed) instead — same hardware, different numbering.
 //!
@@ -10,7 +10,7 @@
 //!
 //! Both channels are driven from one shared PWM clock, configured via
 //! the separate `CM_PWM` clock manager peripheral (not part of the
-//! `PWM0` register block itself) in [`Pwm::init`](crate::pwm::Pwm::init).
+//! `PWM0` register block itself) in [`Pwm::init`].
 //! Sourced from `PLLD_per` (a PLL-derived clock most bare-metal Pi PWM
 //! audio implementations also use in practice — this PAC's own enum
 //! happens to label the same encoding `pllc()`, a naming quirk of this
@@ -82,12 +82,12 @@
 //!
 //! ## Audio
 //!
-//! [`Pwm::channel1`](crate::pwm::Pwm::channel1)/
-//! [`Pwm::channel2`](crate::pwm::Pwm::channel2) drive a single held duty
+//! [`Pwm::channel1`]/
+//! [`Pwm::channel2`] drive a single held duty
 //! cycle —
 //! the CPU writes `DAT` and the output stays there. Audio instead needs
 //! a *stream* of values changing at the sample rate, far faster than the
-//! CPU can poll a register. [`Pwm::audio`](crate::pwm::Pwm::audio) configures
+//! CPU can poll a register. [`Pwm::audio`] configures
 //! both channels in
 //! the hardware's FIFO mode (`USEF` set): each channel takes its next
 //! output value from the shared 16-entry FIFO rather than from `DAT`,
@@ -99,16 +99,16 @@
 //! hardware hands successive FIFO words to channel 1, channel 2, channel
 //! 1, … so an interleaved two-channel sample buffer plays as stereo
 //! (which channel is the left/right jack contact is board-dependent — see
-//! [`Pwm::audio`](crate::pwm::Pwm::audio)). Each sample is an unsigned duty
+//! [`Pwm::audio`]). Each sample is an unsigned duty
 //! value in `0..=range`; a caller converts signed PCM to that range (see
-//! [`pcm_to_duty`](crate::pwm::pcm_to_duty)) and
+//! [`pcm_to_duty`]) and
 //! picks `range` for the bit depth it wants.
 //!
 //! The sample rate is not set directly — it falls out of the shared PWM
 //! clock and `range` as `pwm_clock_hz / range` (one FIFO word is consumed
 //! per channel period).
-//! [`Pwm::audio_clock_divisor`](crate::pwm::Pwm::audio_clock_divisor) inverts
-//! that to pick the [`Pwm::init`](crate::pwm::Pwm::init) divisor for a target
+//! [`Pwm::audio_clock_divisor`] inverts
+//! that to pick the [`Pwm::init`] divisor for a target
 //! sample rate; like every rate in
 //! this module it's nominal, not exact (integer divisor, PLL-derived
 //! clock — see the "Clock" section above).
@@ -117,8 +117,8 @@
 //! "Mode"), the raw pin carries the high-frequency PWM carrier on top of
 //! the audio; it needs an RC low-pass (or the board's own analog-audio
 //! filter on the 3.5 mm jack pins —
-//! [`Channel1Pin::Gpio40`](crate::pwm::Channel1Pin::Gpio40)/
-//! [`Channel2Pin::Gpio45`](crate::pwm::Channel2Pin::Gpio45)) to recover a
+//! [`Channel1Pin::Gpio40`]/
+//! [`Channel2Pin::Gpio45`]) to recover a
 //! clean signal.
 
 use crate::clock_manager;

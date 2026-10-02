@@ -7,7 +7,7 @@
 //! BCM43455, whose CPU is an ARM CR4 with the RAM tightly coupled inside
 //! it. Everything up to and including the backplane window is identical;
 //! from [`prepare_download`](crate::sdio::Sdio::prepare_download) on, the
-//! two diverge — see [`Cpu`](crate::sdio::Cpu).
+//! two diverge — see [`Cpu`].
 //!
 //! This drives the *same* Arasan "EMMC" (SDHCI-compatible) host
 //! controller as [`crate::sd`], but for a different device: where
