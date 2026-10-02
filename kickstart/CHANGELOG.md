@@ -8,6 +8,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A boot logo**, behind a `splash` feature. `splash::Image::new` is a
+  `const fn` over the encoded bytes, so a `static` of a stale or foreign
+  file is a compile error, and `Image::pixels` yields `0x00RRGGBB` for the
+  board to blit. The encoder is behind `splash-build`, a host-only
+  build-dependency feature: `splash::build::convert(png, out, Crop)`
+  composites alpha over black, optionally crops the black margin, and
+  writes a `RLE5` header plus `[count, lo, hi]` RGB565 runs. Moved from
+  the weather station and rpi-nes, which each carried both halves.
+
 - **A minimal HTTPS client**, behind an `https` feature: one request per
   connection over `tls`, DNS through the last byte under one timeout.
   `https::Client` carries what differs by board — `user_agent`,

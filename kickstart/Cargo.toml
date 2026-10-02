@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "metrics", "ota", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "metrics", "ota", "mdns", "splash", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -214,6 +214,9 @@ webpki-roots = { version = "1.0", default-features = false, optional = true }
 # protocol over it. 0.7 because that is the major `embassy-net`
 # implements, and a socket implementing 0.6 does not satisfy a 0.7 bound.
 embedded-io-async = { version = "0.7", default-features = false, optional = true }
+# The splash encoder's PNG decoder, behind `splash-build`. Host only: it
+# runs in a board's build script, never in a kernel.
+png = { version = "0.18", optional = true }
 
 # Bare-metal only, so that `cargo test` can build this crate for the host:
 # the config parser is pure, and its tests have nowhere else to run. None of
@@ -466,6 +469,17 @@ tls = [
 # connection, chunked bodies reassembled, the body returned whatever the
 # status. `embassy-net/dns` because a request names a host.
 https = ["tls", "embassy-net/dns"]
+
+# A boot logo baked into the kernel image (src/splash.rs): `splash::Image`,
+# a checked run-length-encoded RGB565 image whose pixels the board blits
+# itself. Pure `core`; nothing here knows what a framebuffer is.
+splash = []
+
+# The encoder for `splash` (src/splash/build.rs), for a board's `build.rs`:
+# a PNG in, the bytes `splash::Image` reads out. Needs `std`, so it is a
+# build-dependency feature only, and is in neither the Makefile's
+# $(FEATURES) nor the docs.rs list -- both build for a Pi.
+splash-build = ["splash", "dep:png"]
 
 # Mozilla's root set for `tls`, as `tls::client_config()`. See the
 # dependency above for why it is its own feature.

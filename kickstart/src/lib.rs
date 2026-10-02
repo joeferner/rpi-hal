@@ -48,6 +48,11 @@
 ))]
 extern crate alloc;
 
+// The splash encoder runs in a board's `build.rs`, on the host, and reads
+// and writes files.
+#[cfg(feature = "splash-build")]
+extern crate std;
+
 /// The wall clock — see the module's own documentation for why it is a
 /// sink with no source of its own, and why it reads `None` until set.
 #[cfg(feature = "clock")]
@@ -105,6 +110,11 @@ pub mod site;
 /// documentation for what its reply checks do and do not protect against.
 #[cfg(feature = "sntp")]
 pub mod sntp;
+/// A boot logo baked into the kernel image — see the module's own
+/// documentation for why it is run-length-encoded RGB565, and for the
+/// encoder a board's `build.rs` calls.
+#[cfg(feature = "splash")]
+pub mod splash;
 /// Mounting the card's FAT volume — see the module's own documentation
 /// for what it costs in RAM and what time the files it writes carry.
 #[cfg(feature = "storage")]
@@ -119,5 +129,5 @@ pub mod tls;
 #[cfg(feature = "web")]
 pub mod web;
 
-// The rest of the modules this crate is being assembled from -- notify,
-// splash -- arrive one at a time, each behind the feature named for it.
+// The rest of the modules this crate is being assembled from -- notify --
+// arrive one at a time, each behind the feature named for it.

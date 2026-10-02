@@ -37,6 +37,8 @@ named for it.
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
 | `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
 | `ota` | The over-the-air update route — read, install, answer in one shared JSON shape — and the reboot handshake after it |
+| `splash` | A boot logo baked into the kernel as run-length-encoded RGB565, decoded with no allocation |
+| `splash-build` | The encoder for `splash`, for a board's `build.rs`: a PNG in, the bytes `splash::Image` reads. Host only — it needs `std` |
 
 The examples read their settings from `kickstart.toml` at the root of the
 card; copy `kickstart.toml.example` and fill it in.
