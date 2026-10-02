@@ -35,8 +35,7 @@ named for it.
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
 | `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
-
-Still to come: ota.
+| `ota` | The over-the-air update route — read, install, answer in one shared JSON shape — and the reboot handshake after it |
 
 The examples read their settings from `kickstart.toml` at the root of the
 card; copy `kickstart.toml.example` and fill it in.

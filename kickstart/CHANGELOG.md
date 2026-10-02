@@ -6,7 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
+### Added
+
+- **Over-the-air updates**, behind an `ota` feature. `ota::OtaUpload` is
+  the route a bundle is `POST`ed to: read whole (413 over the board's
+  `max_bundle`, 400 for a short read, with whether the client hung up or
+  the read ran out of time), installed onto a `storage::Shared` card while
+  the connection is open, and answered in one JSON shape every board
+  shares — `ok`, `kernel`, `written`, `skipped`, `elapsed_ms`,
+  `kernel_timing { write_ms, verify_ms, write_kib_s, verify_kib_s }`
+  (with card commands under `OtaUpload::counting`), `rebooting_in_seconds`,
+  or `error` — absent fields left out rather than `null`. The install is
+  timed with `rpi_loader_ota::measure`, one console line per entry.
+  `ota::Reboot` is the handshake to the board's reboot task: `request`
+  from the handler, `wait` in the task, which covers the drain. `ota::Hooks`
+  is what a board adds around the transfer and the install. Moved from the
+  water sensor and the weather station, whose routes did the same thing
+  and answered in two shapes.
+
 
 - **`resident-fat` 0.3.** `storage::mount` is `resident-fat`'s
   `mount_first_fat` now, plus its console lines, and `storage::Error` is

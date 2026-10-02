@@ -87,6 +87,11 @@ pub mod metrics;
 /// questions and both are deadlines.
 #[cfg(feature = "net")]
 pub mod net;
+/// Over-the-air updates: the upload route and the reboot after it — see
+/// the module's own documentation for the one response shape every board
+/// answers with.
+#[cfg(feature = "ota")]
+pub mod ota;
 /// The board's web assets, read off the card into RAM — see the module's
 /// own documentation for why the site lives on the card at all.
 #[cfg(feature = "site")]
@@ -109,5 +114,6 @@ pub mod tls;
 #[cfg(feature = "web")]
 pub mod web;
 
-// The rest of the modules this crate is being assembled from -- ota
-// first -- arrive one at a time, each behind the feature named for it.
+// The rest of the modules this crate is being assembled from -- the HTTP
+// client, notify, splash -- arrive one at a time, each behind the feature
+// named for it.

@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "metrics", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "metrics", "ota", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -132,6 +132,12 @@ heapless = { version = "0.8", default-features = false, optional = true }
 # for its own API routes. 0.19 is what both boards this came from run.
 picoserve = { version = "0.19", default-features = false, features = [
     "embassy",
+], optional = true }
+# The bundle format, the install, and the timing around it, behind `ota`
+# -- shared with the `rpi-loader` CLI that packs a bundle, so the two ends
+# cannot disagree about the format. `apply` is the install half.
+rpi-loader-ota = { version = "0.2", default-features = false, features = [
+    "apply",
 ], optional = true }
 
 # The settings file's format, behind `config`, read (`parse`) and written
@@ -477,6 +483,23 @@ web = [
     "dep:embassy-time",
 ]
 
+# Over-the-air updates (src/ota.rs): `ota::OtaUpload`, the route a bundle
+# is posted to -- read whole, installed onto the card with the connection
+# still open, answered in one JSON shape every board shares -- and
+# `ota::Reboot`, the handshake to the board's reboot task once the answer
+# has drained. `ota::Hooks` is what a board adds around it.
+#
+# Built on `web` for the route and `storage` for the card it installs
+# through (`storage::Shared`); `serde` and picoserve's `json` for the
+# response.
+ota = [
+    "web",
+    "storage",
+    "dep:rpi-loader-ota",
+    "dep:serde",
+    "picoserve/json",
+]
+
 # Writing Prometheus's text exposition format (src/metrics.rs): the
 # writer, not the series. `metrics::Exposition` writes a family's
 # preamble, samples with escaped labels, and fixed-point decimals without
@@ -685,8 +708,13 @@ required-features = [
 # This builds against a local `rpi-hal` whose `resident-fat` is 0.3 until
 # the release that carries it (0.9.0), and then goes, with the version
 # requirements above moving to that release.
+#
+# `rpi-loader-ota` the same way: `ota` uses its `measure`, and `apply` on
+# resident-fat 0.3, which the published 0.2.0 predates. Its next release
+# (0.3.0) carries both.
 [patch.crates-io]
 rpi-hal = { path = "../rpi-hal" }
+rpi-loader-ota = { path = "../rpi-loader/ota" }
 
 # A fault on a bare-metal target has nowhere to unwind to -- there is no
 # runtime to catch a panic and no thread to kill -- and the unwinding
