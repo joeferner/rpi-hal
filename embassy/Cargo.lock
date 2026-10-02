@@ -574,9 +574,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rpi-hal"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15f875a03f8a2bf7d80fae459332a7b77b2f93b96e79950338b1d5f037ff07e7"
+checksum = "cf79fc28c60a7868108fc3b5c11962a91a65673ba5b416be550afec00b40e70f"
 dependencies = [
  "bcm2835-lpa",
  "bcm2837-lpa",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal-embassy"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "critical-section",
  "embassy-executor",

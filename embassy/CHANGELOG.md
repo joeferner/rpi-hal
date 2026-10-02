@@ -4,6 +4,16 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-02
+
+### Changed
+
+- **`rpi-hal` 0.8 → 0.9.** Breaking only in that a consumer's own
+  `rpi-hal` must move to 0.9 as well: the drivers this crate adapts are
+  `rpi-hal`'s types, and two majors of it in one build are two different
+  sets of them. Nothing here changed; 0.9's one change is its
+  `resident-fat` feature moving to `resident-fat` 0.3.
+
 ## [0.8.0] - 2026-09-27
 
 ### Added
@@ -384,6 +394,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.9.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.9.0
 [0.8.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.8.0
 [0.7.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.7.0
 [0.6.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.6.0
