@@ -3,7 +3,7 @@
 //! Both work through the same reset machinery [`crate::watchdog`] uses:
 //! arm the PM watchdog with a tiny countdown and select `PM_RSTC`'s
 //! full-reset type, so the board resets almost immediately instead of
-//! after a timeout. [`shutdown`](crate::power::shutdown) additionally writes a
+//! after a timeout. [`shutdown`] additionally writes a
 //! "halt" sentinel
 //! into `PM_RSTS` first — the boot-partition field set to 63, which the
 //! firmware (`bootcode.bin`) reads on the way back up and, seeing that

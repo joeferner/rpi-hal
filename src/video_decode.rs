@@ -42,7 +42,7 @@
 //! output port; the visible effect is that
 //! [`poll`](crate::video_decode::VideoDecoder::poll) starts (or resumes)
 //! producing frames with a new
-//! [`FrameFormat`](crate::video_decode::FrameFormat).
+//! [`FrameFormat`].
 //!
 //! Output is [`ENCODING_I420`](crate::mmal::ENCODING_I420): a
 //! full-resolution plane of luma followed by half-resolution blue- and
@@ -63,7 +63,7 @@
 //! is no allocator here and because a decoded frame is large enough that
 //! where it lives is an application decision. Ownership moves: a buffer
 //! handed over belongs to the VideoCore until it comes back as a
-//! [`Frame`](crate::video_decode::Frame), and
+//! [`Frame`], and
 //! [`recycle`](crate::video_decode::VideoDecoder::recycle) hands it over
 //! again.
 //!
@@ -72,7 +72,7 @@
 //! rounded up to the decoder's macroblock alignment (multiples of 32
 //! horizontally and 16 vertically). A buffer too small for the format the
 //! stream turns out to need surfaces as
-//! [`Error::BufferTooSmall`](crate::video_decode::Error::BufferTooSmall)
+//! [`Error::BufferTooSmall`]
 //! rather
 //! than a truncated frame.
 

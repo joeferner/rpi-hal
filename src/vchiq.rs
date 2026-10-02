@@ -13,7 +13,7 @@
 //! ## How it works
 //!
 //! A single contiguous region of RAM
-//! ([`SharedMemory`](crate::vchiq::SharedMemory)) is handed to the
+//! ([`SharedMemory`]) is handed to the
 //! firmware once, by bus address, through
 //! [`Mailbox::vchiq_init`](crate::mailbox::Mailbox::vchiq_init). Its first
 //! 4KB "slot zero" holds the protocol's shared bookkeeping — a magic
@@ -34,7 +34,7 @@
 //! `armed` flags, which is exactly the condition the protocol defines for
 //! "don't bother interrupting me", so the firmware quietly updates
 //! `tx_pos` and this driver notices in
-//! [`Vchiq::poll`](crate::vchiq::Vchiq::poll). That keeps the
+//! [`Vchiq::poll`]. That keeps the
 //! whole subsystem interrupt-free, at the cost of the application having
 //! to call `poll` regularly.
 //!
@@ -52,7 +52,7 @@
 //! the firmware's field back over it, and invalidating it to read the
 //! firmware's field throws away this core's not-yet-written-back one.
 //!
-//! So [`Vchiq::new`](crate::vchiq::Vchiq::new) remaps the whole region
+//! So [`Vchiq::new`] remaps the whole region
 //! Normal Non-cacheable via
 //! [`crate::mmu::set_uncached`] — the bare-metal equivalent of the
 //! `dma_alloc_coherent` Linux's own driver uses for it — and every access

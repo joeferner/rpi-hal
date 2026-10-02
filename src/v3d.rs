@@ -15,7 +15,7 @@
 //! from documentation alone.
 //!
 //! The block is power/clock-gated off by default, and needs *two*
-//! mailbox calls before constructing [`V3d`](crate::v3d::V3d), in this
+//! mailbox calls before constructing [`V3d`], in this
 //! order:
 //!
 //! 1. [`crate::mailbox::Mailbox::set_clock_rate_hz`] with

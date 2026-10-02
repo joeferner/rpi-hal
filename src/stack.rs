@@ -25,8 +25,8 @@
 //! Only core 0's main stack lives in this region. A secondary core runs
 //! on the [`Stack<BYTES>`](crate::multicore::Stack) its application
 //! supplied, and the AArch32 exception modes run on their own banked
-//! regions, which is why [`used`](crate::stack::used) and
-//! [`headroom`](crate::stack::headroom) are `Option` — they
+//! regions, which is why [`used`] and
+//! [`headroom`] are `Option` — they
 //! report `None` rather than a meaningless number when `sp` isn't in
 //! this region at all.
 

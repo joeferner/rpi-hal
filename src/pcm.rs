@@ -31,11 +31,11 @@
 //! (the PAC labels the encoding `pllc()`, a naming quirk of this crate's
 //! SVD — same clock the PWM path uses), integer divider only. The bit
 //! clock rate is `PLLD_per / clock_divisor`, and the frame layout this
-//! driver programs sends [`BITS_PER_FRAME`](crate::pcm::BITS_PER_FRAME) bit
+//! driver programs sends [`BITS_PER_FRAME`] bit
 //! clocks per stereo frame, so the sample rate falls out as
 //! `bit_clock_hz / BITS_PER_FRAME`.
-//! [`Pcm::clock_divisor`](crate::pcm::Pcm::clock_divisor) inverts that to pick
-//! the [`Pcm::init`](crate::pcm::Pcm::init) divisor
+//! [`Pcm::clock_divisor`] inverts that to pick
+//! the [`Pcm::init`] divisor
 //! for a target sample rate. As with every rate in [`crate::pwm`], the
 //! result is nominal, not exact — integer divider off a PLL-derived clock
 //! whose frequency (commonly cited as 500 MHz) this crate doesn't
@@ -43,7 +43,7 @@
 //!
 //! # Frame format
 //!
-//! [`Pcm::i2s_out`](crate::pcm::Pcm::i2s_out) programs one fixed,
+//! [`Pcm::i2s_out`] programs one fixed,
 //! widely-compatible format:
 //! standard Philips I2S, 16-bit stereo, in a 64-bit-clock frame (32 clocks
 //! per channel, the data left-justified in each 32-clock slot). Concretely
@@ -75,18 +75,18 @@
 //!
 //! # Audio
 //!
-//! [`Pcm::i2s_out`](crate::pcm::Pcm::i2s_out) returns an
-//! [`I2sOut`](crate::pcm::I2sOut) handle that, like
+//! [`Pcm::i2s_out`] returns an
+//! [`I2sOut`] handle that, like
 //! [`crate::pwm`]'s [`PwmAudio`](crate::pwm::PwmAudio), doesn't stream
 //! samples itself: it exposes the FIFO's bus address
-//! ([`I2sOut::fifo_bus_address`](crate::pcm::I2sOut::fifo_bus_address)) and the
-//! TX DREQ number ([`I2sOut::dreq`](crate::pcm::I2sOut::dreq)) to hand to a
+//! ([`I2sOut::fifo_bus_address`]) and the
+//! TX DREQ number ([`I2sOut::dreq`]) to hand to a
 //! DMA channel
 //! ([`crate::dma::Channel::write_peripheral`] for a looping buffer, or
 //! [`crate::dma::Channel::stream_peripheral`] for a gapless double-buffered
 //! stream). Each FIFO word is one 16-bit sample in its low 16 bits; a
 //! caller building the buffer from signed PCM uses
-//! [`pcm_sample`](crate::pcm::pcm_sample) and
+//! [`pcm_sample`] and
 //! interleaves left/right. Dropping the handle stops transmission and the
 //! clocks.
 

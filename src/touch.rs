@@ -34,7 +34,7 @@
 //! of firmware-owned shared memory — and re-reads the same unchanged
 //! frame harmlessly if nothing changed:
 //! [`poll`](crate::touch::TouchScreen::poll)'s edge-triggered
-//! [`TouchEvent`](crate::touch::TouchEvent)s are computed by diffing
+//! [`TouchEvent`]s are computed by diffing
 //! this poll's ids against the previous poll's, so an unchanged frame
 //! just produces no events, not incorrect ones.
 //!

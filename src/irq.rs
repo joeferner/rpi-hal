@@ -1,7 +1,7 @@
 //! # Handling an interrupt
 //!
 //! Three independent gates all have to be open before a handler runs: the
-//! CPU-level mask ([`enable_irq`](crate::irq::enable_irq)), the source
+//! CPU-level mask ([`enable_irq`]), the source
 //! routed through the interrupt controller (`lic::Lic`), and the
 //! peripheral itself configured to raise it.
 //!

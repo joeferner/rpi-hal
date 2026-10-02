@@ -7,9 +7,9 @@
 //! version's rather than the silicon's, and the notes below say which
 //! version a measurement came from.
 //!
-//! A [`Sdio`](crate::sdio::Sdio) that has completed
+//! A [`Sdio`] that has completed
 //! [`load_firmware`](crate::sdio::Sdio::load_firmware) is wrapped in a
-//! [`Wifi`](crate::wifi::Wifi), which speaks Broadcom's SDIO protocol stack
+//! [`Wifi`], which speaks Broadcom's SDIO protocol stack
 //! over function 2
 //! (the WLAN data path): the SDPCM framing layer, and, inside control
 //! frames, the CDC (a.k.a. BCDC) command protocol that carries "iovars"
@@ -22,7 +22,7 @@
 //! over the SDPCM data channel wrapped in a BDC header
 //! ([`send_ethernet`](crate::wifi::Wifi::send_ethernet) /
 //! [`recv_ethernet`](crate::wifi::Wifi::recv_ethernet)); with the `smoltcp`
-//! feature, [`WifiPhy`](crate::wifi::WifiPhy) wraps
+//! feature, [`WifiPhy`] wraps
 //! that as a `phy::Device` so a TCP/IP stack can run on top.
 //!
 //! One received frame is not always one packet. Under load the firmware

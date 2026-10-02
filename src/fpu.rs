@@ -8,7 +8,7 @@
 //! ARM1176, VFPv4 plus NEON on the later cores), but not how it is
 //! switched on.
 //!
-//! `rt`'s boot sequence calls [`enable`](crate::fpu::enable) (via the
+//! `rt`'s boot sequence calls [`enable`] (via the
 //! `rpi_hal_fpu_init` symbol below) on *every* core before any Rust code runs
 //! -- the primary
 //! core in `boot.s`/`boot64.s` and each secondary in its bring-up path --
