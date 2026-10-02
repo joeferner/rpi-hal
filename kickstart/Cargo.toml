@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "webpki-roots", "web", "metrics", "ota", "mdns", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "metrics", "ota", "mdns", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -461,6 +461,11 @@ tls = [
     "dep:embassy-net",
     "embassy-net/tcp",
 ]
+
+# A minimal HTTPS client over `tls` (src/https.rs): one request per
+# connection, chunked bodies reassembled, the body returned whatever the
+# status. `embassy-net/dns` because a request names a host.
+https = ["tls", "embassy-net/dns"]
 
 # Mozilla's root set for `tls`, as `tls::client_config()`. See the
 # dependency above for why it is its own feature.

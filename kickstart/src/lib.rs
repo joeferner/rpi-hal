@@ -73,6 +73,11 @@ pub mod entropy;
 /// of the program.
 #[cfg(feature = "heap")]
 pub mod heap;
+/// A minimal HTTPS client — see the module's own documentation for why it
+/// is one request per connection, and why the body comes back whatever the
+/// status.
+#[cfg(feature = "https")]
+pub mod https;
 /// An mDNS responder for one name — see the module's own documentation
 /// for the half of the multicast plumbing the board still has to do.
 #[cfg(feature = "mdns")]
@@ -114,6 +119,5 @@ pub mod tls;
 #[cfg(feature = "web")]
 pub mod web;
 
-// The rest of the modules this crate is being assembled from -- the HTTP
-// client, notify, splash -- arrive one at a time, each behind the feature
-// named for it.
+// The rest of the modules this crate is being assembled from -- notify,
+// splash -- arrive one at a time, each behind the feature named for it.

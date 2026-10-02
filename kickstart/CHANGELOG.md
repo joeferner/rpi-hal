@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A minimal HTTPS client**, behind an `https` feature: one request per
+  connection over `tls`, DNS through the last byte under one timeout.
+  `https::Client` carries what differs by board — `user_agent`,
+  `timeout`, `response_max`, `tcp_buffer` — from `Client::DEFAULT`;
+  `https::Request::get(host, path)` is the common case. The body comes back
+  whatever the status, chunked framing reassembled (a chunked body cut
+  short is refused, not shortened), and `Response::preview` is the
+  excerpt made safe for a console. Moved from the weather station and the
+  water sensor; the water sensor's had no chunked decoding.
+
 - **Over-the-air updates**, behind an `ota` feature. `ota::OtaUpload` is
   the route a bundle is `POST`ed to: read whole (413 over the board's
   `max_bundle`, 400 for a short read, with whether the client hung up or

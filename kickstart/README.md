@@ -32,6 +32,7 @@ named for it.
 | `tz` | Local time over a `tz-rs` zone |
 | `sntp` | Sets `clock` from an NTP server, and keeps it set |
 | `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
+| `https` | A minimal HTTPS client over `tls`: one request per connection, chunked bodies reassembled |
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
 | `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
