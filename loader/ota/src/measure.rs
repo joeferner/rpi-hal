@@ -59,16 +59,25 @@ pub struct Phase {
 }
 
 impl Phase {
-    /// Kibibytes per second, or 0 for a phase too quick to time.
-    ///
-    /// Integer throughout: a board doing this has no floating point to
-    /// spare for it, and a card's rate needs no decimal place to read.
+    /// Kibibytes per second, or 0 for a phase too quick to time — see
+    /// [`rate_kib_s`].
     pub fn rate_kib_s(&self) -> u64 {
-        if self.ms == 0 {
-            return 0;
-        }
-        self.bytes as u64 * 1000 / (self.ms * 1024)
+        rate_kib_s(self.bytes, self.ms)
     }
+}
+
+/// `bytes` moved in `ms` milliseconds, in kibibytes per second; 0 when
+/// `ms` is 0.
+///
+/// Integer throughout: a board doing this has no floating point to spare
+/// for it, and a card's rate needs no decimal place to read. Public for the
+/// figures beside an install that are not phases of it — how fast the
+/// bundle arrived, say.
+pub fn rate_kib_s(bytes: usize, ms: u64) -> u64 {
+    if ms == 0 {
+        return 0;
+    }
+    (bytes as u64).saturating_mul(1000) / ms.saturating_mul(1024)
 }
 
 /// `412 ms (3961 KiB/s)`, and the commands after it when they were
