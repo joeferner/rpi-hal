@@ -4,6 +4,27 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Password login for a board's web interface**, behind an `auth`
+  feature. `auth::store` makes a PBKDF2-HMAC-SHA256 verifier,
+  `pbkdf2-sha256$<iterations>$<salt>$<hash>` in hex with the count stored
+  in it, so raising `ITERATIONS` leaves an existing password verifying;
+  `auth::verify` checks one in constant time, and a malformed one is a
+  plain no. `auth::Sessions<N>` is the session table a board keeps in a
+  `static`: absolute expiry (`LIFETIME`, twelve hours, which
+  `set_cookie`'s `Max-Age` repeats), and a full table evicts the oldest
+  login rather than refusing the new one. `auth::RequireLogin` is a
+  `picoserve` layer over every route that asks the board whether a login
+  is required and what its whitelist allows, against the percent-decoded
+  path the router matches (`auth::decoded_path`), and answers anything
+  else with a `401`. Salts and tokens come through `getrandom`, so the
+  module needs nothing of `rpi-hal` and is tested on the host. Moved from
+  the water sensor, which keeps where the verifier is stored, its login
+  routes and its whitelist.
+
 ## [0.1.0] - 2026-10-02
 
 The first release.
@@ -404,4 +425,5 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
+[Unreleased]: https://github.com/joeferner/rpi-kickstart/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0

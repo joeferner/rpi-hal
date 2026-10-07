@@ -34,7 +34,12 @@ named for it.
 | `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
 | `https` | A minimal HTTPS client over `tls`: one request per connection, chunked bodies reassembled |
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
+| `net` | Gets the board onto the network whichever way it can — USB Ethernet first, the radio as a fallback — as an `embassy-net` stack |
+| `ethernet` | USB Ethernet as a `net` interface: the LAN9514 on a Pi 2B/3B and the LAN7800 on a 3B+, told apart on the bus |
+| `wifi` | The on-board radio as a `net` interface, through the bring-up the board supplies |
+| `mdns` | An mDNS responder for one name, re-read on every pass so a rename takes effect without a reboot |
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
+| `auth` | Password login for the web interface: a PBKDF2 verifier, a session table, the session cookie, and `RequireLogin`, a layer over every route that asks the board's whitelist |
 | `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
 | `ota` | The over-the-air update route — read, install, answer in one shared JSON shape — and the reboot handshake after it |
 | `splash` | A boot logo baked into the kernel as run-length-encoded RGB565, decoded with no allocation |
