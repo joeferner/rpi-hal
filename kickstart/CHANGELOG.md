@@ -4,7 +4,7 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-07
 
 ### Added
 
@@ -35,6 +35,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   module needs nothing of `rpi-hal` and is tested on the host. Moved from
   the water sensor, which keeps where the verifier is stored, its login
   routes and its whitelist.
+
+### Changed
+
+- **`embassy-sync` 0.7 → 0.8**, behind `storage`, `auth` and `ota`.
+  **Breaking** for a board that names `storage::Shared`'s or `ota::Reboot`'s
+  mutex types against its own `embassy-sync` 0.7. 0.8 is what `embassy-net`
+  0.9 and `rpi-hal-embassy` are built on, so a board taking `storage` no
+  longer carries two copies of it, and of `embedded-io` with them.
 
 ## [0.1.0] - 2026-10-02
 
@@ -436,5 +444,5 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
-[Unreleased]: https://github.com/joeferner/rpi-kickstart/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0

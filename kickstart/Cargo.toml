@@ -1,6 +1,6 @@
 [package]
 name = "rpi-kickstart"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Application scaffolding for bare-metal Raspberry Pi boards: console, config, storage, web and the rest of the bring-up that is the same on every board, on top of rpi-hal"
 license = "MIT OR Apache-2.0"
@@ -176,8 +176,11 @@ resident-fat = { version = "0.3.0", default-features = false, features = [
     "mbr",
 ], optional = true }
 # The async mutex behind `storage::Shared`, so a task waiting for the card
-# yields rather than spins. 0.7 to match what the boards' own lines name.
-embassy-sync = { version = "0.7", default-features = false, optional = true }
+# yields rather than spins, and the blocking ones behind `auth`'s sessions
+# and `ota`'s reboot signal. 0.8, the major `embassy-net` 0.9 and
+# `rpi-hal-embassy` are built on: any other is a second copy of it, and of
+# `embedded-io` with it, in every board's image.
+embassy-sync = { version = "0.8", default-features = false, optional = true }
 
 # Local time behind `tz`: the IANA zone database's own file format, parsed
 # on the board. `alloc` and not `std` -- `from_tz_data` takes a TZif file's
