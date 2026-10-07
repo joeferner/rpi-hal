@@ -38,6 +38,7 @@
 #![deny(missing_docs)]
 
 #[cfg(any(
+    feature = "auth",
     feature = "config",
     feature = "metrics",
     feature = "site",
@@ -53,6 +54,10 @@ extern crate alloc;
 #[cfg(feature = "splash-build")]
 extern crate std;
 
+/// Password login for a board's web interface — see the module's own
+/// documentation for what it protects against and what it does not.
+#[cfg(feature = "auth")]
+pub mod auth;
 /// The wall clock — see the module's own documentation for why it is a
 /// sink with no source of its own, and why it reads `None` until set.
 #[cfg(feature = "clock")]

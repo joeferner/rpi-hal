@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "metrics", "ota", "mdns", "splash", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "auth", "metrics", "ota", "mdns", "splash", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -205,6 +205,15 @@ rustls = { version = "0.23", default-features = false, optional = true }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = [
     "alloc",
 ], optional = true }
+# The password verifier behind `auth`: PBKDF2-HMAC-SHA256, and `subtle`
+# for the constant-time comparisons of a verifier and a session token. All
+# RustCrypto, and the same versions `rustls-rustcrypto` already pulls in, so
+# a board with `tls` as well compiles nothing new for them.
+pbkdf2 = { version = "0.12", default-features = false, features = [
+    "hmac",
+], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+subtle = { version = "2.6", default-features = false, optional = true }
 # Mozilla's trust anchor set, compiled in, behind `webpki-roots`. Separate
 # from `tls` because it is most of the size, and a board talking to one
 # private server needs one anchor.
@@ -517,6 +526,27 @@ ota = [
     "dep:rpi-loader-ota",
     "dep:serde",
     "picoserve/json",
+]
+
+# Password login for the web interface (src/auth.rs): the PBKDF2 verifier
+# (`store`, `verify`), a session table, the session cookie, and
+# `RequireLogin`, a picoserve layer over a board's routes. The board keeps
+# where the verifier is stored, its login routes, and the whitelist the
+# layer asks.
+#
+# Salts and tokens come from `getrandom`, not `entropy` -- on a Pi that is
+# the hardware RNG through `entropy`'s backend all the same, but this way
+# the module needs nothing of `rpi-hal` and its tests run on the host.
+# `embassy-sync` for the session table's mutex, `heapless` for the decoded
+# path the whitelist is asked about.
+auth = [
+    "web",
+    "dep:getrandom",
+    "dep:pbkdf2",
+    "dep:sha2",
+    "dep:subtle",
+    "dep:embassy-sync",
+    "dep:heapless",
 ]
 
 # Writing Prometheus's text exposition format (src/metrics.rs): the
