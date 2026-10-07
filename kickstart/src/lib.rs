@@ -102,6 +102,10 @@ pub mod metrics;
 /// questions and both are deadlines.
 #[cfg(feature = "net")]
 pub mod net;
+/// Outbound notifications and the channels that deliver them — see the
+/// module's own documentation for what stays the board's.
+#[cfg(feature = "notify")]
+pub mod notify;
 /// Over-the-air updates: the upload route and the reboot after it — see
 /// the module's own documentation for the one response shape every board
 /// answers with.
@@ -133,6 +137,3 @@ pub mod tls;
 /// why this is pieces of a router rather than a server task.
 #[cfg(feature = "web")]
 pub mod web;
-
-// The rest of the modules this crate is being assembled from -- notify --
-// arrive one at a time, each behind the feature named for it.

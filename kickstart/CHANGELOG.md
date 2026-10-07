@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Outbound notifications**, behind a `notify` feature.
+  `notify::Notification` is a title, a body, a `Priority` — ntfy's 1–5
+  levels, chosen so a phone's own rules can tell an alarm from a
+  heartbeat — and tags. `notify::Channel` is the transport, the plug
+  point for a board's own; `Ntfy` (push to a topic, everything but the
+  body in headers, the title made single-line first) and `Resend` (email,
+  a hand-escaped JSON body) ship. Each send logs its outcome, a refusal
+  with the start of the server's answer. Moved from the water sensor,
+  which keeps which channels a message goes to, its per-channel report
+  and failure counts, and the messages themselves.
+
 - **Password login for a board's web interface**, behind an `auth`
   feature. `auth::store` makes a PBKDF2-HMAC-SHA256 verifier,
   `pbkdf2-sha256$<iterations>$<salt>$<hash>` in hex with the count stored

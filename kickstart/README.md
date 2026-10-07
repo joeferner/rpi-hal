@@ -33,6 +33,7 @@ named for it.
 | `sntp` | Sets `clock` from an NTP server, and keeps it set |
 | `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
 | `https` | A minimal HTTPS client over `tls`: one request per connection, chunked bodies reassembled |
+| `notify` | Outbound notifications over `https`: a `Channel` trait, with `Ntfy` (push) and `Resend` (email) shipped |
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
 | `net` | Gets the board onto the network whichever way it can — USB Ethernet first, the radio as a fallback — as an `embassy-net` stack |
 | `ethernet` | USB Ethernet as a `net` interface: the LAN9514 on a Pi 2B/3B and the LAN7800 on a 3B+, told apart on the bus |

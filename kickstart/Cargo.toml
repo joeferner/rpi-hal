@@ -26,7 +26,7 @@ targets = ["aarch64-unknown-none-softfloat"]
 # are not a set to turn all of: they forward to `rpi-hal`'s, where more
 # than one resolves by precedence. Every module is listed, since a
 # feature-gated one is otherwise absent from the published page entirely.
-features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "webpki-roots", "web", "auth", "metrics", "ota", "mdns", "splash", "ethernet", "wifi", "bcm2837"]
+features = ["console", "entropy", "heap", "config", "storage", "site", "clock", "tz", "sntp", "tls", "https", "notify", "webpki-roots", "web", "auth", "metrics", "ota", "mdns", "splash", "ethernet", "wifi", "bcm2837"]
 
 [dependencies]
 # API only. The single implementation comes from `rpi-hal`'s `rt` feature,
@@ -539,6 +539,18 @@ ota = [
 # the module needs nothing of `rpi-hal` and its tests run on the host.
 # `embassy-sync` for the session table's mutex, `heapless` for the decoded
 # path the whitelist is asked about.
+# Outbound notifications (src/notify.rs): `notify::Notification` and its
+# `Priority`, the `Channel` trait a transport implements, and the two that
+# ship -- `Ntfy`, push to an ntfy topic, and `Resend`, email through
+# Resend's API. Which channels a message goes to, and what a failure means,
+# stay the board's.
+#
+# Built on `https` for the requests. Implies `console` because each send
+# logs its outcome, and a refusal with the start of the server's answer:
+# both services explain a refusal in the body, and an unattended board's
+# console is where a silent night gets explained after the fact.
+notify = ["https", "console"]
+
 auth = [
     "web",
     "dep:getrandom",
