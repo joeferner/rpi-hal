@@ -49,9 +49,9 @@
 ))]
 extern crate alloc;
 
-// The splash encoder runs in a board's `build.rs`, on the host, and reads
-// and writes files.
-#[cfg(feature = "splash-build")]
+// The splash encoder and the build-info capture run in a board's
+// `build.rs`, on the host, and read files and run `git`.
+#[cfg(any(feature = "splash-build", feature = "metrics-build"))]
 extern crate std;
 
 /// Password login for a board's web interface — see the module's own

@@ -576,6 +576,14 @@ auth = [
 # response.
 metrics = ["dep:embassy-time"]
 
+# The capture behind `metrics::BuildInfo` (src/metrics/build.rs), for a
+# board's `build.rs`: the commit, whether the tree was dirty, and a hash of
+# `Cargo.lock`, handed to the compile for `build_info!` to read. Needs
+# `std` and runs `git`, so it is a build-dependency feature only, and is in
+# neither the Makefile's $(FEATURES) nor the docs.rs list -- both build for
+# a Pi. `sha2` for the lock hash, so it matches `sha256sum`.
+metrics-build = ["metrics", "dep:sha2"]
+
 # An mDNS responder for one name (src/mdns.rs).
 #
 # Needs no chip and nothing from `rpi-hal`: it is written against

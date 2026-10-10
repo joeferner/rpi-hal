@@ -7,7 +7,7 @@
 //!
 //! ```ignore
 //! let mut out = Exposition::with_capacity(4096);
-//! out.build_info("water", env!("CARGO_PKG_VERSION"));
+//! out.build_info("water", &rpi_kickstart::build_info!());
 //! out.uptime("water");
 //! out.family("water_zone_wet", Kind::Gauge, "1 while a zone reads wet.");
 //! for (index, zone) in zones.iter().enumerate() {
@@ -44,9 +44,97 @@
 //! That is why label values are only ever written through
 //! [`sample`](crate::metrics::Exposition::sample), which escapes them, and
 //! why help text is escaped too.
+//!
+//! # What a board is running
+//!
+//! [`build_info`](crate::metrics::Exposition::build_info) publishes the image's identity — the board
+//! crate's version, the commit it was built from and whether the tree had
+//! uncommitted changes, and a hash of its `Cargo.lock` — so "which boards
+//! still run the build with the advisory against it" is one query rather
+//! than a visit to each console. The version alone does not answer it: two
+//! images of one version differ after a `cargo update`, and only the lock
+//! hash tells them apart.
+//!
+//! All of it is captured on the host, by the board's `build.rs`, behind the
+//! `metrics-build` feature, which needs `std` and so is a build-dependency
+//! only:
+//!
+//! ```toml
+//! [dependencies]
+//! rpi-kickstart = { version = "…", features = ["metrics"] }
+//!
+//! [build-dependencies]
+//! rpi-kickstart = { version = "…", features = ["metrics-build"] }
+//! ```
+//!
+//! ```ignore
+//! // build.rs
+//! fn main() {
+//!     rpi_kickstart::metrics::build::emit();
+//! }
+//! ```
+//!
+//! and [`build_info!`](crate::build_info) reads what it set. Nothing is
+//! computed on the device.
 
 use alloc::string::String;
 use core::fmt::{self, Write as _};
+
+#[cfg(feature = "metrics-build")]
+pub mod build;
+
+/// What an image is, for [`Exposition::build_info`]: constant for its whole
+/// life, captured when it was built.
+///
+/// Usually made by [`build_info!`](crate::build_info) rather than by hand.
+/// Every field is text, label values being text, and any of the last three
+/// may be `unknown` — an image built outside a git checkout, or with no
+/// `Cargo.lock` to be found — which is written as such rather than guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildInfo {
+    /// The board crate's version, `CARGO_PKG_VERSION`.
+    pub version: &'static str,
+    /// The commit it was built from, abbreviated as `git` abbreviates it.
+    pub git: &'static str,
+    /// `true` if tracked files differed from that commit — an image built
+    /// from an uncommitted tree, which no commit describes — else `false`.
+    /// Untracked files do not count, as `git describe --dirty` has it.
+    pub dirty: &'static str,
+    /// The first eight hex digits of `Cargo.lock`'s SHA-256: what
+    /// `sha256sum Cargo.lock | cut -c1-8` prints for the same file.
+    pub lock: &'static str,
+}
+
+/// A [`BuildInfo`](crate::metrics::BuildInfo) for the crate it is written
+/// in: its version, and what `metrics::build::emit` — behind
+/// `metrics-build`, in its `build.rs` — recorded.
+///
+/// A macro rather than a function so that `env!` is expanded in the board's
+/// crate, which is the one whose version and build script it means. The
+/// variable names are literals because `env!` takes nothing else; `emit`
+/// writes the same three, and its tests hold it to them. A board
+/// that never calls `emit` fails to compile here, naming it, rather than
+/// publishing a blank.
+#[macro_export]
+macro_rules! build_info {
+    () => {
+        $crate::metrics::BuildInfo {
+            version: env!("CARGO_PKG_VERSION"),
+            git: env!(
+                "KICKSTART_BUILD_GIT",
+                "call rpi_kickstart::metrics::build::emit() from build.rs"
+            ),
+            dirty: env!(
+                "KICKSTART_BUILD_DIRTY",
+                "call rpi_kickstart::metrics::build::emit() from build.rs"
+            ),
+            lock: env!(
+                "KICKSTART_BUILD_LOCK",
+                "call rpi_kickstart::metrics::build::emit() from build.rs"
+            ),
+        }
+    };
+}
 
 /// The exposition format's content type, version and all.
 ///
@@ -205,17 +293,29 @@ impl Exposition {
         }
     }
 
-    /// `<prefix>_build_info{version="…"} 1`, with its family: the running
-    /// firmware version, as a label on a constant, so a dashboard can mark
-    /// an update where it happened.
-    pub fn build_info(&mut self, prefix: &str, version: &str) {
+    /// `<prefix>_build_info{version="…",git="…",dirty="…",lock="…"} 1`,
+    /// with its family: what the board is running, as labels on a
+    /// constant, so a dashboard can mark an update where it happened and a
+    /// query can find every board still on a given build. See [`BuildInfo`]
+    /// for the labels and the module documentation for where they come
+    /// from.
+    pub fn build_info(&mut self, prefix: &str, info: &BuildInfo) {
         let name = alloc::format!("{prefix}_build_info");
         self.family(
             &name,
             Kind::Gauge,
-            "The running firmware version, as a label on a constant 1.",
+            "The running firmware: its version, the commit it was built from, whether that tree had uncommitted changes, and a hash of its Cargo.lock, as labels on a constant 1.",
         );
-        self.sample(&name, &[("version", &version)], 1u8);
+        self.sample(
+            &name,
+            &[
+                ("version", &info.version),
+                ("git", &info.git),
+                ("dirty", &info.dirty),
+                ("lock", &info.lock),
+            ],
+            1u8,
+        );
     }
 
     /// `<prefix>_uptime_seconds`, with its family: seconds since boot.
@@ -466,12 +566,19 @@ mod tests {
     }
 
     #[test]
-    fn build_info_labels_the_version() {
+    fn build_info_labels_the_build() {
         let mut out = Exposition::new();
-        out.build_info("board", "1.2.3");
+        let info = BuildInfo {
+            version: "1.2.3",
+            git: "a1b2c3d",
+            dirty: "false",
+            lock: "9f8e7d6c",
+        };
+        out.build_info("board", &info);
         assert!(
             out.as_str().ends_with(
-                "# TYPE board_build_info gauge\nboard_build_info{version=\"1.2.3\"} 1\n"
+                "# TYPE board_build_info gauge\n\
+                 board_build_info{version=\"1.2.3\",git=\"a1b2c3d\",dirty=\"false\",lock=\"9f8e7d6c\"} 1\n"
             ),
             "{}",
             out.as_str()

@@ -44,9 +44,10 @@ HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 # $(FEATURES): most of those reach `rpi-hal`, which compiles only for a
 # Pi, and a module that does cannot be tested this way at all.
 #
-# `splash-build` appears only here: it needs `std`, and is meant to run on
-# the host in a build script, which is exactly where this runs.
-TEST_FEATURES := config,site,clock,tz,sntp,tls,https,notify,webpki-roots,auth,metrics,splash-build
+# `splash-build` and `metrics-build` appear only here: they need `std`, and
+# are meant to run on the host in a build script, which is exactly where
+# this runs.
+TEST_FEATURES := config,site,clock,tz,sntp,tls,https,notify,webpki-roots,auth,metrics,metrics-build,splash-build
 
 # Twice, because a feature-gated module is not compiled at all without its
 # feature: the plain pass proves the crate is usable with nothing turned

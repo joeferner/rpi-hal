@@ -15,6 +15,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `<prefix>_card_blocks_total`, each split `op="read"` and `op="write"`,
   from the `resident_fat::counted::Counters` a board's card counts into —
   commands beside blocks, because a card charges per command.
+- **Build identity on `/metrics`.** `<prefix>_build_info` now carries
+  `git` (the commit), `dirty` (uncommitted changes to tracked files) and
+  `lock` (the first eight hex digits of `Cargo.lock`'s SHA-256) beside
+  `version`, so boards on one version but built after a `cargo update` are
+  told apart. Captured on the host by the new `metrics-build` feature —
+  `metrics::build::emit()` from the board's `build.rs` — and read on the
+  device by `rpi_kickstart::build_info!()`; anything not found is
+  `unknown`.
 
 ### Changed
 
@@ -23,6 +31,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (still 30 s by default), and starts over at 1 s after a success.
   `retry_interval` is now the cap rather than a fixed wait, so a pool server
   that does not answer at boot no longer leaves the clock unset for 30 s.
+- **`Exposition::build_info` takes a `&metrics::BuildInfo`** rather than a
+  version string. A board passes `&rpi_kickstart::build_info!()`, and adds
+  `rpi-kickstart` with `metrics-build` as a build-dependency and a
+  `build.rs` calling `metrics::build::emit()`.
 - **`embedded-alloc` 0.6 → 0.7**, behind `heap`, for `used`/`free` on the
   TLSF heap. A board using `heap` names no `embedded-alloc` of its own, so
   nothing moves on its side.
