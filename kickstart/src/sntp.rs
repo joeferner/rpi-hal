@@ -53,8 +53,14 @@ pub struct NtpConfig<'a> {
     /// server is usually named. Default `pool.ntp.org` — a pool rather than
     /// a host, so a dead server resolves to a different one next time.
     pub server: &'a str,
-    /// How long to wait after a failed sync before trying again. Default
+    /// The longest to wait after a failed sync before trying again. Default
     /// 30 seconds.
+    ///
+    /// A cap rather than a fixed wait: the first retry comes after a second
+    /// and each one after that doubles, up to this. A pool name resolves to
+    /// a different volunteer server on each attempt, so one that does not
+    /// answer is usually followed by one that does, and the board need not
+    /// sit out the full interval clockless to find it.
     pub retry_interval: StdDuration,
     /// How long to wait after a successful one. Default 6 hours.
     ///
@@ -115,6 +121,13 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(10);
 /// for good, and the retry that exists to recover from exactly that never
 /// runs.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The wait before the first retry after a failure; each consecutive
+/// failure doubles it, up to [`NtpConfig::retry_interval`].
+///
+/// Short is not discourteous here: a retry after a missing reply already
+/// sits behind [`REPLY_TIMEOUT`], and is usually a different server's.
+const FIRST_RETRY: Duration = Duration::from_secs(1);
 
 /// Why a sync failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,8 +219,9 @@ impl core::fmt::Display for Refusal {
 
 /// Keeps the wall clock set, forever.
 ///
-/// Waits for an address, syncs, and repeats on whichever interval applies
-/// — the retry one after a failure, the re-sync one after a success. Every
+/// Waits for an address, syncs, and repeats: after a success on the re-sync
+/// interval, after a failure on a backoff that starts at a second and
+/// doubles up to the retry interval. Every
 /// sync and every failure is a console line: a clock that never sets is
 /// otherwise indistinguishable from a clock nobody asked to set.
 ///
@@ -215,8 +229,9 @@ impl core::fmt::Display for Refusal {
 /// the stack's `StackResources`; and a resolver from the lease, unless the
 /// server is written as an address.
 pub async fn run(stack: Stack<'_>, config: NtpConfig<'_>) -> ! {
-    let retry = to_embassy(config.retry_interval);
+    let retry_max = to_embassy(config.retry_interval);
     let resync = to_embassy(config.resync_interval);
+    let mut retry = FIRST_RETRY.min(retry_max);
     loop {
         // Re-checked every pass rather than only at startup: a lease can be
         // lost, and asking a server from an address the board no longer
@@ -234,18 +249,28 @@ pub async fn run(stack: Stack<'_>, config: NtpConfig<'_>) -> ! {
             Err(e) => Err((e, None)),
         };
         let wait = match result {
-            Ok(()) => resync,
+            Ok(()) => {
+                retry = FIRST_RETRY.min(retry_max);
+                resync
+            }
             Err((e, address)) => {
+                let wait = retry;
+                retry = next_retry(retry, retry_max);
                 logln!(
                     "sntp: {} -- {e}; retrying in {} s",
                     Server(config.server, address),
-                    retry.as_secs()
+                    wait.as_secs()
                 );
-                retry
+                wait
             }
         };
         Timer::after(wait).await;
     }
+}
+
+/// The wait after `retry`'s: double it, but no more than `max`.
+fn next_retry(retry: Duration, max: Duration) -> Duration {
+    retry.checked_mul(2).unwrap_or(Duration::MAX).min(max)
 }
 
 /// `core`'s duration as `embassy-time`'s, saturating: an interval too long
@@ -626,6 +651,19 @@ mod tests {
     fn half_the_round_trip_is_added() {
         assert_eq!(corrected(1_000, 40), 1_020);
         assert_eq!(corrected(1_000, 0), 1_000);
+    }
+
+    #[test]
+    fn the_retry_doubles_up_to_the_cap() {
+        let max = Duration::from_secs(30);
+        let mut retry = FIRST_RETRY;
+        let mut waits = [0; 7];
+        for wait in &mut waits {
+            *wait = retry.as_secs();
+            retry = next_retry(retry, max);
+        }
+        assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
+        assert_eq!(next_retry(Duration::MAX, Duration::MAX), Duration::MAX);
     }
 
     #[test]

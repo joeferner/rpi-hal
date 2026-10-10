@@ -18,6 +18,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **SNTP retries back off exponentially.** After a failed sync `sntp::run`
+  waits 1 s, then 2 s, 4 s, … doubling up to `NtpConfig::retry_interval`
+  (still 30 s by default), and starts over at 1 s after a success.
+  `retry_interval` is now the cap rather than a fixed wait, so a pool server
+  that does not answer at boot no longer leaves the clock unset for 30 s.
 - **`embedded-alloc` 0.6 → 0.7**, behind `heap`, for `used`/`free` on the
   TLSF heap. A board using `heap` names no `embedded-alloc` of its own, so
   nothing moves on its side.

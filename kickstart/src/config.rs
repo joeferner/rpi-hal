@@ -866,8 +866,8 @@ pub struct NtpSettings {
     /// The time server: a name, or an IPv4 address written out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<Spanned<String>>,
-    /// How long to wait after a failed sync, as `"30s"` / `"5m"` / `"1h"`
-    /// — see [`value::duration`].
+    /// The longest to wait after a failed sync — the backoff's cap — as
+    /// `"30s"` / `"5m"` / `"1h"`; see [`value::duration`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_interval: Option<Spanned<String>>,
     /// How long to wait after a successful one, likewise.
