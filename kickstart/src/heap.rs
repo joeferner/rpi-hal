@@ -39,7 +39,7 @@
 //! about it is a device that gets slower and then stops, long after
 //! anyone is watching the console.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use embedded_alloc::TlsfHeap;
 use rpi_hal::mailbox::Mailbox;
@@ -56,12 +56,17 @@ static HEAP: TlsfHeap = TlsfHeap::empty();
 /// Whether [`init`] has run, so that a second call reports rather than
 /// corrupts.
 ///
-/// `TlsfHeap::init` is `unsafe` precisely because calling it twice hands
-/// the allocator a region it has already given parts of away, after which
-/// two live allocations can overlap. That is not a failure anything
-/// reports — it is silent memory corruption some distance from its cause.
-/// Guarding it here is what lets [`init`] be a safe function at all.
+/// A second `TlsfHeap::init` would hand the allocator a region it has
+/// already given parts of away, after which two live allocations could
+/// overlap. `embedded-alloc` 0.7 panics rather than let that happen — 0.6
+/// let it, silently — and guarding it here turns the panic into
+/// [`Error::AlreadyInitialized`], which a board can report and carry on
+/// from.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// The region [`init`] gave the allocator, in bytes; zero before then.
+/// What [`usage`] reckons `used` against.
+static SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// Why [`init`] could not hand the allocator a region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +128,37 @@ pub fn init(mailbox: &mut Mailbox) -> Result<usize, Error> {
     // feature's bring-up, and with this crate's stacks inside the image
     // rather than growing down into it.
     unsafe { HEAP.init(region.start, size) };
+    SIZE.store(size, Ordering::Relaxed);
 
     Ok(size)
+}
+
+/// How the heap's bytes are split, as [`usage`] found them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    /// Bytes not available to allocate: live allocations, and the
+    /// allocator's own bookkeeping between them.
+    pub used: usize,
+    /// Bytes in free blocks. Not the largest allocation that would
+    /// succeed — free space split across blocks is not one block — but the
+    /// figure that, falling over weeks, says something is never freed.
+    pub free: usize,
+}
+
+/// The heap's usage right now; both zero before [`init`].
+///
+/// Walks every block in the heap inside a critical section — interrupts
+/// masked, and on a multicore board the other cores held off it — so the
+/// cost grows with how many blocks there are, live and free, rather than
+/// with the heap's size. Cheap enough for a metrics scrape every few
+/// seconds; not something to call in a loop.
+pub fn usage() -> Usage {
+    // One walk rather than `used()` and `free()`, which would be two — and
+    // two that can disagree, if something allocates between them. `used` is
+    // the region less what is free, which is how the allocator reckons it.
+    let free = HEAP.free();
+    Usage {
+        used: SIZE.load(Ordering::Relaxed).saturating_sub(free),
+        free,
+    }
 }

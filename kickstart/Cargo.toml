@@ -70,8 +70,9 @@ getrandom = { version = "0.2", default-features = false, features = [
 # The allocator behind `heap`. `default-features = false` with `tlsf`
 # named: the crate also ships a linked-list allocator, and which one is
 # in the binary should be a line someone wrote rather than a default --
-# see src/heap.rs for why this one.
-embedded-alloc = { version = "0.6", default-features = false, features = [
+# see src/heap.rs for why this one. 0.7 for `used`/`free` on the TLSF
+# heap, which 0.6 had only on the linked-list one; `heap::usage` reads them.
+embedded-alloc = { version = "0.7", default-features = false, features = [
     "tlsf",
 ], optional = true }
 

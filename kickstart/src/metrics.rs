@@ -230,6 +230,67 @@ impl Exposition {
         self.sample(&name, &[], embassy_time::Instant::now().as_secs());
     }
 
+    /// `<prefix>_heap_used_bytes` and `<prefix>_heap_free_bytes`, with
+    /// their families: the [`heap`](crate::heap) allocator's split, read
+    /// by [`heap::usage`](crate::heap::usage).
+    ///
+    /// The one to watch is free, over weeks: a heap whose free space falls
+    /// and never recovers is something being allocated and not freed, and on
+    /// a board meant to run for months that is a fault that arrives long
+    /// after anyone is looking at the console. Reading it walks the heap —
+    /// see `heap::usage` for the cost.
+    #[cfg(feature = "heap")]
+    pub fn heap(&mut self, prefix: &str) {
+        let usage = crate::heap::usage();
+        let used = alloc::format!("{prefix}_heap_used_bytes");
+        self.family(
+            &used,
+            Kind::Gauge,
+            "Heap bytes not available to allocate: live allocations and the allocator's own bookkeeping.",
+        );
+        self.sample(&used, &[], usage.used);
+        let free = alloc::format!("{prefix}_heap_free_bytes");
+        self.family(
+            &free,
+            Kind::Gauge,
+            "Heap bytes in free blocks. Falling over weeks and never recovering means something is never freed.",
+        );
+        self.sample(&free, &[], usage.free);
+    }
+
+    /// `<prefix>_card_commands_total` and `<prefix>_card_blocks_total`, with
+    /// their families, each split `op="read"` and `op="write"`: what the
+    /// card has been asked to do since boot, from the `Counters` its
+    /// `resident_fat::counted::Counted` device counts into.
+    ///
+    /// Both, because they say different things: blocks are the work, and
+    /// commands are the overhead — a card charges per command, not per
+    /// block, so blocks per command is the figure that says whether writes
+    /// are going out in runs or one block at a time.
+    ///
+    /// Counters, so a reboot reads as the reset it is. The underlying counts
+    /// are `u32` and wrap, which a scraper sees as a reset too.
+    #[cfg(feature = "storage")]
+    pub fn card(&mut self, prefix: &str, counters: &resident_fat::counted::Counters) {
+        let counts = counters.now();
+        let commands = alloc::format!("{prefix}_card_commands_total");
+        self.family(
+            &commands,
+            Kind::Counter,
+            "Commands sent to the card since boot. A card charges per command, not per block.",
+        );
+        self.sample(&commands, &[("op", &"read")], counts.read_calls);
+        self.sample(&commands, &[("op", &"write")], counts.write_calls);
+        let blocks = alloc::format!("{prefix}_card_blocks_total");
+        self.family(
+            &blocks,
+            Kind::Counter,
+            "512-byte blocks moved to or from the card since boot.",
+        );
+        self.sample(&blocks, &[("op", &"read")], counts.read_blocks);
+        self.sample(&blocks, &[("op", &"write")], counts.write_blocks);
+    }
+
     /// The document so far.
     pub fn as_str(&self) -> &str {
         &self.text
@@ -319,6 +380,56 @@ mod tests {
         assert_eq!(
             out.as_str(),
             "board_zone_info{zone=\"3\",name=\"back\\\\slash \\\"quoted\\\"\\nnext\"} 1\n"
+        );
+    }
+
+    #[cfg(feature = "storage")]
+    #[test]
+    fn card_counts_are_split_by_operation() {
+        use resident_fat::BlockDevice;
+        use resident_fat::counted::{Counted, Counters};
+
+        /// Accepts every transfer, so the counter in front of it has
+        /// something to count.
+        struct Nothing;
+        impl BlockDevice for Nothing {
+            type Error = ();
+            fn read(&mut self, _: u64, _: &mut [u8]) -> Result<(), ()> {
+                Ok(())
+            }
+            fn write(&mut self, _: u64, _: &[u8]) -> Result<(), ()> {
+                Ok(())
+            }
+            fn block_count(&mut self) -> Result<Option<u64>, ()> {
+                Ok(None)
+            }
+        }
+
+        let counters = Counters::new();
+        let mut card = Counted::new(Nothing, &counters);
+        card.read(0, &mut [0; 512 * 3]).unwrap();
+        card.write(0, &[0; 512 * 2]).unwrap();
+        card.write(8, &[0; 512]).unwrap();
+
+        let mut out = Exposition::new();
+        out.card("board", &counters);
+        let samples: alloc::vec::Vec<&str> = out
+            .as_str()
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect();
+        assert_eq!(
+            samples,
+            [
+                "board_card_commands_total{op=\"read\"} 1",
+                "board_card_commands_total{op=\"write\"} 2",
+                "board_card_blocks_total{op=\"read\"} 3",
+                "board_card_blocks_total{op=\"write\"} 3",
+            ]
+        );
+        assert!(
+            out.as_str()
+                .contains("# TYPE board_card_blocks_total counter\n")
         );
     }
 

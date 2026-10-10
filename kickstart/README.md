@@ -41,7 +41,7 @@ named for it.
 | `mdns` | An mDNS responder for one name, re-read on every pass so a rename takes effect without a reboot |
 | `web` | The `picoserve` socket loop a pool of the board's tasks runs, and the pieces its router is built from; with `site`, `SiteFiles` serves the card's `/WWW` |
 | `auth` | Password login for the web interface: a PBKDF2 verifier, a session table, the session cookie, and `RequireLogin`, a layer over every route that asks the board's whitelist |
-| `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter |
+| `metrics` | A writer for Prometheus's text exposition format: escaped labels, and decimals without a float formatter; with `heap` and `storage`, the heap's usage and the card's command counts as ready-made series |
 | `ota` | The over-the-air update route — read, install, answer in one shared JSON shape — and the reboot handshake after it |
 | `splash` | A boot logo baked into the kernel as run-length-encoded RGB565, decoded with no allocation |
 | `splash-build` | The encoder for `splash`, for a board's `build.rs`: a PNG in, the bytes `splash::Image` reads. Host only — it needs `std` |

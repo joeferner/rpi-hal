@@ -4,6 +4,24 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Heap and card series for `/metrics`.** `Exposition::heap(prefix)`, with
+  `heap`, writes `<prefix>_heap_used_bytes` and `<prefix>_heap_free_bytes`
+  from the new `heap::usage()`. `Exposition::card(prefix, &counters)`, with
+  `storage`, writes `<prefix>_card_commands_total` and
+  `<prefix>_card_blocks_total`, each split `op="read"` and `op="write"`,
+  from the `resident_fat::counted::Counters` a board's card counts into —
+  commands beside blocks, because a card charges per command.
+
+### Changed
+
+- **`embedded-alloc` 0.6 → 0.7**, behind `heap`, for `used`/`free` on the
+  TLSF heap. A board using `heap` names no `embedded-alloc` of its own, so
+  nothing moves on its side.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added
@@ -444,5 +462,6 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
+[Unreleased]: https://github.com/joeferner/rpi-kickstart/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0
