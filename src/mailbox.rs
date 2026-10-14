@@ -739,8 +739,13 @@ impl Mailbox {
     /// tell an under-voltage event that has since passed from one that
     /// never happened.
     pub fn throttled(&mut self) -> Result<u32, Error> {
-        let response = self.property_call(0x0003_0046, &[0], 2)?;
-        Ok(response[1])
+        // One word each way, unlike the id-then-value pair "Get
+        // Temperature" answers with: the status lands in word 0, where the
+        // request word was. Reading word 1 returned the zero the buffer was
+        // initialized with, so this reported a healthy supply on a board the
+        // firmware was drawing its under-voltage bolt on.
+        let response = self.property_call(0x0003_0046, &[0], 1)?;
+        Ok(response[0])
     }
 
     /// Powers a firmware *power domain* on (`on = true`) or off (tag
