@@ -2,108 +2,124 @@ name: Release
 
 # Publishing to crates.io is permanent -- a version can be yanked but never
 # replaced or deleted -- so this never triggers on a branch push. Pushing a
-# `v*` tag is the deliberate act that starts a release, and
-# `workflow_dispatch` covers re-running it after a failure without moving the
-# tag.
+# tag is the deliberate act that starts a release, and `workflow_dispatch`
+# covers re-running one after a failure without moving the tag.
+#
+# Every crate in the repository releases on its own tag, and each tag runs
+# exactly one of the two jobs below:
+#
+#   hal-v<ver>         rpi-hal                      job `crate`
+#   embassy-v<ver>     rpi-hal-embassy              job `crate`
+#   kickstart-v<ver>   rpi-kickstart                job `crate`
+#   loader-ota-v<ver>  rpi-loader-ota               job `crate`
+#   loader-v<ver>      rpi-loader CLI + the images  job `loader`
+#
+# `loader-v*` does not match `loader-ota-v0.3.0`, so the prefixes stay
+# distinct. scripts/ci/release-meta.sh holds the table that maps a tag to
+# its crate. rpi-hal's tags before this repository held every crate were
+# bare `v<ver>`; they no longer trigger anything.
+#
+# A batch release pushes several tags, one `git push` each
+# (scripts/release/push-tags.sh): GitHub creates no push events at all
+# when more than three tags arrive in a single push. Order doesn't matter,
+# because each run waits for the crates it depends on to reach crates.io.
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "hal-v*"
+      - "embassy-v*"
+      - "kickstart-v*"
+      - "loader-v*"
+      - "loader-ota-v*"
   workflow_dispatch:
+    inputs:
+      component:
+        description: Which crate to release (a dispatch has no tag to read)
+        type: choice
+        options: [hal, embassy, kickstart, loader, loader-ota]
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
 
-# Creating the GitHub release object needs write access to the repository's
-# contents; nothing here needs anything else. Without this the default token
-# is read-only and `gh release create` fails with a 403 -- after `make
-# package` has already run, so it costs the whole job to find out.
+# Naming the shell is what turns on `pipefail`: left unnamed, a step runs
+# under `bash -e` alone, and `release-meta.sh ... | tee` would pass with
+# release-meta.sh's refusal swallowed by the pipe. Named, it runs under
+# `bash --noprofile --norc -eo pipefail`.
+defaults:
+  run:
+    shell: bash
+
+# The release object and its uploaded images need write access to the
+# repository's contents; nothing here needs anything else. Without this the
+# default token is read-only and `gh release create` fails with a 403 --
+# after packaging has already run, so it costs the whole job to find out.
 permissions:
   contents: write
 
 jobs:
-  publish:
-    name: publish to crates.io
+  # The four library crates, which differ only in what release-meta.sh
+  # says about them.
+  crate:
+    name: publish ${{ inputs.component || github.ref_name }}
+    if: >-
+      (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/loader-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.component != 'loader')
     runs-on: ubuntu-latest
     environment: crates-io
-    # The crate lives in `hal/`. Every step runs from there: the toolchain
-    # pin and `.cargo/config.toml` are read from the working directory,
-    # and the manifest and changelog the guards read are the crate's own.
-    defaults:
-      run:
-        working-directory: hal
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install the pinned toolchain
-        run: rustup show
-
-      # Both guards below fail the release rather than publishing something
-      # that can't be taken back.
+      # Fails the release when the tag doesn't match the manifest. A
+      # dispatch run has no tag in its context, so there the manifest is the
+      # authority and there is nothing to cross-check.
       #
-      # The tag check lives inside the script rather than in an `if:` on the
-      # step, because the step also publishes the version number every step
-      # below reads. Skipping the step on a dispatch run would skip the
-      # outputs with it, and the steps that consume them would run against an
-      # empty string.
-      - name: Tag must match the manifest version
-        id: version
+      # The check lives inside the script rather than in an `if:` on the
+      # step, because the step also publishes the outputs every later step
+      # reads; skipping it would leave them running against empty strings.
+      - name: Which crate, and the tag matches its manifest
+        id: meta
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          # A dispatch run has no tag in its context, so the manifest is the
-          # authority there and there is nothing to cross-check.
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          scripts/ci/release-meta.sh "${{ inputs.component || github.ref_name }}" | tee -a "$GITHUB_OUTPUT"
 
-      # `CHANGELOG.md`'s heading carries a literal `ReleaseDate` placeholder
-      # (the `cargo-release` convention) until the release is actually dated.
-      # Publishing with it still in place ships a changelog that says the
-      # version was never released.
-      #
-      # The section also has to exist, and not only because an undescribed
-      # release is unhelpful: it is what the release notes below are written
-      # from, so without it the release page would be created empty.
-      - name: Changelog must have a dated section for this version
+      # rustup reads `rust-toolchain.toml` from the working directory, so
+      # the pin installed is the crate's own.
+      - name: Install the crate's pinned toolchain
+        working-directory: ${{ steps.meta.outputs.dir }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          if grep -q ReleaseDate CHANGELOG.md; then
-            echo "CHANGELOG.md still has the ReleaseDate placeholder" >&2
-            exit 1
-          fi
-          if ! grep -qE "^## \[$version\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
-            echo "CHANGELOG.md has no dated '## [$version] - YYYY-MM-DD' section" >&2
-            exit 1
-          fi
+          rustup show
+          cargo --version
 
-      # A chip feature is not optional: the verification build inside
-      # `package`/`publish` uses *default* features, which select no chip, so
-      # `lib.rs`'s `compile_error!` fires and the publish aborts on a package
-      # that is actually fine.
-      - run: make package
+      # The section has to exist and be dated: undated, the changelog
+      # claims the version was never released; missing, the release page
+      # below would be created empty.
+      - name: The changelog has a dated section for this version
+        run: scripts/ci/changelog.sh check "${{ steps.meta.outputs.changelog }}" "${{ steps.meta.outputs.version }}"
 
-      # Written to the runner's temp directory, not the checkout. The
-      # working directory is the package's own root, so a stray file here
-      # is a file *inside* the package -- and `cargo publish` refuses to publish from a
-      # working tree with uncommitted changes, which is exactly the guard we
-      # want it to keep.
-      #
-      # The range has to end at the *next* `## [` heading. The obvious
-      # `sed -n '/## \[<version>\]/,/^\[<version>\]:/p'` does not work: that
-      # closing address matches the link reference at the bottom of the file
-      # rather than anything near the section, so the range runs past every
-      # older heading and the notes become the entire changelog. It fails
-      # silently, so the only symptom is an over-long release page.
+      # Packaging resolves each in-repo dependency from crates.io, so one
+      # being released in the same batch has to land there first.
+      - name: Wait for in-repo dependencies on crates.io
+        run: scripts/ci/wait-for-deps.sh "${{ steps.meta.outputs.dir }}"
+
+      # The full, unpatched `cargo package` -- unlike CI's
+      # scripts/ci/package-verify.sh, which builds against this repository's
+      # crates. Here every dependency comes from crates.io, exactly as it
+      # will for anyone who installs the result. Its own target directory,
+      # outside the checkout, so nothing it writes lands inside a package.
+      - name: The packaged tarball builds against crates.io
+        working-directory: ${{ steps.meta.outputs.dir }}
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package
+        run: cargo package ${{ steps.meta.outputs.args }}
+
+      # Written to the runner's temp directory, not the checkout: a stray
+      # file inside a package is a file in the package, and `cargo publish`
+      # refuses to publish from a working tree with uncommitted changes --
+      # exactly the guard we want it to keep.
       - name: Extract this version's changelog section
         run: |
-          version="${{ steps.version.outputs.version }}"
-          awk -v v="## [$version]" '
-            index($0, v) == 1 { inside = 1; next }
-            inside && /^## \[/ { exit }
-            inside { print }
-          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          scripts/ci/changelog.sh extract "${{ steps.meta.outputs.changelog }}" "${{ steps.meta.outputs.version }}" \
+            > "$RUNNER_TEMP/release-notes.md"
           cat "$RUNNER_TEMP/release-notes.md"
 
       # Before the irreversible step, so a release whose notes cannot be
@@ -112,39 +128,210 @@ jobs:
       # release object created by hand gets its notes corrected rather than
       # refusing the run.
       #
-      # `CHANGELOG.md`'s version links point at `/releases/tag/v<version>`,
-      # which only resolves once this object exists.
+      # `--latest=false`: the repository's "Latest" badge belongs to the
+      # loader, whose release page carries the images people download.
+      # `--target` matters only to a dispatch run whose tag doesn't exist
+      # yet: the tag is then created on the commit that was released.
       - name: Create or update the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
+          tag="${{ steps.meta.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release edit "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$tag" \
-              --title "$tag" \
-              --notes-file "$RUNNER_TEMP/release-notes.md"
+              --target "$GITHUB_SHA" \
+              --title "${{ steps.meta.outputs.crate }} ${{ steps.meta.outputs.version }}" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest=false
           fi
 
       # A re-run of an otherwise-successful release must not fail here just
       # because this half already happened; crates.io refuses a version that
-      # exists, and that refusal would mask whatever the re-run was for. The
-      # sparse index is the cheapest authority on the question.
+      # exists, and that refusal would mask whatever the re-run was for.
       - name: Is this version already on crates.io?
         id: published
         run: |
-          version="${{ steps.version.outputs.version }}"
-          index="$(curl -sS https://index.crates.io/rp/i-/rpi-hal || true)"
-          if printf '%s' "$index" | grep -q "\"vers\":\"$version\""; then
+          if scripts/ci/on-crates-io.sh "${{ steps.meta.outputs.crate }}" "${{ steps.meta.outputs.version }}"; then
             echo "already=true" >> "$GITHUB_OUTPUT"
-            echo "rpi-hal $version is already published; skipping"
+            echo "${{ steps.meta.outputs.crate }} ${{ steps.meta.outputs.version }} is already published; skipping"
           else
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish
         if: steps.published.outputs.already == 'false'
+        working-directory: ${{ steps.meta.outputs.dir }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --features bcm2837
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package
+        run: cargo publish ${{ steps.meta.outputs.args }}
+
+  # The CLI and the loader images, which ship together: they are two halves
+  # of one wire protocol. Same guards in the same order as the job above,
+  # plus the images, and deliberately not folded into it -- a shared job
+  # full of `if: loader` steps would be harder to read than the repetition,
+  # on the one workflow where being able to read what will happen matters
+  # most.
+  loader:
+    name: publish the loader CLI and upload the images
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loader-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.component == 'loader')
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+
+      # Also checks that the CLI and firmware manifests carry the same
+      # version; see release-meta.sh.
+      - name: Both manifests agree, and the tag matches them
+        id: meta
+        run: |
+          scripts/ci/release-meta.sh "${{ inputs.component || github.ref_name }}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install the firmware's pinned toolchain
+        working-directory: loader/firmware
+        run: rustup show
+
+      # And nightly for the BCM2835 image alone: `armv6-none-eabi` is tier
+      # 3, so it has no precompiled `core` and `-Z build-std` compiles one.
+      # `llvm-tools` is named alongside `rust-src` because the recipe ends
+      # in `cargo objcopy`, which resolves them from the sysroot of the
+      # toolchain in use -- the pinned stable having them does not help
+      # nightly. `--profile minimal` installs only what is listed, so
+      # anything omitted here fails the image build rather than degrading
+      # it.
+      - name: Install nightly for the tier-3 ARMv6 target
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src \
+            --component llvm-tools
+
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+
+      - name: The changelog has a dated section for this version
+        run: scripts/ci/changelog.sh check loader/CHANGELOG.md "${{ steps.meta.outputs.version }}"
+
+      # The CLI depends on rpi-loader-ota by path; packaging resolves it
+      # from crates.io.
+      - name: Wait for in-repo dependencies on crates.io
+        run: scripts/ci/wait-for-deps.sh loader/cli
+
+      - name: The packaged tarball builds against crates.io
+        working-directory: loader/cli
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package
+        run: cargo package
+
+      # Five images. `make` writes each build to the same handful of
+      # filenames, so every one is copied out before the next overwrites
+      # it. Into the runner's temp directory, never the checkout.
+      #
+      # The loop covers the two chips that have both execution states.
+      # BCM2835 sits outside it because it matches neither half of the
+      # pattern: one image rather than two, the ARM1176 having no 64-bit
+      # mode, and `kernel.img` rather than `kernel7.img`, because
+      # `start.elf` picks the filename from the CPU it finds.
+      - name: Build the images
+        working-directory: loader
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
+          for chip in bcm2837 bcm2711; do
+            make "build-$chip"
+            cp firmware/target/kernel7.img "$dist/rpi-loader-$version-$chip-kernel7.img"
+            make "build64-$chip"
+            cp firmware/target/kernel8.img "$dist/rpi-loader-$version-$chip-kernel8.img"
+          done
+          make build-bcm2835
+          cp firmware/target/kernel.img "$dist/rpi-loader-$version-bcm2835-kernel.img"
+
+      # The bash completion, generated by the CLI that was just built --
+      # the only thing that can produce a correct one, since it comes from
+      # that binary's own argument tree. Shipped so it can be installed
+      # without building the CLI first.
+      #
+      # SHA256SUMS covers the images and the completion together, written
+      # once both exist, so `sha256sum -c` verifies the whole release.
+      - name: Build the bash completion, and the checksums
+        working-directory: loader
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          dist="$RUNNER_TEMP/dist"
+          make build-cli
+          ./cli/target/release/rpi-loader completions bash > "$dist/rpi-loader-$version.bash"
+          cd "$dist" && sha256sum ./*.img ./*.bash > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract this version's changelog section
+        run: |
+          scripts/ci/changelog.sh extract loader/CHANGELOG.md "${{ steps.meta.outputs.version }}" \
+            > "$RUNNER_TEMP/release-notes.md"
+          cat >> "$RUNNER_TEMP/release-notes.md" <<'NOTE'
+
+          ## Images
+
+          Copy the image matching your board to the SD card's boot
+          partition, renamed to the filename in its own name:
+          `kernel7.img` (32-bit), `kernel8.img` (64-bit) or `kernel.img`
+          (ARMv6). The firmware loads one of those names and no others,
+          chosen by the CPU it finds, and a board handed the wrong one
+          stops without printing anything. Use `kernel8.img` only with
+          `arm_64bit=1` in `config.txt`.
+
+          `bcm2837` covers the Pi 2 v1.2 and Pi 3; `bcm2711` covers the
+          Pi 4; `bcm2835` covers the Pi 1 and Pi Zero, and is ARMv6, so it
+          has no 64-bit counterpart. Verify with
+          `sha256sum -c SHA256SUMS`.
+
+          `rpi-loader-<version>.bash` is the bash completion for the host
+          CLI, for installing without building it first:
+
+          ```sh
+          sudo cp rpi-loader-<version>.bash \
+            /usr/share/bash-completion/completions/rpi-loader
+          ```
+
+          The host CLI is a separate install: `cargo install rpi-loader`.
+          NOTE
+
+      # Before the irreversible step, and idempotent, so a re-run after a
+      # failed publish does not stall here. Marked Latest: the loader's
+      # release page is the one people come to the repository to download
+      # from.
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$RUNNER_TEMP"/dist/* --clobber
+          else
+            gh release create "$tag" "$RUNNER_TEMP"/dist/* \
+              --target "$GITHUB_SHA" \
+              --title "rpi-loader ${{ steps.meta.outputs.version }}" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest
+          fi
+
+      - name: Is this version already on crates.io?
+        id: published
+        run: |
+          if scripts/ci/on-crates-io.sh rpi-loader "${{ steps.meta.outputs.version }}"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "rpi-loader ${{ steps.meta.outputs.version }} is already published; skipping"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the CLI to crates.io
+        if: steps.published.outputs.already == 'false'
+        working-directory: loader/cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package
+        run: cargo publish
