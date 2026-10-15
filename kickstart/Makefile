@@ -1,0 +1,117 @@
+# Build/lint orchestration for rpi-kickstart. The default (AArch32) target
+# and the linker-script rustflags are pinned in .cargo/config.toml, so
+# plain `cargo` invocations pick them up without repeating flags here.
+#
+# AArch64 is named explicitly below rather than made a second default,
+# because there is no way to ask cargo for two. Every recipe that builds
+# anything therefore runs twice: this crate's source is architecture-
+# neutral, but its examples link, and linking is where a load address or a
+# missing `rpi-link.x` shows up.
+#
+# ARMv6 (Pi 1, Pi Zero) is deliberately absent. `rpi-hal` and
+# `rpi-hal-embassy` both carry recipes for it, at the cost of a nightly
+# toolchain and `-Z build-std` -- that target is tier 3 and rustup
+# publishes no `core` for it. Nothing here is architecture-specific, so
+# adding those recipes is a `make` change and not a source one, and it can
+# wait for a board that wants it.
+
+# Both architectures in one invocation. `--target` may be repeated, which
+# is what keeps each recipe below to two lines instead of four -- the
+# second dimension being the feature set, and that one cannot be folded
+# away.
+ARCHES := --target armv7a-none-eabi --target aarch64-unknown-none-softfloat
+
+.PHONY: build examples test fmt fmt-check clippy doc package pre-commit clean
+
+# Every module, plus one chip. Enumerated rather than `--all-features`,
+# which is wrong here and not merely inelegant: the chip features forward
+# to `rpi-hal`'s, and turning on more than one resolves by its
+# `bcm2711` > `bcm2837` > `bcm2835` precedence instead of failing. A
+# sweep would therefore check -- and link example images against -- a
+# peripheral base nothing in this repository runs on.
+#
+# `bcm2837` is the one named because the examples are Pi 2/3 images. A
+# board is free to select another; what this list covers is that the
+# modules compile, and none of them is chip-conditional.
+FEATURES := console,entropy,heap,config,storage,site,clock,tz,sntp,tls,https,notify,webpki-roots,web,auth,metrics,ota,mdns,splash,ethernet,wifi,bcm2837
+
+# The machine running the build. Tests run there, because that is the only
+# place `cargo test` has to run them: the bare-metal targets have no test
+# harness and nothing to execute one on.
+HOST := $(shell rustc -vV | sed -n 's/^host: //p')
+
+# The modules whose tests are pure and so build for the host. Not
+# $(FEATURES): most of those reach `rpi-hal`, which compiles only for a
+# Pi, and a module that does cannot be tested this way at all.
+#
+# `splash-build` and `metrics-build` appear only here: they need `std`, and
+# are meant to run on the host in a build script, which is exactly where
+# this runs.
+TEST_FEATURES := config,site,clock,tz,sntp,tls,https,notify,webpki-roots,auth,metrics,metrics-build,splash-build
+
+# Twice, because a feature-gated module is not compiled at all without its
+# feature: the plain pass proves the crate is usable with nothing turned
+# on, and the second is the only one that sees the modules.
+build:
+	cargo build --release $(ARCHES)
+	cargo build --release $(ARCHES) --features $(FEATURES)
+
+# Same two passes, and here the second one is load-bearing for a different
+# reason: cargo silently *skips* an example whose `required-features` are
+# unmet rather than reporting it, so without it an example can rot
+# indefinitely while the build stays green.
+examples:
+	cargo build --release $(ARCHES) --examples
+	cargo build --release $(ARCHES) --examples --features $(FEATURES)
+
+
+# `--lib` because the examples are Pi images, and the bare-metal
+# dev-dependencies they link are excluded from a host build on purpose.
+test:
+	cargo test --target $(HOST) --lib --features $(TEST_FEATURES)
+
+fmt:
+	cargo fmt
+
+fmt-check:
+	cargo fmt -- --check
+
+# `--examples` included so the lint runs over them too: they are the only
+# code here that talks to hardware, which makes them the code most likely
+# to earn a lint.
+clippy:
+	cargo clippy --release $(ARCHES) --examples -- -D warnings
+	cargo clippy --release $(ARCHES) --examples --features $(FEATURES) -- -D warnings
+	cargo clippy --target $(HOST) --lib --features splash-build -- -D warnings
+
+# `-D warnings` is the whole point: a plain doc build almost never fails,
+# so without it this catches nothing. What it does catch is broken
+# intra-doc links -- including the non-obvious case where a module's own
+# `//!` links resolve in the *crate root's* scope, because they get merged
+# with the outer doc comment on the `pub mod` declaration in lib.rs.
+#
+# The same enumerated set as everything above, and for the same reason: a
+# feature-gated module is otherwise not documented at all, and so not
+# checked at all. It matches `[package.metadata.docs.rs]`, so what this
+# builds is what the published page will be.
+doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features $(FEATURES)
+
+# What `cargo publish` will verify: it builds the packaged tarball, which
+# catches the "works in this working copy, broken on crates.io" class of
+# problem. cargo refuses a dirty working tree here on its own, which is
+# the behaviour we want -- what gets published is the committed state.
+#
+# The separate CARGO_TARGET_DIR is not tidiness. The verification build
+# compiles the extracted tarball with the dev profile, and sharing the
+# normal target directory lets it leave a fingerprint whose source paths
+# point into that extracted copy -- after which every later `cargo build`
+# reports "Finished" without recompiling, and edits to src/ have no effect
+# until `cargo clean`.
+package:
+	CARGO_TARGET_DIR=target/verify cargo package
+
+pre-commit: fmt clippy build examples test doc
+
+clean:
+	cargo clean

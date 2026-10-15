@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["armv7a-none-eabi", "aarch64-unknown-none-softfloat"]

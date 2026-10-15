@@ -1,0 +1,19 @@
+[toolchain]
+# Stable, not nightly: nothing here needs an unstable feature, and rustup
+# ships a precompiled `core` for both bare-metal targets, so there is no
+# `-Zbuild-std` either.
+channel = "stable"
+# `llvm-tools` supplies the objcopy that turns the linked ELF into the raw
+# image the firmware actually loads (`cargo objcopy`, from cargo-binutils,
+# drives it). Declaring it here means `rustup show` installs it, so a
+# fresh checkout -- or a CI runner -- gets a working `make build-*`
+# without a separate `rustup component add`.
+#
+# `rustfmt` and `clippy` come with the default profile, so naming them is
+# redundant on a normal install -- but only until something materializes
+# the toolchain with a minimal profile, and then `make fmt-check` fails
+# with "'cargo-fmt' is not installed for the toolchain". Naming every
+# component the Makefile actually invokes makes that failure impossible
+# rather than dependent on how the toolchain arrived.
+components = ["llvm-tools", "rustfmt", "clippy"]
+targets = ["armv7a-none-eabi", "aarch64-unknown-none-softfloat"]

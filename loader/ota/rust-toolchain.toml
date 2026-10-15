@@ -1,0 +1,22 @@
+[toolchain]
+# Stable. Nothing here needs an unstable feature, and rustup ships a
+# precompiled `core` for the bare metal target below, so there is no
+# `-Zbuild-std` either.
+channel = "stable"
+# `rustfmt` and `clippy` arrive with the default profile, so naming them is
+# redundant on a normal install — but only until something materialises the
+# toolchain with a minimal profile, and then `make fmt-check` fails with
+# "'cargo-fmt' is not installed for the toolchain". Naming every component
+# the Makefile invokes makes that failure impossible rather than dependent
+# on how the toolchain arrived.
+components = ["rustfmt", "clippy"]
+# So `make clippy-ota`'s second pass works from a fresh checkout without a
+# separate `rustup target add`. That pass is what proves the package is
+# actually `no_std`: a host build links `std` transitively and never
+# complains, so an accidental `std::` would otherwise reach CI green.
+#
+# One target, not both of the loader's. Nothing in this package is
+# architecture-specific, and what the bare metal build checks is the
+# absence of `std`, which is a property of the target family rather than of
+# the instruction set.
+targets = ["armv7a-none-eabi"]

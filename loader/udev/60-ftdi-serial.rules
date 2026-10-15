@@ -1,0 +1,19 @@
+# Copy this file to /etc/udev/rules.d/, then:
+#   sudo udevadm control --reload
+#   sudo udevadm trigger
+# Unplug/replug the cable if it still doesn't pick up the new rule.
+#
+# Grants non-root access to FTDI-based USB-to-serial cables (e.g. the
+# TTL-232R-3V3 this project's docs recommend) via the `plugdev` group,
+# so picocom/rpi-loader don't need sudo. Uses the same GROUP="plugdev"
+# + TAG+="uaccess" pattern as bench-link's probe-rs udev rules -- if
+# you've already set up that group for probe-rs, this reuses it rather
+# than requiring yet another group + re-login.
+
+# FTDI FT232R (most common chip in TTL-232R-3V3-style cables)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# FTDI FT232H / FT2232 / FT4232 (in case a different FTDI cable is used)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", MODE="660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6010", MODE="660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6011", MODE="660", GROUP="plugdev", TAG+="uaccess"

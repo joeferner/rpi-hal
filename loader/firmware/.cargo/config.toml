@@ -1,0 +1,15 @@
+# The default build target, so plain `cargo build` here produces the
+# AArch32 image; the AArch64 build overrides it on the command line.
+#
+# There is deliberately no `[unstable] build-std`: both bare-metal targets
+# ship a precompiled `core` through rustup, so nothing here needs to build
+# the standard library from source, and asking for it would drag the whole
+# package back onto nightly.
+#
+# This file must stay in this directory. Cargo discovers configuration by
+# walking up from the working directory, so a copy at the repository root
+# would be inherited by the host CLI beside it -- which would then compile
+# host code for `armv7a-none-eabi` and fail on the missing
+# `#[panic_handler]`.
+[build]
+target = "armv7a-none-eabi"

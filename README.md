@@ -8,6 +8,9 @@ its own version, changelog and crates.io release:
 | Directory | Crate | What it is |
 | --- | --- | --- |
 | [`hal/`](hal) | [`rpi-hal`](https://crates.io/crates/rpi-hal) | The hardware abstraction layer: boot, MMU, interrupts and the SoC's peripherals, implementing `embedded-hal` |
+| [`embassy/`](embassy) | [`rpi-hal-embassy`](https://crates.io/crates/rpi-hal-embassy) | Embassy support: the time driver, the executor, and `embassy-net` drivers |
+| [`kickstart/`](kickstart) | [`rpi-kickstart`](https://crates.io/crates/rpi-kickstart) | The bring-up every application does on top of `rpi-hal`: console, heap, config, storage, networking, web, OTA |
+| [`loader/`](loader) | [`rpi-loader`](https://crates.io/crates/rpi-loader), [`rpi-loader-ota`](https://crates.io/crates/rpi-loader-ota) | A resident UART loader: flash it to the card once, then upload firmware over serial. The host CLI, the firmware images, and the OTA bundle format |
 
 Each directory is a separate cargo project with its own toolchain pin
 and `.cargo/config.toml`, so run `cargo` and `make` from inside it (or

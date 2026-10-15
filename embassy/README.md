@@ -1,0 +1,383 @@
+# rpi-hal-embassy
+
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal-embassy/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal-embassy/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/rpi-hal-embassy.svg)](https://crates.io/crates/rpi-hal-embassy)
+[![docs.rs](https://img.shields.io/docsrs/rpi-hal-embassy)](https://docs.rs/rpi-hal-embassy)
+
+[Embassy](https://embassy.dev) support for bare-metal Raspberry Pi — the
+BCM2836/BCM2837 (Pi 2, Pi 3) and the BCM2835 (Pi 1, Pi Zero) — on top of
+the `rpi-hal` crate.
+
+Embassy's executor is portable; what it needs per platform is a time
+driver and an architecture-specific idle/wake path. This crate supplies
+both:
+
+- an `embassy-time` driver over the BCM System Timer, and
+- a thread-mode executor that behaves identically on ARMv6, ARMv7-A and
+  AArch64.
+
+## Status
+
+Both halves are in place: the `embassy-time` driver (`time_driver`) and
+the thread-mode executor (`Executor`). `examples/embassy_blink.rs` spawns
+two tasks and drives both from `embassy-time` deadlines.
+
+`embassy-executor` compiles for `armv7a-none-eabi`, `armv6-none-eabi` and
+`aarch64-unknown-none-softfloat` with no `platform-*` backend feature,
+which is what lets a single executor implementation serve all three
+architectures.
+
+## Chips
+
+The chip is a feature of this crate, forwarded to `rpi-hal`'s feature of
+the same name, with `bcm2837` the default:
+
+| Feature | Board | Target |
+| --- | --- | --- |
+| `bcm2837` (default) | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
+| `bcm2835` | Pi 1, Pi Zero | `armv6-none-eabi` |
+
+It is a feature here rather than a hardcoded entry on the `rpi-hal`
+dependency line because `rpi-hal`'s chip features have a precedence order
+(`bcm2711` > `bcm2837` > `bcm2835`). A crate that names one on its own
+`rpi-hal` line leaves consumers no way to turn it off, and adding a
+lower-precedence chip alongside it selects the wrong peripheral base
+silently rather than failing. So a Pi Zero build is
+`--no-default-features --features bcm2835`.
+
+The Pi Zero is the one board that needs a **nightly** toolchain, because
+`armv6-none-eabi` is tier 3 and has no precompiled `core`. That belongs
+to the target rather than to this crate — see `rpi-hal`'s README — and
+the `make` recipes for it (`build-armv6`, `examples-armv6`,
+`clippy-armv6`) and `scripts/build-example-armv6.sh` carry the
+`+nightly -Z build-std=core` it needs. Everything else stays on stable.
+
+`multicore` is unavailable on `bcm2835`: the BCM2835 has one core, and
+`rpi-hal` rejects the combination with a `compile_error!` rather than
+quietly dropping the module.
+
+## Why this isn't a feature of `rpi-hal`
+
+An `embassy-time` driver is installed by *linkage*, not by types.
+`embassy_time_driver::time_driver_impl!` defines `#[unsafe(no_mangle)]`
+symbols that `embassy-time` declares as `extern "Rust"`, and a program
+links only if its crate graph contains exactly one driver.
+
+Behind a cargo feature on the HAL, feature unification means any
+dependency that enabled it would force this driver onto the whole
+program, and hard-conflict with an application supplying its own. That is
+an opt-in that cannot be opted out of. Keeping it in a separate crate
+leaves the choice with the application, which is the only place that can
+make it. It also keeps the HAL's release cadence independent of the
+pre-1.0 Embassy crates.
+
+This is the same split as `esp-hal` / `esp-hal-embassy`. The
+`embassy-rp` / `embassy-stm32` model, where the Embassy crate *is* the
+HAL, doesn't apply here — `rpi-hal` is the HAL.
+
+## What an application must provide
+
+- **A `critical-section` implementation**, which `rpi-hal`'s `rt` feature
+  provides. The driver's timer queue is guarded by one.
+- **`rpi-hal`'s `mmu` feature** (enabled by default). The executor's run
+  queue uses atomic compare-exchange, and `ldrex`/`strex` are
+  UNPREDICTABLE until RAM is mapped as cacheable Normal memory.
+- **Interrupt dispatch.** `rpi-hal` leaves `__irq_handler` to the
+  application. Either turn on the **`irq-dispatch`** feature, which
+  defines it for you, or write one and call `irq::dispatch()` from it —
+  see "Interrupts" below. Getting this wrong has no error: the default
+  handler is a weak no-op, so a program with neither links, boots, and
+  livelocks at its first deadline.
+- **A linker script**, providing `_start`, `__bss_start` and `__bss_end`
+  for `rpi-hal`'s boot code. `rpi-hal` publishes one on the linker search
+  path, so the application only has to name it — one `-T` line in
+  `.cargo/config.toml`, no script to copy and no build script:
+
+  ```toml
+  [target.aarch64-unknown-none-softfloat]
+  rustflags = ["-C", "link-arg=-Trpi-link.x"]
+  ```
+- **A reference to this crate**, even if the application calls nothing
+  from it. The time driver is installed by linkage, and a crate nothing
+  names is never linked, so the program fails on `_embassy_time_now`
+  undefined. Calling `time_driver::init` satisfies this; a program that
+  only reads `Instant::now()` needs `use rpi_hal_embassy as _;`.
+
+Neither `rt` nor `mmu` is requested by this crate's own dependency on
+`rpi-hal`: which boot sequence and memory setup a program uses is the
+application's decision, not a library's to force.
+
+## Wiring it up
+
+```toml
+[dependencies]
+# `rt` and `mmu` are on by default; the chip never is, and both crates
+# need to be told the same one.
+rpi-hal = { version = "0.6", features = ["bcm2837"] }
+rpi-hal-embassy = "0.6"
+embassy-executor = "0.10"
+embassy-time = "0.5"      # no `tick-hz-*` feature: this crate pins it
+```
+
+The two crates' versions move together — a `rpi-hal-embassy` release
+carries the number of the `rpi-hal` release it is built against, so
+matching numbers are the answer to "which HAL is this for?". For a Pi 1
+or Pi Zero, name that chip on both lines instead (see "Chips" above):
+
+```toml
+rpi-hal = { version = "0.6", features = ["bcm2835"] }
+rpi-hal-embassy = { version = "0.6", default-features = false, features = ["bcm2835"] }
+```
+
+```rust
+use embassy_time::{Duration, Ticker};
+use rpi_hal::{irq, lic::Lic, pac, timer::Timer};
+use rpi_hal_embassy::{time_driver, Executor};
+
+#[embassy_executor::task]
+async fn heartbeat() {
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+    loop {
+        ticker.next().await;
+        // ...
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kmain() -> ! {
+    let peripherals = unsafe { pac::Peripherals::steal() };
+
+    // Three gates, and a deadline fires only with all three open: hand
+    // Compare 1 to the driver, unmask interrupts at the CPU, and dispatch
+    // the interrupt below.
+    let lic = Lic::new(peripherals.LIC);
+    time_driver::init(Timer::new(peripherals.SYSTMR), &lic);
+    irq::enable_irq();
+
+    // `run` needs `&'static mut`. `static_cell::StaticCell` is the usual
+    // way; widening a local's lifetime is sound here only because `kmain`
+    // never returns.
+    let mut executor = Executor::new();
+    let executor = unsafe {
+        core::mem::transmute::<&mut Executor, &'static mut Executor>(&mut executor)
+    };
+
+    executor.run(|spawner| {
+        // The `Result` is on building the task token — a `#[task]` pool
+        // already in use — not on spawning it.
+        spawner.spawn(heartbeat().unwrap());
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __irq_handler() {
+    let peripherals = unsafe { pac::Peripherals::steal() };
+
+    if Lic::new(peripherals.LIC).is_timer1_pending() {
+        // Acknowledges the match itself; nothing else may clear it.
+        time_driver::on_timer_irq();
+    }
+}
+```
+
+`unsafe(no_mangle)` is the edition 2024 spelling; on edition 2021 write
+`#[no_mangle]`.
+
+## Interrupts
+
+The handler above is written out to show what it does. Most applications
+should not write it at all.
+
+**With no interrupt sources of its own**, turn on `irq-dispatch` and
+delete the handler. The feature defines `__irq_handler`, and it services
+the System Timer plus — under `async` — every interrupt-driven driver
+`rpi-hal` has: USB, GPIO edges, I2C, UART and the SD controller.
+`examples/embassy_blink.rs` is built that way.
+
+**With sources of its own**, leave the feature off and compose, which is
+the only way to reach something neither crate has heard of:
+
+```rust
+#[unsafe(no_mangle)]
+pub extern "C" fn __irq_handler() {
+    rpi_hal_embassy::irq::dispatch();
+
+    let lic = Lic::new(unsafe { pac::Peripherals::steal() }.LIC);
+    if lic.is_uart_pending() {
+        my_uart_handler();
+    }
+}
+```
+
+Either way, check each `Lic::is_*_pending` independently rather than as
+an `else if` chain — more than one can be pending in a single entry, and
+a handler that stops at the first leaves the rest asserting, which is the
+same livelock as having no handler at all.
+
+Turning the feature on *and* defining `__irq_handler` is a duplicate
+definition and fails to link. That is deliberate: the feature is a
+definition, not a hook, and there is no sensible way to guess which of
+the two was meant.
+
+Why the feature is not on by default, given that forgetting the handler
+is the more likely mistake: an application that has its own would get a
+link error out of a plain `cargo add`, with nothing pointing at the
+feature that caused it.
+
+## Timebase
+
+The System Timer runs at a fixed 1 MHz, so `embassy-time`'s tick rate is
+pinned to `tick-hz-1_000_000` here rather than left to the application —
+it's a property of the hardware, and an application choosing otherwise
+would be choosing a rate the driver cannot deliver.
+
+The ARM generic timer has better deadline primitives (per-core, 64-bit
+compare) but is the wrong choice for the global timebase: it runs at
+19.2 MHz on this hardware, for which `embassy-time` has no matching
+`tick-hz-*` rate, so it would need lossy scaling inside `now()` — the
+hottest function on the path.
+
+## Cores 1-3
+
+Enable the `multicore` feature to run an executor on a secondary core as
+well as core 0, and see `examples/embassy_multicore.rs`. Each core builds
+its own `Executor` — `Executor` is `!Send`, so it has to be created on the
+core that will poll it, inside the diverging entry function handed to
+`rpi_hal::multicore`'s `spawn`.
+
+The feature adds no code here. What it selects is `rpi-hal`'s cross-core
+`critical-section` implementation, and the driver's timer queue needs it:
+without it, that critical section is a bare CPU interrupt mask, which
+excludes this core's own interrupt handler and nothing on any other core.
+
+One Compare 1 serves every core. Its interrupt is delivered to core 0
+alone, so a deadline belonging to a task on core 3 is serviced by core 0
+draining the shared queue, enqueuing that task onto core 3's run queue,
+and broadcasting `sev`; core 3 leaves `wfe` and polls. A consequence worth
+knowing is that secondary cores need no interrupts of their own for
+`embassy-time` to work on them — `wfe` returns on an event whatever the
+interrupt mask says — so a core that owns no peripheral can leave IRQs
+masked for the whole program, which is the state it boots in.
+
+Because the queue is global and ordered, whichever deadline is nearest
+across all four cores is the one Compare 1 is armed for. That is also what
+makes the ARM generic timer's per-core `CNTP` compare a possible future
+optimization rather than a requirement: it would let each core arm its own
+alarm and skip the detour through core 0's interrupt, at the cost of a
+second timebase to reconcile with `now()`.
+
+## Ethernet
+
+Enable the `embassy-net-driver` feature for the `lan9514` module: an
+`embassy-net` adapter over `rpi-hal`'s LAN9514 USB-Ethernet driver, so a
+TCP/IP stack runs on the on-board jack. See `examples/embassy_net_echo.rs`
+(TCP echo) and `examples/embassy_picoserve.rs` (an HTTP server).
+
+`lan9514::new` returns two things rather than one:
+
+```rust
+let (driver, runner) = rpi_hal_embassy::lan9514::new(
+    state, lan9514, rx_channel, tx_channel, timer, mac,
+);
+spawner.spawn(lan9514_task(runner).unwrap());
+let (stack, net_runner) = embassy_net::new(driver, config, resources, seed);
+```
+
+`driver` is a pair of packet queues — it is what implements
+`embassy_net_driver::Driver`, and it is synchronous. `runner` is the half
+that talks to the hardware, and is a task. The split is not decoration:
+`Driver`'s `receive`/`transmit` return tokens and take a `Context`, so
+there is nowhere inside them to `.await`. A `Driver` implemented directly
+over the chip would have to do its USB work with the blocking methods,
+holding the executor for the length of every transfer. Moving that work to
+the far side of a queue is what lets it await instead — the same shape
+`cyw43` and friends use, and the reason this depends on
+`embassy-net-driver-channel`.
+
+Two things an application owes it. The USB interrupt must be enabled and
+dispatched, on top of the System Timer wiring above:
+
+```rust
+lic.enable_usb_irq();
+// ...in __irq_handler:
+if lic.is_usb_pending() {
+    rpi_hal::usb::dwc2::on_irq();
+}
+```
+
+Omitting it fails quietly — bring-up prints normally and then no frame
+ever arrives, because the runner's receive is parked on a channel whose
+halt nothing reports. And the runner takes **two** USB host channels, one
+per direction. With one, every transmit would have to cancel the parked
+receive, losing whatever frame the chip was part-way through handing over;
+the two bulk endpoints are separate pipes, and the controller has eight
+channels to schedule them on.
+
+There is nothing to poll. Earlier versions of this adapter (in `rpi-hal`,
+as its `embassy-net-driver` feature) needed the application to call
+`lan9514::wake_rx` on a ticker and to pick the interval itself, because
+nothing could say when a frame had landed. The receive now parks on the
+bulk endpoint and wakes on the controller's interrupt, so that choice is
+gone along with the ticker.
+
+## Wi-Fi
+
+Enable the `wifi` feature for the `wifi` module, which does the same job
+for `rpi-hal`'s Wi-Fi driver: a stack over the on-board radio on the
+boards that have one. See `examples/embassy_net_wifi.rs`.
+
+```rust
+let (driver, runner) = rpi_hal_embassy::wifi::new(state, wifi, timer, mac);
+spawner.spawn(wifi_task(runner).unwrap());
+let (stack, net_runner) = embassy_net::new(driver, config, resources, seed);
+```
+
+The `wifi` passed in is one that has already joined a network — bring-up
+is blocking and belongs before the executor starts, since the chip has no
+firmware of its own and has to be fed it off the card first.
+
+Two differences from the Ethernet adapter, both consequences of
+`rpi-hal`'s Wi-Fi calls being blocking. There is **no interrupt to
+dispatch**: the runner drives its own transfers and sleeps a millisecond
+between passes, so latency is bounded by that interval rather than by a
+wake-up. And the receive side is drained *before* anything is sent, which
+is not an arbitrary order — the firmware advances its transmit credit
+window in the headers of received frames, so a runner that favoured
+transmit would run out of credit and have nothing to read the
+replenishment from. A transmit refused for want of credit stays queued
+and goes out on a later pass rather than being dropped.
+
+`wifi::rx_stats()` and `wifi::tx_stats()` report what each direction has
+managed since boot, the last error included in full. Counters rather than
+log lines: the failure most worth watching is a malformed SDPCM header,
+which `rpi-hal` resynchronizes from and returns — and which arrives in
+floods when it arrives at all, each line costing more than the receive it
+reports on.
+
+## Building
+
+```sh
+cargo build                                         # AArch32 (Pi 2, Pi 3)
+cargo build --target aarch64-unknown-none-softfloat # AArch64 (Pi 3)
+```
+
+AArch32 is the default target only because it is the one a Pi 2 can run.
+Either way the example images link against `rpi-hal`'s published
+`rpi-link.x`, which is already at the load address for the target being
+built — 0x8000 for a `kernel7.img`, 0x80000 for a `kernel8.img` — so an
+image direct-boots where the firmware puts it.
+
+`make pre-commit` runs the whole check set: formatting, clippy, the
+library and example builds, and a doc build with warnings denied.
+
+## Examples
+
+See [`examples/`](examples/). Each one's header comment says what it
+demonstrates and what its output is evidence for.
+
+`scripts/build-example.sh <name>` produces `target/kernel7.img`;
+`scripts/build-example64.sh <name>` produces `target/kernel8.img`.
+
+## License
+
+MIT OR Apache-2.0

@@ -3,7 +3,7 @@
 # So every target here runs the crate's own Makefile from inside its
 # directory (`$(MAKE) -C`), never cargo from the repository root.
 
-COMPONENTS := hal
+COMPONENTS := hal embassy kickstart loader
 
 .PHONY: pre-commit $(COMPONENTS)
 

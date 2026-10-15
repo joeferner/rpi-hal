@@ -1,0 +1,243 @@
+# Changelog
+
+Notable changes to `rpi-loader`, in the format of
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+The firmware and the host CLI share one version and ship as one release:
+they are two halves of a wire protocol, and a version that identifies
+only one of them says nothing useful about compatibility.
+
+The `rpi-loader-ota` library in `ota/` is not part of that pair and keeps
+its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
+are firmware projects in other repositories, and a renamed command-line
+flag here is no reason to bump their dependency.
+
+## [0.5.0] - 2026-10-02
+
+### Added
+
+- **`bundle --upload` shows its progress**: megabytes sent, percent and
+  rate on one redrawn line, then a note that the wait which follows is
+  the board installing. Drawn only when stdout is a terminal.
+
+### Fixed
+
+- **Ctrl-C stops `bundle --upload`.** The Ctrl-C handler, which only sets
+  a flag the serial commands poll, was installed for every command, so a
+  `bundle` that never polls it ignored Ctrl-C for as long as the body was
+  still being sent. It is now installed only once a command is about to
+  open the serial link.
+
+### Changed
+
+- **The `sd-*` commands use `resident-fat` in place of `embedded-sdmmc`,
+  so long file names work.** `sd-write ./kickstart.toml /kickstart.toml`
+  used to fail with "filesystem error", because `embedded-sdmmc` speaks
+  only 8.3 names; it now creates `kickstart.toml`, and a PC sees that
+  name. `sd-read`, `sd-delete` and `sd-mkdir` take long names too,
+  `sd-list` shows them, and lookups match either the long name or its
+  8.3 alias, case-insensitively.
+- **The volume is the first FAT partition in the card's table**, whichever
+  slot it is in, rather than always slot 0 — or the whole card, when it
+  has no partition table.
+- **`sd-write` receives the whole file before writing any of it.** The
+  file lands contiguous and goes to the card one transfer per run instead
+  of a command per 512-byte block, and an upload interrupted partway
+  leaves the old file untouched instead of truncated. `sd-read` likewise
+  reads the whole file before sending it, so a card error is a clean
+  failure rather than a transfer that stops short. Both need the file to
+  fit in the device's RAM.
+- **A failure says why.** `sd-*` errors that were all "filesystem error"
+  are now named separately: a name FAT cannot store, a file that already
+  exists, a file where a directory was needed or the reverse, a full
+  card, the device out of memory, a card read/write failure, and no FAT32
+  volume at all. A failed `sd-write` commit reports its cause rather than
+  "write failed". "Filesystem error" is left for a volume found
+  inconsistent. The CLI still names the old codes, for a loader flashed
+  before this.
+- **`sd-list` has no size limit.** A listing was built in an 8 KiB
+  buffer and refused beyond that; it is now allocated.
+- **New files are stamped with the FAT epoch (1980-01-01)** rather than a
+  made-up 2026-01-01. The loader has no clock, and a fixed date that
+  looks real is worse than one that is plainly a default.
+- **`rpi-hal` 0.9.0**, up from 0.6.0, for its `resident-fat` feature and
+  `sd::SdBlockDevice`, on `resident-fat` 0.3 — whose `mount_first_fat`
+  is now how the volume is found.
+- **The firmware now has a heap**, running from the top of the loader's
+  stack to the top of the ARM's RAM. That is above where `mem-write` is
+  allowed to write, so a kernel being loaded cannot overwrite it.
+  Building the Pi 1 / Pi Zero image now needs `-Z build-std=core,alloc`
+  (the `make` recipe passes it).
+
+## [0.4.0] - 2026-09-20
+
+### Added
+
+- **`rpi-loader completions [shell]`**, writing a shell completion script
+  to stdout — bash unless another is named, with zsh, fish, elvish and
+  powershell also available. Each release also carries a ready-made
+  `rpi-loader-<version>.bash`, for installing it without building the CLI
+  first.
+
+  Generated from the same `Command` clap builds for `--help`, so it
+  describes the CLI that is actually compiled. That is why it is a
+  subcommand rather than a build script: a build script cannot see the
+  `Cli` type without moving it into a library, and a checked-in script
+  goes stale the first time a flag is renamed.
+
+  Printed rather than written to a path this picks, because where a
+  completion belongs differs by shell, distribution and whether the user
+  can write outside their home. The subcommand's `--help` gives the two
+  usual destinations.
+
+  The bash script completes **`--device` to the serial ports actually
+  attached**, by asking `rpi-loader list` when Tab is pressed. clap knows
+  only that the flag takes a string, which its generator turns into
+  filename completion over the whole machine; which ports exist is a
+  runtime fact that no generated script can hold. A small wrapper around
+  clap's own function does it, so everything else completes exactly as
+  generated, and it is bash-only — the other shells get clap's script
+  untouched.
+
+  The bash script also carries a workaround for a clap_complete bug that
+  makes every subcommand's completion silently empty when the binary's
+  name contains a hyphen — which this one does. Its generator writes each
+  case label twice and mangles the name differently each time: the
+  dispatcher sets `cmd="rpi__loader__subcmd__boot"` while the arm holding
+  that subcommand's options is spelled `rpi__subcmd__loader__subcmd__boot`,
+  so no arm is ever reachable and nothing past the first word completes.
+  `tests/completions.rs` checks the invariant rather than the instance —
+  every label the dispatcher can set must exist as an arm — so a future
+  desync fails a test whether or not it is this one.
+
+  Deliberately not clap_complete's dynamic engine, which would do this
+  for every argument at once: it is behind two unstable feature flags
+  (`clap_complete/unstable-dynamic` and `clap/unstable-ext`), which in a
+  crate installed with `cargo install` means someone else's install
+  breaking on a dependency bump — and the script it registers embeds the
+  absolute path of the binary that generated it, so it could not be the
+  file shipped with a release.
+
+- **Pi 1 / Pi Zero (BCM2835) support.** `src/boot6.s` is the ARMv6
+  counterpart to the existing relocating boot stub: the same copy to
+  `0x00200000` and jump, without the core-id check (`MPIDR` is an ARMv7
+  register, and this chip has one core) and with the two barriers as the
+  CP15 operations ARMv6 has instead of `dsb`/`isb` — the same substitution
+  `exec` now makes. `make build-bcm2835` produces `firmware/target/
+  kernel.img`, on the `armv6-none-eabi` target, and is the one recipe here
+  that needs nightly: that target is tier 3, so `-Z build-std` has to
+  compile `core` for it.
+
+  The chip is now a feature of this package (`bcm2837` by default,
+  forwarding to `rpi-hal`'s) rather than a hardcoded entry on the `rpi-hal`
+  dependency line. It has to be: `rpi-hal` prefers `bcm2837` over
+  `bcm2835` when both are enabled, so a Pi Zero build that could not turn
+  `bcm2837` off would have silently compiled the Pi 3's peripheral base
+  into a Pi Zero image. Existing invocations are unaffected — a plain
+  build is still the Pi 2/3 one, and `--features bcm2711` still the Pi 4
+  one.
+
+  The `rpi-hal` floor moves to 0.6.0, which is where the `bcm2835`
+  feature arrived.
+
+## [0.3.0] - 2026-09-01
+
+### Added
+
+- **`bundle`**, a subcommand that packs an over-the-air update bundle
+  from a `bundle.toml` and, with `--upload <url>`, posts it to a running
+  board. The first subcommand that opens no serial port: the container is
+  `rpi-loader-ota`, shared with the firmware that installs one, and this
+  is the half that builds them. A manifest rather than arguments because
+  what goes into a bundle is a property of the project — a kernel, whole
+  directories, firmware blobs and `config.txt`, each with a destination —
+  and arguments carrying that would put a card's layout in a `Makefile`
+  where nothing can check it.
+
+  Uploading is plain HTTP with no TLS anywhere in the dependency tree;
+  the endpoint is a board on a local network.
+
+  `--sdcard <dir>` writes the bundle's contents onto a card in a reader
+  instead, for the update that cannot arrive over the network — a build
+  that changes the format the running firmware reads, or one that broke
+  networking, or a board not on the network yet. It unpacks the bundle it
+  just built rather than copying the sources again, so a card written by
+  hand and a board updated over HTTP carry the same bytes by
+  construction. It writes only what the bundle carries, which is less
+  than a card needs to boot.
+
+## [0.2.0] - 2026-08-30
+
+### Added
+
+- **`eeprom-write` and `eeprom-read`**: program and dump a serial EEPROM
+  on the HAT ID bus (BSC0 on GPIO0/1, `ID_SD`/`ID_SC`), which is where a
+  board's identity lives — the HAT specification's image, and whatever a
+  design puts beside it. `eeprom-write` takes the `.eep` file `eepmake`
+  produces; `eeprom-read` with no `--length` reads the image length out
+  of the HAT header first, rather than dumping the whole address space.
+  Both take `--address` (default `0x50`) and `--offset`; the write also
+  takes `--page-size` (default 32, safe for every part from the 24C32 up).
+
+  The device reads every page back after programming it and fails the
+  command on a mismatch, because a write-protected part acknowledges
+  every byte and stores none — without the read-back, writing to one
+  would report success and change nothing.
+
+  New wire commands `EEPROM_READ` (9) and `EEPROM_WRITE` (10), and error
+  codes 7 (I2C transfer failed), 8 (read-back mismatch), 9 (a request
+  outside what the device will address) and 10 (the part never answered
+  the read-back).
+
+### Changed
+
+- **The handshake's protocol version is now 2**, in both halves. It is a
+  bump for an addition rather than a change, which the version byte
+  cannot express — but the mismatch it names is the ordinary one for this
+  project, not an exotic one: the loader image is flashed once and left on
+  the card for months while the CLI is reinstalled from crates.io
+  whenever, so a newer CLI meeting an older loader is the expected way for
+  the two to drift.
+
+  Without it, `eeprom-write` against a 0.1.0 loader comes back as
+  `error code 0` — the unknown command byte answered with `FAIL` — which
+  reads as a fault on the I2C bus rather than as a stale image on the SD
+  card. With it, the handshake says `device protocol version 1, expected
+  2` first. A mismatch stays a warning, so an older CLI keeps driving a
+  newer loader for every command they share.
+
+### Fixed
+
+- Terminal mode no longer puts the invoking terminal into raw mode when
+  stdin is not a terminal. `crossterm`'s `enable_raw_mode` does not consult
+  stdin — on Unix it falls back to opening `/dev/tty` — so redirecting stdin
+  did not prevent it, and a caller that stopped the loader with a signal
+  never reached the restore, handing back a shell with no echo and `\n` no
+  longer implying `\r`. Affected anything driving `boot` or `terminal` from
+  a script rather than a keyboard.
+
+## [0.1.0] - 2026-08-12
+
+### Added
+
+- The loader firmware: a self-relocating UART command agent for the
+  Raspberry Pi 2, 3 and 4 that stays resident and services commands, so
+  the SD card is rewritten only to re-flash the loader itself. Builds for
+  AArch32 (`kernel7.img`) and AArch64 (`kernel8.img`), for BCM2837 and
+  BCM2711.
+- `mem-write`, `exec`, and `boot` for getting an image into memory and
+  running it, with CRC-checked chunks and per-chunk retries.
+- `sd-list`, `sd-read`, `sd-write`, `sd-delete`, and `sd-mkdir` for
+  working with the SD card's FAT boot partition over the same link.
+- A bidirectional `terminal`, so a kernel that prompts for input can be
+  driven. Ctrl-] exits; every other key, Ctrl-C included, reaches the
+  device.
+- `list`, which reports the host's USB serial ports without opening one.
+- The host CLI in Rust, published to crates.io as `rpi-loader`.
+
+[0.5.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.5.0
+[0.4.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.4.0
+[0.3.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.3.0
+[0.2.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.2.0
+[0.1.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.1.0
