@@ -1,6 +1,6 @@
 # rpi-kickstart
 
-[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-kickstart/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-kickstart/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rpi-kickstart.svg)](https://crates.io/crates/rpi-kickstart)
 [![docs.rs](https://img.shields.io/docsrs/rpi-kickstart)](https://docs.rs/rpi-kickstart)
 

@@ -93,8 +93,6 @@ dependencies = [
 [[package]]
 name = "rpi-hal"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf79fc28c60a7868108fc3b5c11962a91a65673ba5b416be550afec00b40e70f"
 dependencies = [
  "bcm2711-lpa",
  "bcm2835-lpa",
