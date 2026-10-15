@@ -1,0 +1,54 @@
+[package]
+name = "rpi-loader"
+version = "0.5.0"
+edition = "2021"
+description = "Host-side CLI for the rpi-loader UART command agent — upload firmware to a Raspberry Pi over serial and read/write its SD card, without touching the card"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joeferner/rpi-loader"
+readme = "README.md"
+keywords = ["raspberry-pi", "bare-metal", "bootloader", "serial", "uart"]
+categories = ["command-line-utilities", "embedded", "development-tools"]
+rust-version = "1.87"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+# Shell completion scripts, generated from the same `Command` clap builds
+# for `--help`, so they cannot describe a different CLI than the one that
+# runs. That is the whole reason this is a subcommand rather than a build
+# script: a build script cannot see the `Cli` type without it being moved
+# into a library, and a completion file written by hand goes stale the
+# first time a flag is renamed.
+clap_complete = "4.6.11"
+crc32fast = "1.5.0"
+# Raw-mode stdin for the passthrough terminal, and only that. The default
+# features are off because `events` drags in mio + signal-hook for an
+# event loop this doesn't use; `windows` stays on because it gates the
+# winapi console handling, and its dependencies are already `cfg(windows)`
+# targeted, so keeping it costs nothing anywhere else.
+crossterm = { version = "0.29.0", default-features = false, features = ["windows"] }
+ctrlc = "3.5.2"
+# default-features = false drops the libudev-backed port enumeration,
+# which is the crate's only C dependency. Nothing here enumerates ports --
+# the device is always named on the command line -- so this keeps
+# `cargo install rpi-loader` from needing libudev headers on the machine
+# doing the installing.
+serialport = { version = "4.9.0", default-features = false }
+# The bundle container, shared with whatever firmware installs one. The
+# whole point of it being a crate rather than a module here is that the
+# packer and the parser cannot drift apart.
+rpi-loader-ota = { version = "0.3.0", path = "../ota" }
+# Reading `bundle.toml`. `display` is off because nothing here writes TOML.
+serde = { version = "1.0.229", features = ["derive"] }
+toml = { version = "1.1.4", default-features = false, features = ["parse", "serde"] }
+# Only to pretty-print whatever a board replies with; no schema for it is
+# assumed here, since the reply belongs to the application being updated
+# rather than to this tool.
+serde_json = "1.0.151"
+# `bundle --upload`, and deliberately with no default features: those pull
+# in a TLS stack, and the endpoint is a board on a local network answering
+# plain `http://`.
+ureq = { version = "3.4.0", default-features = false }
+
+[dev-dependencies]
+nix = { version = "0.31.3", features = ["term", "signal"] }
