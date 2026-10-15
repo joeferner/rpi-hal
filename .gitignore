@@ -1,3 +1,4 @@
+# Each crate keeps its own .gitignore; these are for what tools write at
+# the repository root (rust-analyzer's flycheck puts a target/ here).
 target/
-__pycache__
 tmp/

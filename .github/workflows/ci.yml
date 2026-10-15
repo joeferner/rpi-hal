@@ -27,6 +27,13 @@ jobs:
   check:
     name: fmt, clippy, build, examples, docs
     runs-on: ubuntu-latest
+    # The crate lives in `hal/`, and every step has to run from there:
+    # rustup reads `rust-toolchain.toml`, and cargo reads
+    # `.cargo/config.toml`, from the working directory, not from the
+    # repository root.
+    defaults:
+      run:
+        working-directory: hal
     steps:
       - uses: actions/checkout@v7
 
@@ -39,6 +46,8 @@ jobs:
           cargo --version
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hal
 
       - run: make fmt-check
       - run: make clippy
@@ -99,7 +108,7 @@ jobs:
         run: |
           for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
             cargo +1.88 build --release \
-              --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" \
+              --manifest-path "$GITHUB_WORKSPACE/hal/Cargo.toml" \
               --target "$target" \
               --features bcm2837,multicore,async,embedded-sdmmc,v3d
           done
@@ -118,6 +127,9 @@ jobs:
   package:
     name: package verifies
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hal
     steps:
       - uses: actions/checkout@v7
       - name: Install the pinned toolchain

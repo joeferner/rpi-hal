@@ -1,5 +1,8 @@
 {
     "cSpell.words": [
         "uart"
+    ],
+    "rust-analyzer.linkedProjects": [
+        "hal/Cargo.toml"
     ]
 }

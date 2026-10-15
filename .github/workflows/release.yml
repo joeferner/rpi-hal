@@ -25,6 +25,12 @@ jobs:
     name: publish to crates.io
     runs-on: ubuntu-latest
     environment: crates-io
+    # The crate lives in `hal/`. Every step runs from there: the toolchain
+    # pin and `.cargo/config.toml` are read from the working directory,
+    # and the manifest and changelog the guards read are the crate's own.
+    defaults:
+      run:
+        working-directory: hal
     steps:
       - uses: actions/checkout@v7
 
@@ -78,9 +84,9 @@ jobs:
       # that is actually fine.
       - run: make package
 
-      # Written to the runner's temp directory, not the checkout. This
-      # package is the repository root, so a stray file here is a file
-      # *inside* the package -- and `cargo publish` refuses to publish from a
+      # Written to the runner's temp directory, not the checkout. The
+      # working directory is the package's own root, so a stray file here
+      # is a file *inside* the package -- and `cargo publish` refuses to publish from a
       # working tree with uncommitted changes, which is exactly the guard we
       # want it to keep.
       #
