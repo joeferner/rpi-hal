@@ -181,25 +181,21 @@ doc:
 # on its own, which is the behaviour we want: what gets published is the
 # committed state, not what happens to be on disk.
 #
-# The separate CARGO_TARGET_DIR is not tidiness. The verification build
-# compiles the *extracted tarball* (target/package/rpi-loader-<version>/)
-# with the dev profile, and sharing the normal target directory lets it
-# overwrite target/debug/rpi-loader and leave a fingerprint whose source
-# paths point into that extracted copy. Those files never change again,
-# so every later `cargo build`/`cargo run` reports "Finished" without
-# recompiling and silently runs the packaged binary -- edits to src/ have
-# no effect at all until `cargo clean -p rpi-loader`. Isolating the
-# target directory keeps the verify build from touching the one the
-# normal builds use.
+# Through scripts/ci/package-verify.sh, so the CLI's build uses this
+# repository's rpi-loader-ota rather than the published one. That script
+# also keeps the verification build in its own target directory: sharing
+# the normal one lets it overwrite target/debug/rpi-loader with the
+# packaged binary, after which edits to src/ have no effect until
+# `cargo clean -p rpi-loader`.
 package:
-	cd $(CLI) && CARGO_TARGET_DIR=target/verify cargo package
+	../scripts/ci/package-verify.sh loader/cli
 
 # Separate from `package` rather than another line inside it, because the
 # two are released independently -- the CLI and the firmware ship as one
 # version, and the OTA package carries its own. A target that verified both
 # would imply they move together.
 package-ota:
-	cd $(OTA) && CARGO_TARGET_DIR=target/verify cargo package
+	../scripts/ci/package-verify.sh loader/ota
 
 pre-commit: fmt clippy clippy6 clippy64 clippy-cli clippy-ota build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-bcm2835 build-cli test-cli test-ota doc
 

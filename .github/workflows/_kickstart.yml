@@ -1,0 +1,105 @@
+name: kickstart
+
+# rpi-kickstart's checks, in `kickstart/`. Called from ci.yml, which runs
+# them when `kickstart/` or anything it builds against (`hal/`,
+# `embassy/`, `loader/ota/`) changes.
+on:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Every step runs from the crate's directory: rustup reads
+# `rust-toolchain.toml`, and cargo reads `.cargo/config.toml`, from the
+# working directory, not from the repository root.
+defaults:
+  run:
+    working-directory: kickstart
+
+jobs:
+  # Everything `make pre-commit` runs locally, as separate steps rather than
+  # one `pre-commit` invocation: the targets are identical either way, and
+  # splitting them means a failure names itself in the job list instead of
+  # having to be read out of a combined log. `fmt-check` stands in for
+  # `fmt`, which would rewrite files rather than report on them.
+  #
+  # Each of those targets covers both architectures on its own, so there is
+  # no separate AArch64 step here the way there is for rpi-hal-embassy.
+  check:
+    name: fmt, clippy, build, examples, tests, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Materializes the toolchain rust-toolchain.toml pins, along with the
+      # components and both bare-metal targets it asks for.
+      - name: Install the pinned toolchain
+        run: |
+          rustup show
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kickstart
+
+      - run: make fmt-check
+      - run: make clippy
+      - run: make build
+      - run: make examples
+      - run: make test
+      - run: make doc
+
+  # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
+  # a comment that rots the first time a dependency or a `core` API moves.
+  msrv:
+    name: builds on the declared MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the MSRV from the manifest
+        id: msrv
+        run: |
+          version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          test -n "$version" || { echo "Cargo.toml has no rust-version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install that toolchain with both bare-metal targets
+        run: |
+          rustup toolchain install ${{ steps.msrv.outputs.version }} \
+            --profile minimal \
+            --target armv7a-none-eabi \
+            --target aarch64-unknown-none-softfloat
+
+      # The library only, for both architectures. The examples pull in
+      # dev-dependencies whose own floors are their business, not this
+      # crate's claim.
+      - name: Build the library
+        run: |
+          for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
+            cargo +${{ steps.msrv.outputs.version }} build --release --target "$target"
+          done
+
+  # Building the packaged tarball catches a whole class of "works here,
+  # broken on crates.io" problems: a file the manifest excludes but the
+  # build needs, or a path that only resolves in this working copy. `make
+  # package` does it through scripts/ci/package-verify.sh, which builds
+  # against this repository's rpi-hal, rpi-hal-embassy and rpi-loader-ota,
+  # so a change spanning them verifies before they are released.
+  #
+  # Deliberately uncached: the verify build unpacks into target/ and builds
+  # there, which the cache action's cleanup does not expect, and there is
+  # nothing to gain for one small crate.
+  package:
+    name: package verifies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned toolchain
+        run: rustup show
+      - run: make package
+
+  # Hardware-in-the-loop tests are deliberately absent: every check above is
+  # a compile-time one, or a host test of a module that is pure. Whether an
+  # image actually boots, mounts a card and serves a page is established on
+  # a board.
