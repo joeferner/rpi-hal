@@ -3,6 +3,11 @@
         "uart"
     ],
     "rust-analyzer.linkedProjects": [
-        "hal/Cargo.toml"
+        "hal/Cargo.toml",
+        "embassy/Cargo.toml",
+        "kickstart/Cargo.toml",
+        "loader/cli/Cargo.toml",
+        "loader/firmware/Cargo.toml",
+        "loader/ota/Cargo.toml"
     ]
 }
