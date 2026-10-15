@@ -1,6 +1,6 @@
 # rpi-loader
 
-[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-loader/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-loader/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rpi-loader.svg)](https://crates.io/crates/rpi-loader)
 
 Self-relocating UART command agent for the Raspberry Pi. Flash this once

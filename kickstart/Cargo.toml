@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 description = "Application scaffolding for bare-metal Raspberry Pi boards: console, config, storage, web and the rest of the bring-up that is the same on every board, on top of rpi-hal"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/joeferner/rpi-kickstart"
+repository = "https://github.com/joeferner/rpi-hal"
 documentation = "https://docs.rs/rpi-kickstart"
 readme = "README.md"
 keywords = ["raspberry-pi", "bare-metal", "no-std", "embedded", "bcm2837"]
@@ -52,7 +52,7 @@ critical-section = { version = "1.2.0", default-features = false, optional = tru
 # silently rather than failing. In practice an application's own `rpi-hal`
 # line already names one and cargo unifies it; the forwarding features
 # below exist for builds of *this* crate, which have no such line.
-rpi-hal = { version = "0.9.0", default-features = false, optional = true }
+rpi-hal = { version = "0.9.0", path = "../hal", default-features = false, optional = true }
 
 # The randomness interface the RustCrypto primitives under `rustls` reach
 # through. `custom` is the feature that lets a target with no OS supply
@@ -137,7 +137,7 @@ picoserve = { version = "0.19", default-features = false, features = [
 # The bundle format, the install, and the timing around it, behind `ota`
 # -- shared with the `rpi-loader` CLI that packs a bundle, so the two ends
 # cannot disagree about the format. `apply` is the install half.
-rpi-loader-ota = { version = "0.3", default-features = false, features = [
+rpi-loader-ota = { version = "0.3", path = "../loader/ota", default-features = false, features = [
     "apply",
 ], optional = true }
 
@@ -254,7 +254,7 @@ png = { version = "0.18", optional = true }
 # exactly when the example's own features are. Named here it would be on
 # for every example, and `resident-fat` needs an allocator -- so `hello`,
 # which has none, would stop linking.
-rpi-hal = { version = "0.9.0", features = ["bcm2837"] }
+rpi-hal = { version = "0.9.0", path = "../hal", features = ["bcm2837"] }
 # How an example hands the console a sink that outlives `kmain`'s stack,
 # since `console::init` borrows for `'static`. Not a library dependency:
 # which static-storage crate an application uses is its own choice, and
@@ -289,7 +289,7 @@ getrandom = { version = "0.2", default-features = false, features = [
 # `__irq_handler` that services the System Timer and USB, without which
 # the first `embassy-time` deadline livelocks the core. None of the other
 # examples defines one, so there is nothing for it to collide with.
-rpi-hal-embassy = { version = "0.9.0", features = [
+rpi-hal-embassy = { version = "0.9.0", path = "../embassy", features = [
     "embassy-net-driver",
     "wifi",
     "irq-dispatch",

@@ -1,9 +1,9 @@
 # rpi-loader
 
-[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-loader/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-loader/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rpi-loader.svg)](https://crates.io/crates/rpi-loader)
 
-Host-side CLI for [rpi-loader](https://github.com/joeferner/rpi-loader), a
+Host-side CLI for [rpi-loader](https://github.com/joeferner/rpi-hal/tree/main/loader), a
 self-relocating UART command agent for the Raspberry Pi 2, 3 and 4. Flash
 the loader onto an SD card once; after that this tool drives it over
 serial — upload firmware to memory and jump to it, or read, write, list
@@ -23,7 +23,7 @@ cargo install rpi-loader
 
 The loader image that runs on the Pi is a separate build, published as a
 release artifact. See the
-[repository](https://github.com/joeferner/rpi-loader) for flashing it.
+[loader's README](https://github.com/joeferner/rpi-hal/tree/main/loader) for flashing it.
 
 ## Usage
 

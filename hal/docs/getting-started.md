@@ -43,11 +43,11 @@ Check the example you're building for its exact hardware requirements.
 ## Faster iteration: rpi-loader
 
 Rewriting the SD card for every build gets tedious fast.
-[`rpi-loader`](https://github.com/joeferner/rpi-loader) is a
+[`rpi-loader`](https://github.com/joeferner/rpi-hal/tree/main/loader) is a
 UART-based upload loader (in the style of
 [raspbootin](https://github.com/mrvn/raspbootin)) that lets you push a
-new build over the serial cable instead. It's a separate project from
-`rpi-hal` — see its own repo for setup and usage. This guide covers the
+new build over the serial cable instead. It's a separate crate from
+`rpi-hal` — see its README for setup and usage. This guide covers the
 plain-SD-card path below, which still works and needs no extra setup
 beyond what's already on the card.
 

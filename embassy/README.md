@@ -1,6 +1,6 @@
 # rpi-hal-embassy
 
-[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal-embassy/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal-embassy/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rpi-hal-embassy.svg)](https://crates.io/crates/rpi-hal-embassy)
 [![docs.rs](https://img.shields.io/docsrs/rpi-hal-embassy)](https://docs.rs/rpi-hal-embassy)
 

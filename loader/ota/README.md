@@ -1,6 +1,6 @@
 # rpi-loader-ota
 
-[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-loader/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-loader/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/joeferner/rpi-hal/ci.yml?branch=main&label=CI)](https://github.com/joeferner/rpi-hal/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rpi-loader-ota.svg)](https://crates.io/crates/rpi-loader-ota)
 
 The over-the-air update bundle a bare-metal Raspberry Pi installs on
