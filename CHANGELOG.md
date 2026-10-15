@@ -4,6 +4,18 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`mailbox::Mailbox::throttled` always returned 0.** "Get Throttled"
+  answers with a single word, in the slot the request word occupied —
+  not an id-then-value pair like "Get Temperature" — and this read the
+  word after it, which the firmware never writes. Every `THROTTLED_*`
+  test therefore came out clear, so a board under-voltage and being
+  throttled for it reported a healthy supply while the firmware drew its
+  lightning bolt on screen.
+
 ## [0.9.0] - 2026-10-02
 
 ### Changed
