@@ -99,17 +99,13 @@ doc:
 
 # What `cargo publish` will verify: it builds the packaged tarball, which
 # catches the "works in this working copy, broken on crates.io" class of
-# problem. cargo refuses a dirty working tree here on its own, which is
-# the behaviour we want -- what gets published is the committed state.
-#
-# The separate CARGO_TARGET_DIR is not tidiness. The verification build
-# compiles the extracted tarball with the dev profile, and sharing the
-# normal target directory lets it leave a fingerprint whose source paths
-# point into that extracted copy -- after which every later `cargo build`
-# reports "Finished" without recompiling, and edits to src/ have no effect
-# until `cargo clean`.
+# problem. Through scripts/ci/package-verify.sh, so the build uses this
+# repository's rpi-hal, rpi-hal-embassy and rpi-loader-ota rather than the
+# published ones, and a change spanning them verifies before they are
+# released. That script explains the rest, including why it keeps its own
+# target directory.
 package:
-	CARGO_TARGET_DIR=target/verify cargo package
+	../scripts/ci/package-verify.sh kickstart
 
 pre-commit: fmt clippy build examples test doc
 

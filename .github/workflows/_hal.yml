@@ -1,0 +1,137 @@
+name: hal
+
+# rpi-hal's checks, in `hal/`. Called from ci.yml, which decides whether
+# a change needs them; nothing triggers this file on its own.
+on:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Everything `make pre-commit` runs locally, as separate steps rather than
+  # one `pre-commit` invocation: the targets are identical either way, and
+  # splitting them means a failure names itself in the job list instead of
+  # having to be read out of a combined log.
+  #
+  # These use the toolchain `rust-toolchain.toml` pins (nightly, `rust-src`,
+  # both bare-metal targets), because building the *examples* goes through
+  # `.cargo/config.toml`'s `-Zbuild-std`. The library itself needs none of
+  # that -- see the `msrv` job below, which is what proves it.
+  check:
+    name: fmt, clippy, build, examples, docs
+    runs-on: ubuntu-latest
+    # The crate lives in `hal/`, and every step has to run from there:
+    # rustup reads `rust-toolchain.toml`, and cargo reads
+    # `.cargo/config.toml`, from the working directory, not from the
+    # repository root.
+    defaults:
+      run:
+        working-directory: hal
+    steps:
+      - uses: actions/checkout@v7
+
+      # Materializes the pinned toolchain along with the components and
+      # targets the manifest asks for; no toolchain action needed, since
+      # the pin is already in the repository.
+      - name: Install the pinned toolchain
+        run: |
+          rustup show
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hal
+
+      - run: make fmt-check
+      - run: make clippy
+      - run: make build-bcm2837
+      - run: make build-bcm2711
+      # The ARMv6 (BCM2835) library build. It needs nothing this job does
+      # not already have: `armv6-none-eabi` is tier 3 and has no
+      # precompiled `core`, but the pinned toolchain is nightly with
+      # `rust-src`, and `.cargo/config.toml` already asks for
+      # `-Zbuild-std`. The ARMv6 examples ride along in `make examples`
+      # below, and `make clippy` above lints both.
+      - run: make build-bcm2835
+      - run: make examples
+      - run: make doc
+
+  # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
+  # a comment that rots the first time a dependency or a `core` API moves.
+  msrv:
+    name: library builds on the declared MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install 1.88 with both bare-metal targets
+        run: |
+          rustup toolchain install 1.88 --profile minimal \
+            --target armv7a-none-eabi \
+            --target aarch64-unknown-none-softfloat
+
+      # Run from outside the checkout, reaching back in with
+      # `--manifest-path`, so none of this repo's `.cargo/config.toml` is
+      # in scope -- cargo discovers that file from the working directory,
+      # not from the manifest's directory. That reproduces a consumer's
+      # situation, which is the claim being tested: with nothing but
+      # rustup's precompiled `core`/`alloc`, which cover both targets, the
+      # library builds without `-Zbuild-std`.
+      #
+      # Standing outside is what gives the job its meaning, not what makes
+      # it run. A stable toolchain does not refuse the repo's `[unstable]
+      # build-std`; it ignores the `[unstable]` table silently (only a
+      # command-line `-Z` flag is rejected off nightly), so this same
+      # build also succeeds from inside the checkout. It would just be
+      # succeeding with this crate's own config in scope, and would go on
+      # passing if the library ever came to depend on something that
+      # config supplies.
+      #
+      # Every feature except `smoltcp`, whose own manifest requires 1.91 --
+      # cargo would reject the build naming smoltcp, which is exactly why
+      # Cargo.toml leaves that floor to smoltcp rather than folding it in.
+      #
+      # `bcm2835` is not covered here and cannot be: its target has no
+      # precompiled `core`, so it needs `-Zbuild-std` and therefore
+      # nightly, which is the opposite of what this job exists to prove.
+      # The claim being guarded -- that a consumer needs no nightly -- is
+      # simply not made for that chip (see README.md's "Toolchain").
+      - name: Build for both architectures
+        working-directory: ${{ runner.temp }}
+        run: |
+          for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
+            cargo +1.88 build --release \
+              --manifest-path "$GITHUB_WORKSPACE/hal/Cargo.toml" \
+              --target "$target" \
+              --features bcm2837,multicore,async,embedded-sdmmc,v3d
+          done
+
+  # Building the packaged tarball catches a whole class of "works here,
+  # broken on crates.io" problems: a file the manifest excludes but the
+  # build needs, or a path that only resolves in this working copy. `make
+  # package` does it through scripts/ci/package-verify.sh, as every crate
+  # here does.
+  #
+  # Deliberately uncached, unlike the job above. The verify build unpacks
+  # the tarball under `target/` and builds it there, and the cache action's
+  # cleanup walks `target` expecting a normal layout -- it logs `ENOENT ...
+  # target/package/rpi-hal-0.1.0/tests/trybuild` errors against a job that
+  # actually succeeded. Nothing to gain by keeping it: the verify build is
+  # one small crate.
+  package:
+    name: package verifies
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hal
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned toolchain
+        run: rustup show
+      - run: make package
+
+  # Hardware-in-the-loop tests are deliberately absent: they drive a real Pi
+  # and an STM32 fixture over serial, so no hosted runner can run them. Every
+  # check above is a compile-time one, and passing CI says nothing about
+  # whether a driver works on the hardware.

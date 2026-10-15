@@ -1,142 +1,116 @@
 name: CI
 
+# The one workflow GitHub triggers for checks. Each crate's own checks live
+# in a reusable workflow beside this one (`_hal.yml`, `_embassy.yml`, ...);
+# this file decides which of them a change needs, and `ci-ok` turns their
+# results into the single status the branch ruleset requires.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly, everything. rpi-hal pins a floating `nightly`, and the
+  # crates.io dependencies move whether or not this repository does, so a
+  # quiet week can still break the build.
+  schedule:
+    - cron: "17 6 * * *"
 
 # A second push to the same branch makes the first run's result irrelevant.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
+# `pull-requests: read` is what the change filter lists a PR's files with.
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
-  # Everything `make pre-commit` runs locally, as separate steps rather than
-  # one `pre-commit` invocation: the targets are identical either way, and
-  # splitting them means a failure names itself in the job list instead of
-  # having to be read out of a combined log.
+  # Which crates a pull request touches. A crate's checks run when it
+  # changes *or anything it builds against does*: rpi-hal-embassy depends
+  # on `hal/` by path, so a change to rpi-hal has to prove rpi-hal-embassy
+  # still builds. The table mirrors the path dependencies in the manifests.
   #
-  # These use the toolchain `rust-toolchain.toml` pins (nightly, `rust-src`,
-  # both bare-metal targets), because building the *examples* goes through
-  # `.cargo/config.toml`'s `-Zbuild-std`. The library itself needs none of
-  # that -- see the `msrv` job below, which is what proves it.
-  check:
-    name: fmt, clippy, build, examples, docs
+  # Only pull requests are filtered. A push to main, the nightly run and a
+  # manual dispatch run everything (see each job's `if:`), so main is
+  # always checked as a whole.
+  changes:
+    name: what changed
     runs-on: ubuntu-latest
-    # The crate lives in `hal/`, and every step has to run from there:
-    # rustup reads `rust-toolchain.toml`, and cargo reads
-    # `.cargo/config.toml`, from the working directory, not from the
-    # repository root.
-    defaults:
-      run:
-        working-directory: hal
+    outputs:
+      hal: ${{ steps.filter.outputs.hal }}
+      embassy: ${{ steps.filter.outputs.embassy }}
+      kickstart: ${{ steps.filter.outputs.kickstart }}
+      loader: ${{ steps.filter.outputs.loader }}
     steps:
       - uses: actions/checkout@v7
-
-      # Materializes the pinned toolchain along with the components and
-      # targets the manifest asks for; no toolchain action needed, since
-      # the pin is already in the repository.
-      - name: Install the pinned toolchain
-        run: |
-          rustup show
-          cargo --version
-
-      - uses: Swatinem/rust-cache@v2
+        if: github.event_name == 'pull_request'
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
         with:
-          workspaces: hal
+          # `shared` is what every crate's checks depend on: the workflows
+          # themselves, the scripts they call, and the root Makefile.
+          filters: |
+            shared: &shared
+              - '.github/**'
+              - 'scripts/ci/**'
+              - 'Makefile'
+            hal:
+              - *shared
+              - 'hal/**'
+            embassy:
+              - *shared
+              - 'hal/**'
+              - 'embassy/**'
+            kickstart:
+              - *shared
+              - 'hal/**'
+              - 'embassy/**'
+              - 'loader/ota/**'
+              - 'kickstart/**'
+            loader:
+              - *shared
+              - 'hal/**'
+              - 'loader/**'
 
-      - run: make fmt-check
-      - run: make clippy
-      - run: make build-bcm2837
-      - run: make build-bcm2711
-      # The ARMv6 (BCM2835) library build. It needs nothing this job does
-      # not already have: `armv6-none-eabi` is tier 3 and has no
-      # precompiled `core`, but the pinned toolchain is nightly with
-      # `rust-src`, and `.cargo/config.toml` already asks for
-      # `-Zbuild-std`. The ARMv6 examples ride along in `make examples`
-      # below, and `make clippy` above lints both.
-      - run: make build-bcm2835
-      - run: make examples
-      - run: make doc
+  hal:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.hal == 'true'
+    uses: ./.github/workflows/_hal.yml
 
-  # Guards the `rust-version` claim in Cargo.toml. Without this the MSRV is
-  # a comment that rots the first time a dependency or a `core` API moves.
-  msrv:
-    name: library builds on the declared MSRV
+  embassy:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.embassy == 'true'
+    uses: ./.github/workflows/_embassy.yml
+
+  kickstart:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.kickstart == 'true'
+    uses: ./.github/workflows/_kickstart.yml
+
+  loader:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.loader == 'true'
+    uses: ./.github/workflows/_loader.yml
+
+  # The only required status check. Requiring the crate jobs directly can't
+  # work: a crate the change doesn't touch is skipped, and a skipped
+  # required check never reports, so the pull request would wait forever.
+  # This job always runs, and fails if anything it waited on failed or was
+  # cancelled; skipped counts as a pass.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, hal, embassy, kickstart, loader]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install 1.88 with both bare-metal targets
+      - name: Every job that ran passed
         run: |
-          rustup toolchain install 1.88 --profile minimal \
-            --target armv7a-none-eabi \
-            --target aarch64-unknown-none-softfloat
-
-      # Run from outside the checkout, reaching back in with
-      # `--manifest-path`, so none of this repo's `.cargo/config.toml` is
-      # in scope -- cargo discovers that file from the working directory,
-      # not from the manifest's directory. That reproduces a consumer's
-      # situation, which is the claim being tested: with nothing but
-      # rustup's precompiled `core`/`alloc`, which cover both targets, the
-      # library builds without `-Zbuild-std`.
-      #
-      # Standing outside is what gives the job its meaning, not what makes
-      # it run. A stable toolchain does not refuse the repo's `[unstable]
-      # build-std`; it ignores the `[unstable]` table silently (only a
-      # command-line `-Z` flag is rejected off nightly), so this same
-      # build also succeeds from inside the checkout. It would just be
-      # succeeding with this crate's own config in scope, and would go on
-      # passing if the library ever came to depend on something that
-      # config supplies.
-      #
-      # Every feature except `smoltcp`, whose own manifest requires 1.91 --
-      # cargo would reject the build naming smoltcp, which is exactly why
-      # Cargo.toml leaves that floor to smoltcp rather than folding it in.
-      #
-      # `bcm2835` is not covered here and cannot be: its target has no
-      # precompiled `core`, so it needs `-Zbuild-std` and therefore
-      # nightly, which is the opposite of what this job exists to prove.
-      # The claim being guarded -- that a consumer needs no nightly -- is
-      # simply not made for that chip (see README.md's "Toolchain").
-      - name: Build for both architectures
-        working-directory: ${{ runner.temp }}
-        run: |
-          for target in armv7a-none-eabi aarch64-unknown-none-softfloat; do
-            cargo +1.88 build --release \
-              --manifest-path "$GITHUB_WORKSPACE/hal/Cargo.toml" \
-              --target "$target" \
-              --features bcm2837,multicore,async,embedded-sdmmc,v3d
+          echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
           done
-
-  # `cargo package` finishes by building the packaged tarball, which catches
-  # a whole class of "works here, broken on crates.io" problems: a file the
-  # manifest excludes but the build needs, or a path that only resolves in
-  # this working copy.
-  #
-  # Deliberately uncached, unlike the job above. `cargo package` unpacks the
-  # tarball into `target/package/rpi-hal-<version>/` and builds it there, and
-  # the cache action's cleanup walks `target` expecting a normal layout --
-  # it logs `ENOENT ... target/package/rpi-hal-0.1.0/tests/trybuild` errors
-  # against a job that actually succeeded. Nothing to gain by keeping it: the
-  # verify build is one small crate.
-  package:
-    name: package verifies
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: hal
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install the pinned toolchain
-        run: rustup show
-      - run: make package
-
-  # Hardware-in-the-loop tests are deliberately absent: they drive a real Pi
-  # and an STM32 fixture over serial, so no hosted runner can run them. Every
-  # check above is a compile-time one, and passing CI says nothing about
-  # whether a driver works on the hardware.

@@ -168,8 +168,12 @@ doc:
 # (the `cargo-release` convention) that has to become the actual date before
 # publishing -- automatically if that tool is doing the release, by hand
 # otherwise. `grep ReleaseDate CHANGELOG.md` is the check.
+#
+# Runs through scripts/ci/package-verify.sh like the other crates in this
+# repository. rpi-hal depends on none of them, so here it is plain
+# `cargo package` with its verification build moved to target/verify.
 package:
-	cargo package --features bcm2837
+	../scripts/ci/package-verify.sh hal --features bcm2837
 
 pre-commit: fmt clippy build-bcm2837 build-bcm2711 build-bcm2835 examples doc
 
