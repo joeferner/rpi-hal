@@ -26,10 +26,16 @@ fi
 # The in-repo crates a generated project reaches, directly or through
 # another in-repo crate's path dependency. All of them have to be patched
 # together, or the build holds two copies of one.
-patches=()
+#
+# Written into the generated project's .cargo/config.toml rather than
+# passed as `--config` flags: `cargo objcopy` rejects `--config` given more
+# than once, and it re-runs the build, so it has to see the same patches
+# as `cargo build` or it would silently relink against crates.io.
+patches=""
 if [ "${TEMPLATE_PATCH:-0}" = 1 ]; then
+    patches="[patch.crates-io]"$'\n'
     for spec in rpi-hal:hal rpi-kickstart:kickstart rpi-hal-embassy:embassy rpi-loader-ota:loader/ota; do
-        patches+=(--config "patch.crates-io.${spec%%:*}.path=\"$root/${spec##*:}\"")
+        patches+="${spec%%:*} = { path = \"$root/${spec##*:}\" }"$'\n'
     done
 fi
 
@@ -58,8 +64,12 @@ for variant in "${variants[@]}"; do
         continue
     fi
 
-    if (cd "$dest" && cargo build --release "${patches[@]}" &&
-        cargo objcopy --release "${patches[@]}" -- -O binary "target/$(jq -r --arg b "$board" --arg a "$arch" '.boards[] | select(.id == $b) | .variants[$a].kernel' "$root/template/boards.json")"); then
+    if [ -n "$patches" ]; then
+        printf '\n%s' "$patches" >>"$dest/.cargo/config.toml"
+    fi
+
+    kernel="$(jq -r --arg b "$board" --arg a "$arch" '.boards[] | select(.id == $b) | .variants[$a].kernel' "$root/template/boards.json")"
+    if (cd "$dest" && cargo build --release && cargo objcopy --release -- -O binary "target/$kernel"); then
         echo "$variant: ok"
     else
         failed+=("$variant")
