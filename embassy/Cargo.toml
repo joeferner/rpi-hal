@@ -100,7 +100,36 @@ embassy-futures = { version = "0.1.2", optional = true }
 # whoever enables the feature, and an application not using the radio
 # should not inherit that. When `rpi-hal` grows an interrupt-driven SDIO
 # path this dependency goes away with the ticker.
+#
+# The `usb-host` feature needs it too, and not merely for its examples: the
+# `UsbPipe` contract is written in time. A control pipe retries a NAK
+# until `TimeoutConfig` expires, an interrupt pipe re-polls once per
+# `bInterval` in milliseconds, and neither is expressible with the
+# bus-clocked waits rpi-hal offers. That dependency -- on a crate whose
+# driver is a link-time singleton -- is why the USB host adapter lives
+# beside the time driver rather than in the HAL.
 embassy-time = { version = "0.5.1", default-features = false, optional = true }
+
+# The `usb-host` feature's dependencies (see [features]).
+#
+# `embassy-usb-driver` is the trait side -- `UsbHostController`,
+# `UsbHostAllocator`, `UsbPipe` -- and is what `src/usb.rs` implements over
+# rpi-hal's DWC2 channels. Definitions only, like `embassy-net-driver`, so
+# on its own it would belong in rpi-hal beside that one; `embassy-time`
+# above is what keeps it here.
+embassy-usb-driver = { version = "0.2.2", optional = true }
+# The host stack itself (`embassy_usb::host`: enumeration, and the `hub`
+# and `hid` host class drivers the keyboard examples use), pulled in so an
+# application gets it by enabling one feature here rather than matching
+# versions with the trait crate by hand. Nothing in this crate's own source
+# depends on it. `default-features = false` leaves out `usbd-hid`, which is
+# for the device side.
+#
+# The host stack is not in a released `embassy-usb` yet: upstream moved it
+# there from the deprecated `embassy-usb-host` after 0.6.0, without a
+# version bump. Until it ships, `.cargo/config.toml` patches the embassy
+# crates to an upstream commit that has it.
+embassy-usb = { version = "0.6.0", default-features = false, optional = true }
 
 [dev-dependencies]
 # The examples are whole programs, so unlike the library they do need
@@ -279,6 +308,24 @@ wifi = [
     "dep:embassy-time",
 ]
 
+# An `embassy-usb-driver` host controller over rpi-hal's DWC2 channels
+# (src/usb.rs), so `embassy-usb`'s host stack -- enumeration and its host
+# class drivers -- runs on a Pi. Off by default: it is a large dependency
+# graph that an application wanting only the time driver and executor
+# should not pay for.
+#
+# Implies `rpi-hal/async` and `async` for the same reason
+# `embassy-net-driver` does: the pipes await rpi-hal's interrupt-driven
+# transfer primitives, and `irq::dispatch` has to see that they are there
+# to service the USB interrupt they park on.
+usb-host = [
+    "dep:embassy-usb-driver",
+    "dep:embassy-usb",
+    "dep:embassy-time",
+    "rpi-hal/async",
+    "async",
+]
+
 # Auto-discovery covers every other example. These need explicit entries
 # so they can declare `required-features`, which keeps a plain
 # `cargo build --examples` from failing on them and lets
@@ -316,6 +363,15 @@ required-features = ["embassy-net-driver"]
 [[example]]
 name = "embassy_net_wifi"
 required-features = ["wifi"]
+
+[[example]]
+name = "embassy_usb_keyboard"
+required-features = ["usb-host"]
+
+# The keyboard and the Ethernet on one bus, so both adapters.
+[[example]]
+name = "embassy_usb_keyboard_net"
+required-features = ["usb-host", "embassy-net-driver"]
 
 [profile.dev]
 panic = "abort"

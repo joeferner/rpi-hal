@@ -44,7 +44,7 @@ build-armv6:
 # `__irq_handler`, and every example but one defines its own, so building
 # them together is a duplicate symbol. That example is named on its own
 # line below, which is also the only place the feature is exercised.
-EXAMPLE_FEATURES := multicore,async,embassy-net-driver,wifi
+EXAMPLE_FEATURES := multicore,async,embassy-net-driver,wifi,usb-host
 
 examples:
 	cargo build --release --examples

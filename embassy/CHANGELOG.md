@@ -4,6 +4,45 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A USB host controller for `embassy-usb`'s host stack** (`usb-host`
+  feature, off by default): `usb::Dwc2HostController`,
+  `usb::Dwc2Allocator` and `usb::Dwc2Pipe`, implementing
+  `embassy-usb-driver`'s host traits over `rpi-hal`'s DWC2 host channels,
+  so `embassy_usb::host`'s enumeration and host class drivers run on a Pi.
+  One host channel per pipe, drawn from the controller's pool and
+  reported as `HostError::OutOfPipes` when exhausted rather than queued.
+
+  It sits here rather than in the HAL beside the `embassy-net-driver`
+  adapter, though `embassy-usb-driver` is likewise trait definitions only,
+  because the `UsbPipe` contract is written in wall-clock terms (a control
+  transfer's NAK-retry budget, an interrupt endpoint's `bInterval`) and
+  `rpi-hal`'s USB layer deliberately has only bus time. Supplying the clock
+  means depending on `embassy-time`, a link-time singleton.
+
+  Known limits, all documented on the module: a control data stage is
+  capped at 256 bytes (the HAL's per-channel DMA buffer), a bulk buffer
+  must be cache-line aligned and a whole number of cache lines long,
+  isochronous transfers are unimplemented, and overcurrent is never
+  reported.
+- `examples/embassy_usb_keyboard.rs`, reading a USB keyboard through the
+  host stack: one task servicing the on-board hub's status-change
+  endpoint, another polling the keyboard, each on its own host channel.
+  And `examples/embassy_usb_keyboard_net.rs`, the keyboard and the LAN9514
+  on one bus, with the LAN9514 built from the route enumeration reported
+  rather than enumerated a second time.
+
+  **Not publishable yet.** The host stack is unreleased upstream: it moved
+  into `embassy-usb` (`embassy_usb::host`) from the now-deprecated
+  `embassy-usb-host` after `embassy-usb` 0.6.0, along with the hub,
+  port-speed, address and descriptor-retry fixes a Pi needs. Until it
+  ships, `.cargo/config.toml` patches the embassy crates that must stay
+  single copies (the USB, time and executor ones) to an upstream commit.
+  The network crates stay on their releases.
+
 ## [0.9.0] - 2026-10-02
 
 ### Changed
