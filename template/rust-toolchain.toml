@@ -1,0 +1,18 @@
+[toolchain]
+{% if nightly -%}
+# `{{target}}` is a tier-3 target: rustup publishes no precompiled `core`
+# for it, so `-Z build-std` (in .cargo/config.toml) compiles one from
+# `rust-src`, and that needs nightly. The target is deliberately not
+# listed under `targets` -- rustup would try to download a standard
+# library that doesn't exist, and fail.
+channel = "nightly"
+# `llvm-tools` is behind `cargo objcopy`, which turns the linked ELF into
+# the raw image the firmware loads.
+components = ["rust-src", "llvm-tools"]
+{% else -%}
+channel = "stable"
+# `llvm-tools` is behind `cargo objcopy`, which turns the linked ELF into
+# the raw image the firmware loads.
+components = ["llvm-tools"]
+targets = ["{{target}}"]
+{% endif -%}

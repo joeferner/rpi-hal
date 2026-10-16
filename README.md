@@ -15,6 +15,20 @@ its own version, changelog and crates.io release:
 New here? Start with [getting started](hal/docs/getting-started.md):
 building an example and putting it on a card.
 
+## Start a new project
+
+```sh
+cargo install cargo-generate
+cargo generate --git https://github.com/joeferner/rpi-hal template
+```
+
+It asks which board (and, on a Pi 3 or Pi 4, 32- or 64-bit), and
+generates a project on rpi-hal and rpi-kickstart that logs a heartbeat on
+the UART console. `make sd-card` fetches what goes on the SD card, and
+`make run` uploads and boots it with rpi-loader. The boards it offers,
+and everything it knows about each, live in
+[`template/boards.toml`](template/boards.toml).
+
 Each directory is a separate cargo project with its own toolchain pin
 and `.cargo/config.toml`, so run `cargo` and `make` from inside it (or
 use the root `Makefile`, which does that for you). There's deliberately

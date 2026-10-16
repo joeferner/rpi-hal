@@ -1,0 +1,5 @@
+# Firmware settings for the {{board_name}}. The VideoCore firmware reads
+# this before any ARM code runs, so it decides which kernel file is loaded
+# and in which mode.
+
+{{config_txt}}
