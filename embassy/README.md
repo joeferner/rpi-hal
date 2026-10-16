@@ -354,6 +354,60 @@ which `rpi-hal` resynchronizes from and returns — and which arrives in
 floods when it arrives at all, each line costing more than the receive it
 reports on.
 
+## USB host
+
+Enable the `usb-host` feature for the [`usb`](src/usb.rs) module:
+`Dwc2HostController`, `Dwc2Allocator` and `Dwc2Pipe`, implementing
+`embassy-usb-driver`'s host traits over `rpi-hal`'s DWC2 host channels,
+so [`embassy-usb`](https://docs.rs/embassy-usb)'s host stack
+(`embassy_usb::host`: enumeration, hubs, and its host class drivers) runs
+on a Pi. See `examples/embassy_usb_keyboard.rs`, and
+`examples/embassy_usb_keyboard_net.rs` for a keyboard and the Ethernet on
+one bus.
+
+```rust
+let (controller, bus) =
+    embassy_usb::host::bus(Dwc2HostController::new(dwc2, timer), bus_state);
+```
+
+One host channel per pipe, taken from the controller's pool. Running out
+is an error (`HostError::OutOfPipes`) rather than a queue, so an
+application wanting more concurrent endpoints than the eight this SoC has
+finds out.
+
+This is the one adapter here that is not a network driver, and it needs
+saying why it isn't in the HAL. `embassy-usb-driver` is trait definitions
+only, like `embassy-net-driver`. What differs is that the `UsbPipe`
+contract is written in wall-clock terms — how long to keep retrying a
+NAK'd control transfer, how often to re-poll an interrupt endpoint —
+while `rpi-hal`'s USB layer deliberately has only bus time (channel-halt
+and start-of-frame interrupts). Supplying the clock means depending on
+`embassy-time`, a link-time singleton, which is the thing this crate
+exists to keep out of the HAL.
+
+Off by default: the host stack is a large dependency graph that an
+application wanting only the time driver and executor shouldn't pay for.
+Like the Ethernet adapter it implies `rpi-hal`'s `async`, and the
+application routes the USB interrupt: `Lic::enable_usb_irq()`, and
+`rpi_hal::usb::dwc2::on_irq()` (or `irq::dispatch`) from its
+`__irq_handler`.
+
+Known limits, all documented on the module: a control data stage is
+capped at 256 bytes (the HAL's per-channel DMA buffer), a bulk buffer must
+be cache-line aligned and a whole number of cache lines long, isochronous
+transfers are unimplemented, and overcurrent is never reported.
+
+**The host stack isn't in a released `embassy-usb` yet.** Upstream moved
+it into `embassy-usb` from `embassy-usb-host`, which is now deprecated,
+after `embassy-usb` 0.6.0. The fixes a Pi needs are only in that code
+too: matching high-speed and multi-TT hubs (every device here is behind
+the on-board LAN9514's hub), taking a port's speed after its reset rather
+than before, freeing an address on a failed enumeration, and retrying
+every descriptor read. Released `embassy-usb-host` 0.1.0 enumerates
+nothing on this board. Until a release carries it,
+[`.cargo/config.toml`](.cargo/config.toml) patches the embassy crates to
+an upstream commit that has it, and this feature can't be published.
+
 ## Building
 
 ```sh

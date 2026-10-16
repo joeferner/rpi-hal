@@ -31,3 +31,58 @@ rustflags = ["-C", "link-arg=-Trpi-link.x"]
 [target.armv6-none-eabi]
 rustflags = ["-C", "link-arg=-Trpi-link.x"]
 
+# TEMPORARY: the embassy crates from an upstream commit, for the `usb-host`
+# feature, until a release carries what it needs.
+#
+# The USB host stack this feature runs on is `embassy_usb::host`. Upstream
+# moved it there from `embassy-usb-host` (now deprecated) after
+# `embassy-usb` 0.6.0, and hasn't released it; the hub, enumeration and
+# address fixes this board depends on (embassy-rs/embassy #6788 to #6791)
+# are only in that code too. Released `embassy-usb-host` 0.1.0 can't even
+# register the Pi's on-board LAN9514 hub, and every device on this board
+# is behind it.
+#
+# Which crates move with it is decided by what must exist only once. A
+# crate from the git repository depends on its siblings by path there, so
+# patching `embassy-usb` alone gives it git siblings while this crate's
+# own dependencies still come from crates.io. That's tolerable for most,
+# but not for:
+#
+# - `embassy-usb-driver`: `src/usb.rs` implements its traits and the host
+#   stack consumes them, so both sides need the same copy.
+# - `embassy-time` and `embassy-time-driver`: the driver is a link-time
+#   singleton (`links = "embassy-time"`), and cargo refuses a second copy.
+# - `embassy-time-queue-utils` (`links = "embassy-time-queue"`), the
+#   executor and its timer queue: the integrated timer queue lives in the
+#   task header, so the executor and the queue must agree on one
+#   `embassy-executor-timer-queue`.
+# - `embassy-futures`, which is harmless doubled but simpler not to be.
+#
+# Deliberately *not* moved: `embassy-sync` and the network crates. Upstream
+# has since replaced `embassy-net-driver` with `xarxa` and ported
+# `embassy-net` and `embassy-net-driver-channel` to it, so moving those
+# would mean porting the LAN9514 and Wi-Fi adapters to an unreleased
+# network stack. `embassy-usb` from git gets its own copies of
+# `embassy-sync` and `embassy-net-driver-channel` (for its CDC-NCM class)
+# instead, which is fine as long as none of their types crosses between
+# it and this crate, and none does.
+#
+# Upstream's versions at this commit are the published ones, so this
+# changes source, not semver, and nothing in Cargo.toml has to move for
+# the patched crates. Here rather than in Cargo.toml so it stays out of
+# the published package.
+# This is also why the branch carrying it can't merge: the published crate
+# would require an `embassy-usb` with a `host` module that crates.io
+# doesn't have. Delete the whole block once embassy releases it, and move
+# `embassy-usb`'s requirement in Cargo.toml to that version.
+[patch.crates-io]
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-executor-macros = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "2add3add84745a4aa0c9bac6b0ecb43a820d4b54" }
+

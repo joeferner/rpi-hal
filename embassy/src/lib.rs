@@ -47,6 +47,14 @@ pub mod lan9514;
 /// `embassy-time` driver over the BCM System Timer — see the module's own
 /// documentation for the interrupt wiring an application must provide.
 pub mod time_driver;
+/// An `embassy-usb-driver` host controller over `rpi-hal`'s DWC2 host
+/// channels — see the module's own documentation for why this adapter
+/// lives here rather than in the HAL, and for what it does not cover.
+///
+/// Available only with the `usb-host` feature enabled.
+#[cfg(feature = "usb-host")]
+#[cfg_attr(docsrs, doc(cfg(feature = "usb-host")))]
+pub mod usb;
 /// `embassy-net` adapter over `rpi-hal`'s Wi-Fi driver — see the module's
 /// own documentation for why its runner polls where `lan9514`'s does not.
 #[cfg(feature = "wifi")]
