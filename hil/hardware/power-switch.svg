@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 1010" width="1300" height="1010" role="img" aria-labelledby="ttl desc">
+  <title id="ttl">HIL fixture power switch: the 5 V path to the Pi under test</title>
+  <desc id="desc">Schematic. A 5 V 4 A supply feeds an always-on rail that powers the fixture MCU directly and, through a P-channel high-side MOSFET Q1 driven by a small N-channel FET Q2 from a fixture GPIO, the Raspberry Pi's header pins 2 and 4. A shunt in the switched leg carries the inrush measurement and a divider on the Pi's 3V3 rail feeds a fixture ADC. Ground is common and never switched.</desc>
+
+  <style>
+    .t   { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #17212b; }
+    .g   { fill: #5c6773; }
+    .r   { fill: #b5271f; }
+    .h1  { font-size: 20px; font-weight: 700; }
+    .h2  { font-size: 13px; }
+    .bx  { font-size: 13px; font-weight: 700; }
+    .des { font-size: 13px; font-weight: 700; }
+    .lb  { font-size: 12px; }
+    .sm  { font-size: 11px; }
+    .xs  { font-size: 10px; }
+    .nt  { font-size: 11.5px; }
+    .pw  { stroke: #b5271f; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+    .pw2 { stroke: #b5271f; stroke-width: 2; fill: none; stroke-linecap: round; }
+    .gn  { stroke: #17212b; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+    .sg  { stroke: #17212b; stroke-width: 1.5; fill: none; stroke-linecap: round; }
+    .cm  { stroke: #17212b; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+    .bd  { stroke: #17212b; stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; }
+    .box { fill: #f7f8fa; stroke: #17212b; stroke-width: 1.6; }
+    .sep { stroke: #d7dbe0; stroke-width: 1; }
+  </style>
+
+  <rect x="0" y="0" width="1300" height="1010" fill="#ffffff"/>
+
+  <text class="t h1" x="32" y="44">HIL fixture power switch — the 5 V path to the Pi under test</text>
+  <text class="t h2 g" x="32" y="68">The switch drawn from discrete parts, as a bench build would have it; on the HAT one load-switch IC replaces Q1, Q2, R1, R2 and C2.</text>
+
+  <!-- ================= supply ================= -->
+  <rect class="box" x="100" y="410" width="110" height="70" rx="5"/>
+  <text class="t bx" x="155" y="440" text-anchor="middle">5 V PSU</text>
+  <text class="t lb" x="155" y="461" text-anchor="middle">4 A min</text>
+  <text class="t sm g" x="148" y="362" text-anchor="end">barrel jack, or a</text>
+  <text class="t sm g" x="148" y="378" text-anchor="end">USB-C breakout</text>
+  <text class="t sm g" x="148" y="394" text-anchor="end">with 5.1k CC</text>
+  <path class="pw" d="M155 410 L155 170"/>
+  <path class="gn" d="M155 480 L155 800"/>
+  <text class="t sm r" x="164" y="403">+</text>
+  <text class="t sm" x="164" y="500">−</text>
+
+  <!-- always-on rail -->
+  <path class="pw" d="M155 170 L470 170"/>
+  <text class="t sm g" x="176" y="161">ALWAYS-ON 5 V</text>
+
+  <!-- bulk capacitance -->
+  <path class="pw" d="M280 170 L280 432"/>
+  <path class="cm" d="M256 432 L304 432"/>
+  <path class="cm" d="M256 448 L304 448"/>
+  <path class="gn" d="M280 448 L280 800"/>
+  <text class="t lb" x="320" y="437">C1</text>
+  <text class="t sm g" x="320" y="453">470 µF + 10 µF</text>
+
+  <!-- fixture supply tap -->
+  <path class="pw2" d="M250 170 L250 650 L300 650"/>
+  <text class="t sm g" x="240" y="646" text-anchor="end">VSYS</text>
+
+  <!-- ================= gate pull-up R1 ================= -->
+  <path class="pw" d="M310 170 L310 240"/>
+  <rect class="box" x="300" y="240" width="20" height="54" rx="2"/>
+  <path class="sg" d="M310 294 L310 340"/>
+  <text class="t lb" x="328" y="263">R1</text>
+  <text class="t sm g" x="328" y="279">10k</text>
+
+  <!-- ================= gate slew cap C2 ================= -->
+  <path class="pw" d="M390 170 L390 244"/>
+  <path class="cm" d="M368 244 L412 244"/>
+  <path class="cm" d="M368 260 L412 260"/>
+  <path class="sg" d="M390 260 L390 340"/>
+  <text class="t lb" x="420" y="251">C2</text>
+  <text class="t sm g" x="420" y="267">100 pF–10 nF</text>
+
+  <!-- ================= Q1: P-channel high-side switch ================= -->
+  <path class="pw" d="M470 170 L470 198"/>
+  <path class="pw" d="M530 170 L530 198"/>
+  <path class="cm" d="M458 198 L478 198"/>
+  <path class="cm" d="M486 198 L514 198"/>
+  <path class="cm" d="M522 198 L542 198"/>
+  <path class="cm" d="M458 214 L542 214"/>
+  <path class="sg" d="M500 198 L500 182 L470 182"/>
+  <polygon points="500,180 495,192 505,192" fill="#17212b"/>
+  <path class="sg" d="M500 214 L500 340"/>
+  <text class="t xs g" x="452" y="193" text-anchor="end">S</text>
+  <text class="t xs g" x="548" y="193">D</text>
+  <text class="t xs g" x="492" y="233" text-anchor="end">G</text>
+  <text class="t des" x="556" y="237">Q1</text>
+  <text class="t sm g" x="556" y="253">P-CH 20 V</text>
+  <text class="t sm g" x="556" y="268">4.2 A, ≈30 mΩ</text>
+
+  <!-- intrinsic body diode -->
+  <path class="bd" d="M470 170 L470 128 L490 128"/>
+  <path class="bd" d="M510 128 L530 128 L530 170"/>
+  <polygon points="508,120 508,136 494,128" fill="#17212b"/>
+  <path class="sg" d="M492 119 L492 137"/>
+  <text class="t sm g" x="500" y="108" text-anchor="middle">intrinsic body diode — conducts load → supply</text>
+
+  <!-- gate net -->
+  <path class="sg" d="M310 340 L760 340"/>
+
+  <!-- ================= Q2: gate driver ================= -->
+  <path class="sg" d="M760 340 L760 409 L746 409"/>
+  <path class="cm" d="M746 400 L746 418"/>
+  <path class="cm" d="M746 424 L746 436"/>
+  <path class="cm" d="M746 442 L746 460"/>
+  <path class="cm" d="M732 400 L732 460"/>
+  <path class="sg" d="M746 430 L760 430 L760 451 L746 451"/>
+  <polygon points="748,430 759,425 759,435" fill="#17212b"/>
+  <path class="gn" d="M760 451 L760 800"/>
+  <text class="t des" x="772" y="414">Q2</text>
+  <text class="t sm g" x="772" y="430">N-CH</text>
+  <text class="t sm g" x="772" y="445">small-signal</text>
+
+  <!-- gate resistor + PWR_EN -->
+  <path class="sg" d="M732 430 L720 430 L720 500"/>
+  <rect class="box" x="710" y="500" width="20" height="54" rx="2"/>
+  <path class="sg" d="M720 554 L720 630 L700 630"/>
+  <text class="t lb" x="704" y="529" text-anchor="end">R2</text>
+  <text class="t sm g" x="704" y="545" text-anchor="end">1k</text>
+  <text class="t sm" x="694" y="627" text-anchor="end">PWR_EN</text>
+
+  <!-- ================= switched rail + shunt ================= -->
+  <path class="pw" d="M530 170 L830 170"/>
+  <text class="t sm g" x="556" y="161">SWITCHED 5 V</text>
+  <rect class="box" x="830" y="159" width="64" height="22" rx="3"/>
+  <text class="t lb" x="862" y="146" text-anchor="middle">R_S  10 mΩ</text>
+  <path class="sg" d="M842 181 L842 215"/>
+  <path class="sg" d="M882 181 L882 215"/>
+  <text class="t sm g" x="862" y="233" text-anchor="middle">to INA226, or a scope</text>
+  <text class="t sm g" x="862" y="248" text-anchor="middle">differential probe</text>
+  <path class="pw" d="M894 170 L950 170"/>
+  <path class="pw" d="M950 158 L950 182"/>
+  <path class="pw" d="M950 158 L1000 158"/>
+  <path class="pw" d="M950 182 L1000 182"/>
+
+  <!-- ================= Pi under test ================= -->
+  <rect class="box" x="1000" y="150" width="250" height="510" rx="6"/>
+  <text class="t sm" x="1012" y="176">5 V — pins 2, 4</text>
+  <text class="t bx" x="1125" y="216" text-anchor="middle">Raspberry Pi (DUT)</text>
+  <text class="t sm g" x="1125" y="300" text-anchor="middle">its own PSU stays</text>
+  <text class="t sm g" x="1125" y="316" text-anchor="middle">unplugged — the runner</text>
+  <text class="t sm g" x="1125" y="332" text-anchor="middle">refuses to start otherwise</text>
+  <text class="t sm" x="1012" y="396">3V3 — pins 1, 17</text>
+  <text class="t sm" x="1012" y="616">GND — pins 6, 9, 14, 20, 25,</text>
+  <text class="t sm" x="1012" y="632">30, 34, 39</text>
+
+  <!-- 3V3 sense divider -->
+  <path class="sg" d="M1000 400 L880 400 L880 440"/>
+  <rect class="box" x="870" y="440" width="20" height="54" rx="2"/>
+  <path class="sg" d="M880 494 L880 560"/>
+  <rect class="box" x="870" y="560" width="20" height="54" rx="2"/>
+  <path class="gn" d="M880 614 L880 800"/>
+  <text class="t lb" x="864" y="463" text-anchor="end">R3</text>
+  <text class="t sm g" x="864" y="479" text-anchor="end">10k</text>
+  <text class="t lb" x="864" y="583" text-anchor="end">R4</text>
+  <text class="t sm g" x="864" y="599" text-anchor="end">10k</text>
+  <path class="sg" d="M880 520 L920 520"/>
+  <text class="t xs" x="924" y="517">3V3_SENSE</text>
+  <text class="t xs g" x="924" y="531">→ fixture ADC</text>
+
+  <!-- Pi ground -->
+  <path class="gn" d="M1000 620 L930 620 L930 800"/>
+
+  <!-- ================= fixture ================= -->
+  <rect class="box" x="300" y="590" width="400" height="120" rx="6"/>
+  <text class="t bx" x="500" y="617" text-anchor="middle">PICO2-XL fixture (RP2350B)</text>
+  <text class="t sm g" x="500" y="655" text-anchor="middle">VSYS 1.8–5.5 V from the always-on rail —</text>
+  <text class="t sm g" x="500" y="671" text-anchor="middle">stays alive while the Pi is dead</text>
+  <path class="gn" d="M380 710 L380 800"/>
+
+  <!-- ================= ground ================= -->
+  <path class="gn" d="M110 800 L1260 800"/>
+  <path class="gn" d="M670 800 L670 810"/>
+  <path class="cm" d="M650 810 L690 810"/>
+  <path class="cm" d="M658 819 L682 819"/>
+  <path class="cm" d="M666 828 L674 828"/>
+  <text class="t sm g" x="702" y="822">COMMON GROUND — never switched</text>
+
+  <!-- junctions on the 5 V net -->
+  <circle cx="250" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="280" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="310" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="390" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="470" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="530" cy="170" r="3.5" fill="#b5271f"/>
+  <circle cx="950" cy="170" r="3.5" fill="#b5271f"/>
+  <!-- junctions on signal and ground nets -->
+  <circle cx="310" cy="340" r="3.5" fill="#17212b"/>
+  <circle cx="390" cy="340" r="3.5" fill="#17212b"/>
+  <circle cx="500" cy="340" r="3.5" fill="#17212b"/>
+  <circle cx="470" cy="182" r="3.5" fill="#17212b"/>
+  <circle cx="880" cy="520" r="3.5" fill="#17212b"/>
+  <circle cx="155" cy="800" r="3.5" fill="#17212b"/>
+  <circle cx="280" cy="800" r="3.5" fill="#17212b"/>
+  <circle cx="380" cy="800" r="3.5" fill="#17212b"/>
+  <circle cx="760" cy="800" r="3.5" fill="#17212b"/>
+  <circle cx="880" cy="800" r="3.5" fill="#17212b"/>
+  <circle cx="930" cy="800" r="3.5" fill="#17212b"/>
+
+  <!-- ================= notes ================= -->
+  <path class="sep" d="M100 838 L1200 838"/>
+  <text class="t nt" x="100" y="860"><tspan font-weight="700">Q1</tspan> — P-channel, 20 V, 4.2 A, ≈30 mΩ at V_GS = −4.5 V (SOT-23). Gate drive never exceeds −5 V, so the part has to be specified at −4.5 V:</text>
+  <text class="t nt g" x="100" y="877">60 V and 200 V P-FETs are hundreds of milliohms here whatever their current rating says. Two in parallel if the full 3 A looks marginal.</text>
+  <text class="t nt" x="100" y="899"><tspan font-weight="700">Q2</tspan> — small-signal N-FET (2N7002 / BSS138) or an NPN. A 3V3 GPIO cannot pull Q1's gate to within a volt of the 5 V rail on its own; GPIO high = Pi powered.</text>
+  <text class="t nt" x="100" y="921"><tspan font-weight="700">C2</tspan> — a discrete build's soft-start: slewing the gate flattens the inrush, and the load switch's own ramp replaces it. Watch Q1's SOA while slewing —</text>
+  <text class="t nt g" x="100" y="938">a slow ramp into discharged bulk capacitance dissipates real power in the linear region, and a SOT-23 has little of it to give.</text>
+  <text class="t nt" x="100" y="960"><tspan font-weight="700">3V3_SENSE</tspan> — reads the Pi's rail with the switch off: catches a second supply still plugged in (Q1's body diode does not block it) and times the collapse below 0.3 V.</text>
+  <text class="t nt" x="100" y="982"><tspan font-weight="700">On the HAT</tspan> — Q1, Q2, R1, R2 and C2 collapse into one load-switch IC: EN from the fixture, I_LIM set at 3–3.5 A, FAULT read back. C1, R_S, the divider and the grounding are unchanged.</text>
+</svg>
