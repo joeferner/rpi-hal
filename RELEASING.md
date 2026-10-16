@@ -165,7 +165,7 @@ environment. A run then:
 
   | Asset | Board | Execution state |
   | --- | --- | --- |
-  | `rpi-loader-<version>-bcm2837-kernel7.img` | Pi 2 v1.2, Pi 3 | AArch32 |
+  | `rpi-loader-<version>-bcm2837-kernel7.img` | Pi 2, Pi 3 | AArch32 |
   | `rpi-loader-<version>-bcm2837-kernel8.img` | Pi 2 v1.2, Pi 3 | AArch64 |
   | `rpi-loader-<version>-bcm2711-kernel7.img` | Pi 4 | AArch32 |
   | `rpi-loader-<version>-bcm2711-kernel8.img` | Pi 4 | AArch64 |

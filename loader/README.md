@@ -10,9 +10,12 @@ files on the SD card — instead of rewriting the SD card for every build.
 
 Supported boards:
 
-- Pi 2 Model B rev 1.2 and Pi 3 (BCM2836/BCM2837) — the `bcm2837` builds,
-  in either execution state: AArch32 (`kernel7.img`) and AArch64
-  (`kernel8.img`).
+- Pi 2 Model B and Pi 3 (BCM2836/BCM2837) — the `bcm2837` builds, in
+  either execution state: AArch32 (`kernel7.img`) and AArch64
+  (`kernel8.img`). A Pi 2 rev 1.1 is the exception for the second: its
+  BCM2836's Cortex-A7 cores are 32-bit only, so it takes `kernel7.img`
+  alone. The peripherals are the same on both revisions, which is why one
+  build covers them.
 - Pi 4 (BCM2711) — the `bcm2711` builds, which move the peripheral memory
   map and PAC through `rpi-hal`'s feature of the same name. Both execution
   states again.
@@ -292,7 +295,7 @@ Pick the one matching yours:
 
 | Asset | Board | Execution state |
 | --- | --- | --- |
-| `rpi-loader-<version>-bcm2837-kernel7.img` | Pi 2 v1.2, Pi 3 | AArch32 |
+| `rpi-loader-<version>-bcm2837-kernel7.img` | Pi 2, Pi 3 | AArch32 |
 | `rpi-loader-<version>-bcm2837-kernel8.img` | Pi 2 v1.2, Pi 3 | AArch64 |
 | `rpi-loader-<version>-bcm2711-kernel7.img` | Pi 4 | AArch32 |
 | `rpi-loader-<version>-bcm2711-kernel8.img` | Pi 4 | AArch64 |
