@@ -1,0 +1,25 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The chip feature selects the SoC's peripheral memory map. None is a
+# default, because there is no sensible default chip; this one is for the
+# {{board_name}}.
+rpi-hal = { version = "0.9", features = ["{{chip}}"] }
+# The bring-up every board does: here only the console and `logln!`. Each
+# capability is a feature (heap, config, storage, net, web, ota, ...);
+# see https://docs.rs/rpi-kickstart.
+rpi-kickstart = { version = "0.2", features = ["console"] }
+# Hands the console a UART that outlives `kmain`'s stack, without a
+# `static mut`.
+static_cell = "2.1"
+
+# There is no unwinder on bare metal.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -1,0 +1,183 @@
+# The board table: the one place that knows what each board needs. Both
+# ways of starting a project read it:
+#
+# - `cargo generate`, through hooks/board.rhai, and
+# - the site's project selector, through boards.json.
+#
+# Both of those are generated from this file by scripts/template/gen.py,
+# and CI fails if either is stale. Edit this file, then run
+# `uv run scripts/template/gen.py`.
+#
+# A board that isn't here isn't offered. To add one, it has to be
+# supported by rpi-hal (see hal/README.md's "Supported Devices") and by
+# the loader images.
+
+# Raspberry Pi's boot firmware, from github.com/raspberrypi/firmware. A
+# GitHub tag can be moved after the fact, so the checksums are the
+# authority and the tag is only where to look. To move to a newer release:
+# bump `ref`, fetch the files by hand, check them against what Raspberry
+# Pi publishes, and write the new hashes here.
+[firmware]
+ref = "1.20260824"
+
+[firmware.sha256]
+"bootcode.bin" = "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e"
+"start.elf" = "6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8"
+"fixup.dat" = "651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff"
+"start4.elf" = "6d540ddf77623976ba60de630e9300a5a099f7710e11ee85a7bf076f5931f4bc"
+"fixup4.dat" = "5818b069814c7f051d4c9246307dced983bcbdcc6a90d9e5491fc5c68159d077"
+"LICENCE.broadcom" = "c7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b"
+
+# The rpi-loader image that goes on the card. The images are published
+# per chip and kernel name (`rpi-loader-<version>-<chip>-<kernel>`) and
+# renamed to the bare kernel name on the card.
+#
+# Still the last release from the archived rpi-loader repository: rpi-hal
+# has no `loader-v*` release with images yet. Move `url` to
+# https://github.com/joeferner/rpi-hal/releases/download/loader-v{version}
+# with the first one.
+[loader]
+version = "0.5.0"
+url = "https://github.com/joeferner/rpi-loader/releases/download/v{version}"
+
+[loader.sha256]
+"rpi-loader-0.5.0-bcm2835-kernel.img" = "af487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c"
+"rpi-loader-0.5.0-bcm2837-kernel7.img" = "3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10"
+"rpi-loader-0.5.0-bcm2837-kernel8.img" = "b51c8b9b119bf60573ebb22d4eee664b484cfe631cbee6191127b0f5d06d2088"
+"rpi-loader-0.5.0-bcm2711-kernel7.img" = "914b1a6123b8291c7e14370bcb5050ca8b54f534bd43067498474159952fc0db"
+"rpi-loader-0.5.0-bcm2711-kernel8.img" = "d2127242d363124f939f07449e825ebd2a4fb36dac7a4fe7f70898d1e0445df8"
+
+# What each execution state needs, shared by every board that has it.
+#
+# `load_addr` is where rpi-hal's `rpi-link.x` links the image, and so the
+# address the loader has to upload it to. The kernel filename isn't a
+# convention: `start.elf` picks the one it looks for from the CPU it
+# finds, and finding none it stops silently.
+#
+# ARMv6 is the odd one out: `armv6-none-eabi` is a tier-3 target with no
+# precompiled `core`, so it needs nightly and `-Z build-std`.
+[arch.armv6]
+target = "armv6-none-eabi"
+kernel = "kernel.img"
+load_addr = "0x8000"
+nightly = true
+
+[arch.32]
+target = "armv7a-none-eabi"
+kernel = "kernel7.img"
+load_addr = "0x8000"
+nightly = false
+
+[arch.64]
+target = "aarch64-unknown-none-softfloat"
+kernel = "kernel8.img"
+load_addr = "0x80000"
+nightly = false
+
+# The boards, in the order they're offered (the first is the default).
+#
+# `arches` lists the execution states the board can start in, the first
+# being the default. `config` is config.txt's content for each of them.
+# None of them sets `enable_uart=1`: that asks the firmware for a console
+# of its own on the GPIO14/15 pins the cable is on (and on a Pi 4, the
+# firmware's console output is garbled anyway).
+
+[[board]]
+id = "pi3"
+name = "Raspberry Pi 3 (B, B+, A+)"
+chip = "bcm2837"
+firmware = ["bootcode.bin", "start.elf", "fixup.dat"]
+arches = ["32", "64"]
+
+[board.config]
+32 = """
+# Start the ARM cores in AArch32, so the firmware loads kernel7.img. Not
+# redundant: a card that once held a 64-bit kernel carries
+# `arm_64bit=1` saying otherwise.
+arm_64bit=0
+disable_splash=1
+"""
+64 = """
+# Start the ARM cores in AArch64, so the firmware loads kernel8.img.
+arm_64bit=1
+disable_splash=1
+"""
+
+[[board]]
+id = "pi4"
+name = "Raspberry Pi 4 (B, 400)"
+chip = "bcm2711"
+# The Pi 4's boot EEPROM does bootcode.bin's job, so there is none.
+firmware = ["start4.elf", "fixup4.dat"]
+arches = ["32", "64"]
+
+[board.config]
+32 = """
+# Start in AArch32. A Pi 4 then looks for kernel7l.img (the LPAE kernel)
+# rather than kernel7.img, so name the file explicitly.
+arm_64bit=0
+kernel=kernel7.img
+disable_splash=1
+"""
+64 = """
+# Start the ARM cores in AArch64, so the firmware loads kernel8.img.
+arm_64bit=1
+disable_splash=1
+"""
+
+[[board]]
+id = "pi2"
+name = "Raspberry Pi 2 (B)"
+chip = "bcm2837"
+firmware = ["bootcode.bin", "start.elf", "fixup.dat"]
+# A rev 1.2 board carries the Pi 3's BCM2837 and could start in AArch64,
+# but rev 1.1's Cortex-A7 cores are 32-bit only. Offering 32-bit alone
+# keeps one answer right for both.
+arches = ["32"]
+
+[board.config]
+32 = """
+# Start in AArch32, so the firmware loads kernel7.img. A rev 1.1 board
+# has no other mode, but a rev 1.2 does.
+arm_64bit=0
+disable_splash=1
+"""
+
+[[board]]
+id = "pi-zero"
+name = "Raspberry Pi Zero (Zero, Zero W)"
+chip = "bcm2835"
+firmware = ["bootcode.bin", "start.elf", "fixup.dat"]
+arches = ["armv6"]
+
+[board.config]
+armv6 = """
+# The PL011 console's divisors assume a 48MHz reference clock, and a
+# firmware that chose another scales every bit period. Pin it.
+#
+# No arm_64bit line: the ARM1176 has no 64-bit mode, and a stray
+# `arm_64bit=1` sends the firmware looking for kernel8.img.
+#
+# A Zero W's Bluetooth claims the PL011 by default; rpi-hal's
+# `Uart::init` remuxes GPIO14/15 back to it, so nothing is needed here.
+init_uart_clock=48000000
+disable_splash=1
+"""
+
+[[board]]
+id = "pi1"
+name = "Raspberry Pi 1 (A, B, A+, B+)"
+chip = "bcm2835"
+firmware = ["bootcode.bin", "start.elf", "fixup.dat"]
+arches = ["armv6"]
+
+[board.config]
+armv6 = """
+# The PL011 console's divisors assume a 48MHz reference clock, and a
+# firmware that chose another scales every bit period. Pin it.
+#
+# No arm_64bit line: the ARM1176 has no 64-bit mode, and a stray
+# `arm_64bit=1` sends the firmware looking for kernel8.img.
+init_uart_clock=48000000
+disable_splash=1
+"""

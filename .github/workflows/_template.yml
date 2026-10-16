@@ -1,0 +1,55 @@
+name: template
+
+# The project template's checks. Called from ci.yml, which runs them when
+# `template/`, its scripts, or a crate the template depends on changes.
+on:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # What someone running `cargo generate` today gets: every board and arch
+  # in boards.toml, generated and built against crates.io. Required.
+  #
+  # Also that the files generated from boards.toml are current, since a
+  # stale hook or boards.json would hand out a different board table than
+  # the one in review. Plain `python3` is enough for that: the script
+  # needs only the standard library (`tomllib`, 3.11+).
+  crates-io:
+    name: every variant builds against crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Generated files match boards.toml
+        run: python3 scripts/template/gen.py --check
+
+      # Prebuilt binaries rather than `cargo install`, which would compile
+      # both from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate,cargo-binutils
+
+      # Each generated project pins its own toolchain (stable, or nightly
+      # with `rust-src` for ARMv6), and cargo installs it on first use.
+      - name: Generate and build every variant
+        run: scripts/template/check.sh
+
+  # The same builds with this repository's crates patched in, so a change
+  # on main that breaks the template shows up before it is released.
+  # Advisory: the template deliberately depends on what's published, and a
+  # template change that needs unreleased API waits for the release.
+  in-repo:
+    name: every variant builds against this repository (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate,cargo-binutils
+      - name: Generate and build every variant
+        env:
+          TEMPLATE_PATCH: "1"
+        run: scripts/template/check.sh

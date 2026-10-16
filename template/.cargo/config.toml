@@ -1,0 +1,19 @@
+# Plain `cargo build` targets the board rather than the host.
+[build]
+target = "{{target}}"
+
+# The linker script comes from rpi-hal, which publishes it on the linker
+# search path as `rpi-link.x`, already linking at {{load_addr}} for this
+# target. Naming it is the whole step.
+#
+# Ignored outright if a `RUSTFLAGS` environment variable is set, and the
+# symptom is `undefined symbol: __bss_end`.
+[target.{{target}}]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
+{% if nightly %}
+# No precompiled `core` exists for this target; compile one. (A
+# config-level `[unstable]` table is silently ignored on stable, which is
+# why rust-toolchain.toml pins nightly.)
+[unstable]
+build-std = ["core"]
+{% endif -%}
