@@ -313,6 +313,10 @@ name = "multicore_uart"
 required-features = ["multicore"]
 
 [[example]]
+name = "multicore_critical_section"
+required-features = ["multicore"]
+
+[[example]]
 name = "multicore_id"
 required-features = ["multicore"]
 

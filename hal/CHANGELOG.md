@@ -4,6 +4,22 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A nested critical section hung with the `multicore` feature.** The
+  `critical-section` crate allows nesting, and code nests without meaning
+  to — a log call inside a `critical_section::with` is one. With
+  `multicore` on, `acquire` also took a cross-core spinlock that was a
+  plain flag, which couldn't tell the core holding it from another core
+  asking, so an inner `acquire` spun forever waiting for its own core.
+  The lock now records its owner (`cpu::core_id`) and a depth: the owning
+  core goes a level deeper, other cores wait, and only the outermost
+  `release` frees it. New example `multicore_critical_section` checks
+  nesting and that two cores still exclude each other. Builds without
+  `multicore` are unchanged.
+
 ## [0.9.1] - 2026-10-16
 
 ### Changed
