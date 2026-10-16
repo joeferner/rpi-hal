@@ -1,10 +1,11 @@
 [package]
 name = "rpi-hal-embassy"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 description = "Embassy time driver and executor for bare-metal Raspberry Pi 1/2/3 and Zero (BCM2835/BCM2836/BCM2837), on top of rpi-hal"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joeferner/rpi-hal"
+homepage = "https://joeferner.github.io/rpi-hal/crates/embassy/"
 documentation = "https://docs.rs/rpi-hal-embassy"
 readme = "README.md"
 keywords = ["raspberry-pi", "bare-metal", "embassy", "async", "bcm2837"]

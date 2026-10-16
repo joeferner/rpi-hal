@@ -13,6 +13,21 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [0.5.1] - 2026-10-16
+
+### Changed
+
+- **Moved into [joeferner/rpi-hal](https://github.com/joeferner/rpi-hal)**;
+  the old `rpi-loader` repository is archived, its release pages (images
+  up to 0.5.0) left in place. Releases from here are tagged
+  `loader-v<version>`, so images download from
+  `https://github.com/joeferner/rpi-hal/releases/download/loader-v<version>/`.
+  The CLI's manifest points `repository` there and its new `homepage` at
+  <https://joeferner.github.io/rpi-hal/crates/loader/>.
+- **The firmware builds against `rpi-hal` 0.9.1.** The wire protocol, the
+  CLI's arguments and the load addresses are unchanged, so a 0.5.0 CLI and
+  a 0.5.1 loader work together either way round.
+
 ## [0.5.0] - 2026-10-02
 
 ### Added
@@ -236,6 +251,7 @@ flag here is no reason to bump their dependency.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
 
+[0.5.1]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.5.1
 [0.5.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.3.0

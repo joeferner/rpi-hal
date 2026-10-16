@@ -4,7 +4,15 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.1] - 2026-10-16
+
+### Changed
+
+- **Released from the combined repository.** `rpi-hal-embassy`,
+  `rpi-kickstart` and `rpi-loader` now live beside this crate in
+  [joeferner/rpi-hal](https://github.com/joeferner/rpi-hal), and the
+  manifest's `homepage` points at the documentation site,
+  <https://joeferner.github.io/rpi-hal/>. No API change.
 
 ### Fixed
 
@@ -1414,6 +1422,7 @@ has what is deliberately not here yet.
   Nightly is not needed.
 - Licensed under either MIT or Apache-2.0, at your option.
 
+[0.9.1]: https://github.com/joeferner/rpi-hal/releases/tag/hal-v0.9.1
 [0.9.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.9.0
 [0.8.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.8.0
 [0.7.0]: https://github.com/joeferner/rpi-hal/releases/tag/v0.7.0

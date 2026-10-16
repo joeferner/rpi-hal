@@ -574,7 +574,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rpi-hal"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bcm2835-lpa",
  "bcm2837-lpa",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal-embassy"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "critical-section",
  "embassy-executor",

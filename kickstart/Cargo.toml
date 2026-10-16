@@ -1,10 +1,11 @@
 [package]
 name = "rpi-kickstart"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Application scaffolding for bare-metal Raspberry Pi boards: console, config, storage, web and the rest of the bring-up that is the same on every board, on top of rpi-hal"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joeferner/rpi-hal"
+homepage = "https://joeferner.github.io/rpi-hal/crates/kickstart/"
 documentation = "https://docs.rs/rpi-kickstart"
 readme = "README.md"
 keywords = ["raspberry-pi", "bare-metal", "no-std", "embedded", "bcm2837"]
