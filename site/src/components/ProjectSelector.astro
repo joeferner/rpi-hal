@@ -1,0 +1,183 @@
+---
+// Pick a board, name the project, download a zip: the project template
+// rendered in the browser plus everything the SD card needs. The rendering
+// is src/lib/scaffold.mjs, the same module CI checks against
+// `cargo generate`.
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+// Relative to site/, where every build runs: `import.meta.url` would be
+// the compiled chunk's location, not this file's.
+const boards = JSON.parse(await readFile(join(process.cwd(), "..", "template", "boards.json"), "utf8"));
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+
+<form class="selector" data-base={base} novalidate>
+  <label>
+    <span>Board</span>
+    <select name="board">
+      {boards.boards.map((b: { id: string; name: string }) => <option value={b.id}>{b.name}</option>)}
+    </select>
+  </label>
+
+  <fieldset name="arch-set">
+    <legend>Execution state</legend>
+    <label><input type="radio" name="arch" value="32" checked /> 32-bit</label>
+    <label><input type="radio" name="arch" value="64" /> 64-bit</label>
+  </fieldset>
+
+  <label>
+    <span>Project name</span>
+    <input name="name" value="my-pi-app" spellcheck="false" autocomplete="off" />
+    <small class="hint">Lowercase letters, digits and hyphens, starting with a letter.</small>
+  </label>
+
+  <button type="submit">Download project zip</button>
+  <p class="status" role="status" aria-live="polite"></p>
+</form>
+
+<script>
+  import { strToU8, zipSync } from "fflate";
+  import { findVariant, NAME_PATTERN, renderProject } from "../lib/scaffold.mjs";
+
+  const form = document.querySelector<HTMLFormElement>("form.selector")!;
+  const base = form.dataset.base!;
+  const boardSelect = form.querySelector<HTMLSelectElement>('select[name="board"]')!;
+  const archSet = form.querySelector<HTMLFieldSetElement>('fieldset[name="arch-set"]')!;
+  const nameInput = form.querySelector<HTMLInputElement>('input[name="name"]')!;
+  const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const status = form.querySelector<HTMLParagraphElement>(".status")!;
+
+  const boardsPromise = fetch(`${base}scaffold/boards.json`).then((r) => r.json());
+  const templatePromise = fetch(`${base}scaffold/template.json`).then((r) => r.json());
+
+  // Only boards that can start in either execution state offer the choice;
+  // the rest have one, which findVariant picks when no arch is given.
+  async function syncArch() {
+    const boards = await boardsPromise;
+    const board = boards.boards.find((b: { id: string }) => b.id === boardSelect.value);
+    const choosable = board.arches.length > 1;
+    archSet.hidden = !choosable;
+    archSet.disabled = !choosable;
+  }
+  boardSelect.addEventListener("change", syncArch);
+  syncArch();
+
+  nameInput.addEventListener("input", () => {
+    nameInput.setCustomValidity(NAME_PATTERN.test(nameInput.value) ? "" : "Lowercase letters, digits and hyphens, starting with a letter.");
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = nameInput.value;
+    if (!NAME_PATTERN.test(name)) {
+      nameInput.reportValidity();
+      return;
+    }
+    button.disabled = true;
+    status.textContent = "Building the zip…";
+    try {
+      const [boards, template] = await Promise.all([boardsPromise, templatePromise]);
+      const arch = archSet.disabled ? undefined : (form.elements.namedItem("arch") as RadioNodeList).value;
+      const variant = findVariant(boards, boardSelect.value, arch);
+
+      const project = await renderProject(template, variant, name);
+      const entries: Record<string, Uint8Array> = {};
+      for (const [path, text] of Object.entries(project)) {
+        entries[`${name}/${path}`] = strToU8(text);
+      }
+      // The card's firmware and loader image, under the names they have on
+      // the card. Served from this site by checksum (see build-assets.mjs).
+      for (const file of variant.card) {
+        const response = await fetch(`${base}card/${file.sha256}`);
+        if (!response.ok) {
+          throw new Error(`couldn't fetch ${file.name} (${response.status})`);
+        }
+        entries[`${name}/sd-card/${file.name}`] = new Uint8Array(await response.arrayBuffer());
+      }
+
+      const zip = zipSync(entries, { level: 6 });
+      const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${name}.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      status.textContent = `Downloaded ${name}.zip for the ${variant.vars.board_name}.`;
+    } catch (error) {
+      status.textContent = `Couldn't build the zip: ${(error as Error).message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+
+<style>
+  .selector {
+    display: grid;
+    gap: 1rem;
+    max-width: 32rem;
+    margin-block: 1.5rem;
+  }
+  label,
+  fieldset {
+    display: grid;
+    gap: 0.35rem;
+  }
+  fieldset {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    grid-auto-flow: column;
+    justify-content: start;
+    column-gap: 1.5rem;
+  }
+  fieldset[hidden] {
+    display: none;
+  }
+  fieldset label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  legend {
+    padding-inline: 0.25rem;
+    font-weight: 600;
+  }
+  label > span {
+    font-weight: 600;
+  }
+  select,
+  input:not([type="radio"]) {
+    font: inherit;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.375rem;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+  }
+  input:invalid {
+    border-color: var(--sl-color-red);
+  }
+  .hint {
+    color: var(--sl-color-gray-3);
+  }
+  button {
+    justify-self: start;
+    font: inherit;
+    font-weight: 600;
+    padding: 0.6rem 1.1rem;
+    border: 0;
+    border-radius: 999px;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+  .status:empty {
+    display: none;
+  }
+</style>

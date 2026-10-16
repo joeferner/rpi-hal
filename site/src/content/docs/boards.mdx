@@ -1,0 +1,27 @@
+---
+title: Boards
+description: The Raspberry Pi boards the project template and the loader support, and what each one needs.
+---
+
+import BoardTable from "../../components/BoardTable.astro";
+
+The boards [Start a project](../start/) and `cargo generate` offer. This
+table is generated from the same file they use,
+[`template/boards.toml`](https://github.com/joeferner/rpi-hal/blob/main/template/boards.toml).
+
+<BoardTable />
+
+**The kernel filename isn't a convention.** The firmware picks the one it
+looks for from the CPU it finds (and, on a Pi 3 or 4, from `arm_64bit` in
+`config.txt`). Finding none, it stops without printing anything, which
+looks exactly like a dead board.
+
+**ARMv6 needs nightly Rust.** `armv6-none-eabi` is a tier-3 target with
+no precompiled `core`, so the project builds one with `-Z build-std`. The
+generated project's `rust-toolchain.toml` takes care of it.
+
+**The Pi 4 has no interrupt controller in rpi-hal yet**, so Embassy's
+time driver can't run there. The template's starter project doesn't use
+interrupts, so it runs on every board above.
+
+The Raspberry Pi 5 and the Zero 2 W aren't supported.

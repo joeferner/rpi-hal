@@ -1,0 +1,27 @@
+---
+title: Start a project
+description: Pick a board and download a project that builds, with everything the SD card needs.
+---
+
+import ProjectSelector from "../../components/ProjectSelector.astro";
+
+Pick your board and a name. The zip holds a Rust project on rpi-hal and
+rpi-kickstart that logs a heartbeat on the UART console, and an
+`sd-card/` folder with the Raspberry Pi boot firmware, `config.txt`, and
+the rpi-loader image under the filename your board loads.
+
+<ProjectSelector />
+
+Then follow [getting started](../getting-started/) from "Set up the
+card".
+
+The same project comes from `cargo generate`, which asks the same
+questions in the terminal:
+
+```sh
+cargo install cargo-generate
+cargo generate --git https://github.com/joeferner/rpi-hal template
+```
+
+With `cargo generate`, `make sd-card` fetches what the zip's `sd-card/`
+folder already contains.

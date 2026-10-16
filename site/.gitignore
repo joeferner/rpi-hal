@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.astro/
+# Written by scripts/build-assets.mjs on every build.
+public/scaffold/
+public/card/
+# Downloaded firmware and loader images, kept between local builds.
+.cache/

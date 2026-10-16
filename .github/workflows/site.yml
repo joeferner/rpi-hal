@@ -1,0 +1,50 @@
+name: Site
+
+# Deploys site/ to GitHub Pages at https://joeferner.github.io/rpi-hal/.
+#
+# On pushes to main that change the site or what it serves: the template
+# (the project selector renders it) and the board table (which names the
+# firmware and loader images the zip carries). A loader release changes
+# what the selector should hand out too, but only once boards.toml points
+# at it, and that edit is itself a push here. `workflow_dispatch` is for
+# redeploying by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "template/**"
+      - "scripts/template/**"
+      - ".github/workflows/site.yml"
+      - ".github/workflows/_site.yml"
+  workflow_dispatch:
+
+# One deployment at a time, and a newer one isn't cancelled for an older
+# one still running.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/_site.yml
+    with:
+      upload: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # What `actions/deploy-pages` needs: write access to Pages, and an OIDC
+    # token proving the deployment comes from this workflow.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

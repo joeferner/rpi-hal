@@ -2,6 +2,10 @@
 
 Bare-metal Rust for the Raspberry Pi.
 
+**Docs, blog, and a project starter:**
+[joeferner.github.io/rpi-hal](https://joeferner.github.io/rpi-hal/), built
+from [`site/`](site).
+
 This repository holds a family of crates, each in its own directory with
 its own version, changelog and crates.io release:
 

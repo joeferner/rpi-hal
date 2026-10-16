@@ -1,0 +1,46 @@
+---
+// The supported boards, straight from template/boards.json: the same table
+// the project template and the project selector use.
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+type Variant = { vars: { target: string; kernel: string; load_addr: string; firmware_files: string } };
+type Board = { id: string; name: string; arches: string[]; variants: Record<string, Variant> };
+
+// Relative to site/, where every build runs: `import.meta.url` would be
+// the compiled chunk's location, not this file's.
+const boards: { boards: Board[] } = JSON.parse(await readFile(join(process.cwd(), "..", "template", "boards.json"), "utf8"));
+const archLabel: Record<string, string> = { "32": "32-bit", "64": "64-bit", armv6: "ARMv6" };
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Board</th>
+      <th>Build</th>
+      <th>Target</th>
+      <th>Kernel file</th>
+      <th>Load address</th>
+      <th>Firmware</th>
+    </tr>
+  </thead>
+  <tbody>
+    {
+      boards.boards.flatMap((board) =>
+        board.arches.map((arch, i) => {
+          const v = board.variants[arch].vars;
+          return (
+            <tr>
+              {i === 0 && <td rowspan={board.arches.length}>{board.name}</td>}
+              <td>{archLabel[arch] ?? arch}</td>
+              <td><code>{v.target}</code></td>
+              <td><code>{v.kernel}</code></td>
+              <td><code>{v.load_addr}</code></td>
+              <td>{v.firmware_files.split(" ").filter((f) => f !== "LICENCE.broadcom").map((f) => <code>{f}</code>).reduce((acc: any[], el, j) => (j ? [...acc, " ", el] : [el]), [])}</td>
+            </tr>
+          );
+        }),
+      )
+    }
+  </tbody>
+</table>

@@ -31,9 +31,22 @@ jobs:
         with:
           tool: cargo-generate,cargo-binutils
 
+      # For the site's project selector, which check.sh runs (in Node) beside
+      # cargo-generate and diffs against it: the zip and `cargo generate`
+      # must hand out the same project.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+
       # Each generated project pins its own toolchain (stable, or nightly
       # with `rust-src` for ARMv6), and cargo installs it on first use.
-      - name: Generate and build every variant
+      - name: Generate, compare with the site's, and build every variant
+        env:
+          TEMPLATE_DIFF: "1"
         run: scripts/template/check.sh
 
   # The same builds with this repository's crates patched in, so a change

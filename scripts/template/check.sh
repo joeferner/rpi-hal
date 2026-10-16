@@ -6,6 +6,11 @@
 #   scripts/template/check.sh            # every variant
 #   scripts/template/check.sh pi3/64     # just these
 #
+# With TEMPLATE_DIFF=1, each project is also rendered by the site's
+# project selector (site/scripts/scaffold-cli.mjs, the same code the
+# browser runs) and the two are diffed: the zip and `cargo generate` must
+# hand out the same project. Needs `npm ci` in site/ first.
+#
 # With TEMPLATE_PATCH=1, each build instead uses this repository's
 # rpi-hal, rpi-kickstart (and what they reach by path), so a change on
 # main that breaks the template shows up before it is released.
@@ -64,11 +69,27 @@ for variant in "${variants[@]}"; do
         continue
     fi
 
+    if [ "${TEMPLATE_DIFF:-0}" = 1 ]; then
+        selector_out="$out/selector"
+        rm -rf "${selector_out:?}/$name"
+        node_args=(--board "$board" --name "$name" --out "$selector_out")
+        if [ "${#defines[@]}" -gt 2 ]; then
+            node_args+=(--arch "$arch")
+        fi
+        node "$root/site/scripts/scaffold-cli.mjs" "${node_args[@]}"
+        if ! diff -r "$dest" "$selector_out/$name"; then
+            echo "$variant: the site's project differs from cargo-generate's (above)" >&2
+            failed+=("$variant")
+            continue
+        fi
+        echo "$variant: the site renders the same project"
+    fi
+
     if [ -n "$patches" ]; then
         printf '\n%s' "$patches" >>"$dest/.cargo/config.toml"
     fi
 
-    kernel="$(jq -r --arg b "$board" --arg a "$arch" '.boards[] | select(.id == $b) | .variants[$a].kernel' "$root/template/boards.json")"
+    kernel="$(jq -r --arg b "$board" --arg a "$arch" '.boards[] | select(.id == $b) | .variants[$a].vars.kernel' "$root/template/boards.json")"
     if (cd "$dest" && cargo build --release && cargo objcopy --release -- -O binary "target/$kernel"); then
         echo "$variant: ok"
     else
