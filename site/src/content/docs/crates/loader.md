@@ -15,7 +15,7 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 
 | Image | Boards | Kernel file |
 | --- | --- | --- |
-| `bcm2837` | Pi 2 v1.2, Pi 3 | `kernel7.img` (32-bit), `kernel8.img` (64-bit) |
+| `bcm2837` | Pi 2, Pi 3 | `kernel7.img` (32-bit), `kernel8.img` (64-bit; not a Pi 2 v1.1, whose cores are 32-bit only) |
 | `bcm2711` | Pi 4 | `kernel7.img` (32-bit), `kernel8.img` (64-bit) |
 | `bcm2835` | Pi 1, Pi Zero | `kernel.img` |
 

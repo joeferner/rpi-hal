@@ -283,9 +283,10 @@ jobs:
           stops without printing anything. Use `kernel8.img` only with
           `arm_64bit=1` in `config.txt`.
 
-          `bcm2837` covers the Pi 2 v1.2 and Pi 3; `bcm2711` covers the
-          Pi 4; `bcm2835` covers the Pi 1 and Pi Zero, and is ARMv6, so it
-          has no 64-bit counterpart. Verify with
+          `bcm2837` covers the Pi 2 and Pi 3 (a Pi 2 v1.1 takes the
+          `kernel7.img` alone: its cores are 32-bit only); `bcm2711` covers
+          the Pi 4; `bcm2835` covers the Pi 1 and Pi Zero, and is ARMv6, so
+          it has no 64-bit counterpart. Verify with
           `sha256sum -c SHA256SUMS`.
 
           `rpi-loader-<version>.bash` is the bash completion for the host
