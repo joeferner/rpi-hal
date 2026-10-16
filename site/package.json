@@ -1,0 +1,23 @@
+{
+  "name": "rpi-hal-site",
+  "private": true,
+  "type": "module",
+  "description": "Docs, blog and project selector for the rpi-hal crates, served at https://joeferner.github.io/rpi-hal/",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "assets": "node scripts/build-assets.mjs",
+    "dev": "npm run assets && astro dev",
+    "build": "npm run assets && astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.6",
+    "astro": "7.3.8",
+    "fflate": "0.8.3",
+    "liquidjs": "10.30.0",
+    "starlight-blog": "0.30.2"
+  }
+}

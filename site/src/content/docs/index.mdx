@@ -1,0 +1,44 @@
+---
+title: Bare-metal Rust for the Raspberry Pi
+description: An embedded-hal HAL, Embassy support, application bring-up, and a UART loader for the Raspberry Pi 1, Zero, 2, 3 and 4.
+template: splash
+hero:
+  tagline: No operating system. A HAL that looks like every other embedded-hal crate, an async executor, the bring-up every board needs, and a loader so you never take the SD card out again.
+  actions:
+    - text: Start a project
+      link: start/
+      icon: right-arrow
+    - text: Getting started
+      link: getting-started/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="rpi-hal" icon="seti:rust">
+    The hardware abstraction layer: boot, MMU and caches, interrupts, and
+    the SoC's peripherals, with `embedded-hal` traits beside inherent
+    methods. [More](crates/hal/)
+  </Card>
+  <Card title="rpi-hal-embassy" icon="random">
+    An `embassy-time` driver over the System Timer and a thread-mode
+    executor for ARMv6, ARMv7-A and AArch64, plus `embassy-net` drivers.
+    [More](crates/embassy/)
+  </Card>
+  <Card title="rpi-kickstart" icon="rocket">
+    The program every board writes again: a console, a heap, a settings
+    file, the card, networking, a web server, OTA. Each one a feature.
+    [More](crates/kickstart/)
+  </Card>
+  <Card title="rpi-loader" icon="laptop">
+    A resident UART agent: flash it once, then upload and boot builds, and
+    read or write the card, over the serial cable. [More](crates/loader/)
+  </Card>
+</CardGrid>
+
+<LinkCard
+  title="Start a project"
+  description="Pick a board and download a ready-to-build project, with everything the SD card needs."
+  href="start/"
+/>

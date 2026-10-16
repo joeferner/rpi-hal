@@ -43,6 +43,7 @@ jobs:
       kickstart: ${{ steps.filter.outputs.kickstart }}
       loader: ${{ steps.filter.outputs.loader }}
       template: ${{ steps.filter.outputs.template }}
+      site: ${{ steps.filter.outputs.site }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
@@ -75,15 +76,22 @@ jobs:
               - 'hal/**'
               - 'loader/**'
             # The crates a generated project reaches, for the advisory
-            # build against this repository.
+            # build against this repository; and site/, whose generator is
+            # diffed against cargo-generate's output.
             template:
               - *shared
               - 'template/**'
               - 'scripts/template/**'
+              - 'site/**'
               - 'hal/**'
               - 'embassy/**'
               - 'kickstart/**'
               - 'loader/ota/**'
+            # The site renders template/boards.json and serves the template.
+            site:
+              - *shared
+              - 'site/**'
+              - 'template/**'
 
   hal:
     needs: changes
@@ -110,6 +118,11 @@ jobs:
     if: github.event_name != 'pull_request' || needs.changes.outputs.template == 'true'
     uses: ./.github/workflows/_template.yml
 
+  site:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.site == 'true'
+    uses: ./.github/workflows/_site.yml
+
   # The only required status check. Requiring the crate jobs directly can't
   # work: a crate the change doesn't touch is skipped, and a skipped
   # required check never reports, so the pull request would wait forever.
@@ -118,7 +131,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, hal, embassy, kickstart, loader, template]
+    needs: [changes, hal, embassy, kickstart, loader, template, site]
     runs-on: ubuntu-latest
     steps:
       - name: Every job that ran passed

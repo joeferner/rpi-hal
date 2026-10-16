@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A chip: the SoC the crates run on. -->
+  <g fill="none" stroke="#c51a4a" stroke-width="2" stroke-linecap="round">
+    <rect x="8" y="8" width="16" height="16" rx="2.5" fill="#c51a4a" fill-opacity="0.15"/>
+    <path d="M12 4v4M16 4v4M20 4v4M12 24v4M16 24v4M20 24v4M4 12h4M4 16h4M4 20h4M24 12h4M24 16h4M24 20h4"/>
+  </g>
+</svg>

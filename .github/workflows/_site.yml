@@ -1,0 +1,41 @@
+name: site
+
+# Builds the site in `site/`. Called from ci.yml on pull requests (build
+# only) and from site.yml (build, then upload for GitHub Pages).
+on:
+  workflow_call:
+    inputs:
+      upload:
+        description: Upload the build as the GitHub Pages artifact
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    working-directory: site
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The Node version is pinned in site/.nvmrc.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+
+      # `npm run build` runs scripts/build-assets.mjs first, which downloads
+      # every firmware file and loader image boards.json names and fails on
+      # a checksum mismatch, so a moved tag or a bad pin fails here.
+      - run: npm run build
+
+      - if: inputs.upload
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
