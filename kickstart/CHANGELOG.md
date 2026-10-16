@@ -4,7 +4,7 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-16
 
 ### Added
 
@@ -26,6 +26,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Moved into [joeferner/rpi-hal](https://github.com/joeferner/rpi-hal)**,
+  beside the crates it builds on; the old `rpi-kickstart` repository is
+  archived. The manifest's `repository` points there and its new
+  `homepage` at <https://joeferner.github.io/rpi-hal/crates/kickstart/>.
 - **SNTP retries back off exponentially.** After a failed sync `sntp::run`
   waits 1 s, then 2 s, 4 s, … doubling up to `NtpConfig::retry_interval`
   (still 30 s by default), and starts over at 1 s after a success.
@@ -479,6 +483,6 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
-[Unreleased]: https://github.com/joeferner/rpi-kickstart/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0

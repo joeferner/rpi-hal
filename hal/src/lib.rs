@@ -233,7 +233,7 @@ compile_error!(
      `bcm2711` (Pi 4) or `bcm2835` (Pi 1, Pi Zero) features. None is a default, \
      since there is no sensible default target chip -- add one to this crate's \
      dependency entry, e.g. \
-     `rpi-hal = { version = \"0.1\", features = [\"bcm2837\"] }`."
+     `rpi-hal = { version = \"0.9\", features = [\"bcm2837\"] }`."
 );
 
 /// Halts the calling core forever, parking it in a low-power

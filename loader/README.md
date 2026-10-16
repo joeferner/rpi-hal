@@ -302,8 +302,8 @@ Pick the one matching yours:
 | `rpi-loader-<version>-bcm2835-kernel.img` | Pi 1, Pi Zero | ARMv6 |
 
 ```sh
-VERSION=0.1.0
-BASE=https://github.com/joeferner/rpi-loader/releases/download/v$VERSION
+VERSION=0.5.1
+BASE=https://github.com/joeferner/rpi-hal/releases/download/loader-v$VERSION
 curl -LO $BASE/rpi-loader-$VERSION-bcm2837-kernel8.img
 curl -LO $BASE/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS

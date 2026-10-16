@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-hal"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bcm2711-lpa",
  "bcm2835-lpa",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-loader-firmware"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "critical-section",
  "embedded-alloc",

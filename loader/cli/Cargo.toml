@@ -1,10 +1,11 @@
 [package]
 name = "rpi-loader"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Host-side CLI for the rpi-loader UART command agent — upload firmware to a Raspberry Pi over serial and read/write its SD card, without touching the card"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joeferner/rpi-hal"
+homepage = "https://joeferner.github.io/rpi-hal/crates/loader/"
 readme = "README.md"
 keywords = ["raspberry-pi", "bare-metal", "bootloader", "serial", "uart"]
 categories = ["command-line-utilities", "embedded", "development-tools"]

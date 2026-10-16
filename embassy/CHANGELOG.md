@@ -4,6 +4,17 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-16
+
+### Changed
+
+- **Moved into [joeferner/rpi-hal](https://github.com/joeferner/rpi-hal)**,
+  beside `rpi-hal` itself; the old `rpi-hal-embassy` repository is
+  archived. The manifest's `repository` points there and its new
+  `homepage` at <https://joeferner.github.io/rpi-hal/crates/embassy/>.
+  Numbered after `rpi-hal` 0.9.1, which it builds against unchanged. No
+  API change.
+
 ## [0.9.0] - 2026-10-02
 
 ### Changed
@@ -394,6 +405,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.9.1]: https://github.com/joeferner/rpi-hal/releases/tag/embassy-v0.9.1
 [0.9.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.9.0
 [0.8.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.8.0
 [0.7.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.7.0
