@@ -30,22 +30,18 @@ ref = "1.20260824"
 
 # The rpi-loader image that goes on the card. The images are published
 # per chip and kernel name (`rpi-loader-<version>-<chip>-<kernel>`) and
-# renamed to the bare kernel name on the card.
-#
-# Still the last release from the archived rpi-loader repository: rpi-hal
-# has no `loader-v*` release with images yet. Move `url` to
-# https://github.com/joeferner/rpi-hal/releases/download/loader-v{version}
-# with the first one.
+# renamed to the bare kernel name on the card. The hashes are the
+# release's own `SHA256SUMS`.
 [loader]
-version = "0.5.0"
-url = "https://github.com/joeferner/rpi-loader/releases/download/v{version}"
+version = "0.5.1"
+url = "https://github.com/joeferner/rpi-hal/releases/download/loader-v{version}"
 
 [loader.sha256]
-"rpi-loader-0.5.0-bcm2835-kernel.img" = "af487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c"
-"rpi-loader-0.5.0-bcm2837-kernel7.img" = "3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10"
-"rpi-loader-0.5.0-bcm2837-kernel8.img" = "b51c8b9b119bf60573ebb22d4eee664b484cfe631cbee6191127b0f5d06d2088"
-"rpi-loader-0.5.0-bcm2711-kernel7.img" = "914b1a6123b8291c7e14370bcb5050ca8b54f534bd43067498474159952fc0db"
-"rpi-loader-0.5.0-bcm2711-kernel8.img" = "d2127242d363124f939f07449e825ebd2a4fb36dac7a4fe7f70898d1e0445df8"
+"rpi-loader-0.5.1-bcm2835-kernel.img" = "341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4"
+"rpi-loader-0.5.1-bcm2837-kernel7.img" = "e3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d"
+"rpi-loader-0.5.1-bcm2837-kernel8.img" = "4e13bb416f429d7d8abc68f8c00520917846d559999c27e754e6d4ca6bc5acca"
+"rpi-loader-0.5.1-bcm2711-kernel7.img" = "d33bfbccd32d73167a4f20d056526cab830d7b49428cdd4278894362682263d3"
+"rpi-loader-0.5.1-bcm2711-kernel8.img" = "dc7330d53ced1ffb4352cacc6cc0933b4b7e52286968bc3c9360326165871b80"
 
 # What each execution state needs, shared by every board that has it.
 #

@@ -12,7 +12,7 @@ rpi-hal = { version = "0.9", features = ["{{chip}}"] }
 # The bring-up every board does: here only the console and `logln!`. Each
 # capability is a feature (heap, config, storage, net, web, ota, ...);
 # see https://docs.rs/rpi-kickstart.
-rpi-kickstart = { version = "0.2", features = ["console"] }
+rpi-kickstart = { version = "0.3", features = ["console"] }
 # Hands the console a UART that outlives `kmain`'s stack, without a
 # `static mut`.
 static_cell = "2.1"

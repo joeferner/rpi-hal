@@ -26,9 +26,9 @@
             "config_txt": "# Start the ARM cores in AArch32, so the firmware loads kernel7.img. Not\n# redundant: a card that once held a 64-bit kernel carries\n# `arm_64bit=1` saying otherwise.\narm_64bit=0\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "bootcode.bin start.elf fixup.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2837-kernel7.img",
-            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10  kernel7.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2837-kernel7.img",
+            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\ne3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d  kernel7.img\n"
           },
           "card": [
             {
@@ -53,8 +53,8 @@
             },
             {
               "name": "kernel7.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2837-kernel7.img",
-              "sha256": "3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2837-kernel7.img",
+              "sha256": "e3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d"
             }
           ]
         },
@@ -70,9 +70,9 @@
             "config_txt": "# Start the ARM cores in AArch64, so the firmware loads kernel8.img.\narm_64bit=1\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "bootcode.bin start.elf fixup.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2837-kernel8.img",
-            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\nb51c8b9b119bf60573ebb22d4eee664b484cfe631cbee6191127b0f5d06d2088  kernel8.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2837-kernel8.img",
+            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n4e13bb416f429d7d8abc68f8c00520917846d559999c27e754e6d4ca6bc5acca  kernel8.img\n"
           },
           "card": [
             {
@@ -97,8 +97,8 @@
             },
             {
               "name": "kernel8.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2837-kernel8.img",
-              "sha256": "b51c8b9b119bf60573ebb22d4eee664b484cfe631cbee6191127b0f5d06d2088"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2837-kernel8.img",
+              "sha256": "4e13bb416f429d7d8abc68f8c00520917846d559999c27e754e6d4ca6bc5acca"
             }
           ]
         }
@@ -124,9 +124,9 @@
             "config_txt": "# Start in AArch32. A Pi 4 then looks for kernel7l.img (the LPAE kernel)\n# rather than kernel7.img, so name the file explicitly.\narm_64bit=0\nkernel=kernel7.img\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "start4.elf fixup4.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2711-kernel7.img",
-            "card_sha256": "6d540ddf77623976ba60de630e9300a5a099f7710e11ee85a7bf076f5931f4bc  start4.elf\n5818b069814c7f051d4c9246307dced983bcbdcc6a90d9e5491fc5c68159d077  fixup4.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n914b1a6123b8291c7e14370bcb5050ca8b54f534bd43067498474159952fc0db  kernel7.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2711-kernel7.img",
+            "card_sha256": "6d540ddf77623976ba60de630e9300a5a099f7710e11ee85a7bf076f5931f4bc  start4.elf\n5818b069814c7f051d4c9246307dced983bcbdcc6a90d9e5491fc5c68159d077  fixup4.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\nd33bfbccd32d73167a4f20d056526cab830d7b49428cdd4278894362682263d3  kernel7.img\n"
           },
           "card": [
             {
@@ -146,8 +146,8 @@
             },
             {
               "name": "kernel7.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2711-kernel7.img",
-              "sha256": "914b1a6123b8291c7e14370bcb5050ca8b54f534bd43067498474159952fc0db"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2711-kernel7.img",
+              "sha256": "d33bfbccd32d73167a4f20d056526cab830d7b49428cdd4278894362682263d3"
             }
           ]
         },
@@ -163,9 +163,9 @@
             "config_txt": "# Start the ARM cores in AArch64, so the firmware loads kernel8.img.\narm_64bit=1\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "start4.elf fixup4.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2711-kernel8.img",
-            "card_sha256": "6d540ddf77623976ba60de630e9300a5a099f7710e11ee85a7bf076f5931f4bc  start4.elf\n5818b069814c7f051d4c9246307dced983bcbdcc6a90d9e5491fc5c68159d077  fixup4.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\nd2127242d363124f939f07449e825ebd2a4fb36dac7a4fe7f70898d1e0445df8  kernel8.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2711-kernel8.img",
+            "card_sha256": "6d540ddf77623976ba60de630e9300a5a099f7710e11ee85a7bf076f5931f4bc  start4.elf\n5818b069814c7f051d4c9246307dced983bcbdcc6a90d9e5491fc5c68159d077  fixup4.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\ndc7330d53ced1ffb4352cacc6cc0933b4b7e52286968bc3c9360326165871b80  kernel8.img\n"
           },
           "card": [
             {
@@ -185,8 +185,8 @@
             },
             {
               "name": "kernel8.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2711-kernel8.img",
-              "sha256": "d2127242d363124f939f07449e825ebd2a4fb36dac7a4fe7f70898d1e0445df8"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2711-kernel8.img",
+              "sha256": "dc7330d53ced1ffb4352cacc6cc0933b4b7e52286968bc3c9360326165871b80"
             }
           ]
         }
@@ -211,9 +211,9 @@
             "config_txt": "# Start in AArch32, so the firmware loads kernel7.img. A rev 1.1 board\n# has no other mode, but a rev 1.2 does.\narm_64bit=0\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "bootcode.bin start.elf fixup.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2837-kernel7.img",
-            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10  kernel7.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2837-kernel7.img",
+            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\ne3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d  kernel7.img\n"
           },
           "card": [
             {
@@ -238,8 +238,8 @@
             },
             {
               "name": "kernel7.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2837-kernel7.img",
-              "sha256": "3f0f6b8d3ca9bc95e0047c4161f59cde4c01f8fab579087c2a89ca58bdb88b10"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2837-kernel7.img",
+              "sha256": "e3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d"
             }
           ]
         }
@@ -264,9 +264,9 @@
             "config_txt": "# The PL011 console's divisors assume a 48MHz reference clock, and a\n# firmware that chose another scales every bit period. Pin it.\n#\n# No arm_64bit line: the ARM1176 has no 64-bit mode, and a stray\n# `arm_64bit=1` sends the firmware looking for kernel8.img.\n#\n# A Zero W's Bluetooth claims the PL011 by default; rpi-hal's\n# `Uart::init` remuxes GPIO14/15 back to it, so nothing is needed here.\ninit_uart_clock=48000000\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "bootcode.bin start.elf fixup.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2835-kernel.img",
-            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\naf487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c  kernel.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2835-kernel.img",
+            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4  kernel.img\n"
           },
           "card": [
             {
@@ -291,8 +291,8 @@
             },
             {
               "name": "kernel.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2835-kernel.img",
-              "sha256": "af487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2835-kernel.img",
+              "sha256": "341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4"
             }
           ]
         }
@@ -317,9 +317,9 @@
             "config_txt": "# The PL011 console's divisors assume a 48MHz reference clock, and a\n# firmware that chose another scales every bit period. Pin it.\n#\n# No arm_64bit line: the ARM1176 has no 64-bit mode, and a stray\n# `arm_64bit=1` sends the firmware looking for kernel8.img.\ninit_uart_clock=48000000\ndisable_splash=1\n",
             "firmware_url": "https://raw.githubusercontent.com/raspberrypi/firmware/1.20260824/boot",
             "firmware_files": "bootcode.bin start.elf fixup.dat LICENCE.broadcom",
-            "loader_url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0",
-            "loader_image": "rpi-loader-0.5.0-bcm2835-kernel.img",
-            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\naf487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c  kernel.img\n"
+            "loader_url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1",
+            "loader_image": "rpi-loader-0.5.1-bcm2835-kernel.img",
+            "card_sha256": "4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e  bootcode.bin\n6a79bc2f28a51be84e1be03d508c1c4aa205e287346ebf30df7a0961054993e8  start.elf\n651632e140c932cba9ed64bb7c8871ec927202b000968009a055171f09ee96ff  fixup.dat\nc7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b  LICENCE.broadcom\n341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4  kernel.img\n"
           },
           "card": [
             {
@@ -344,8 +344,8 @@
             },
             {
               "name": "kernel.img",
-              "url": "https://github.com/joeferner/rpi-loader/releases/download/v0.5.0/rpi-loader-0.5.0-bcm2835-kernel.img",
-              "sha256": "af487299def26e610d2988ec43ed19cf656a3356aa4e77f09247fc849e63ce5c"
+              "url": "https://github.com/joeferner/rpi-hal/releases/download/loader-v0.5.1/rpi-loader-0.5.1-bcm2835-kernel.img",
+              "sha256": "341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4"
             }
           ]
         }
