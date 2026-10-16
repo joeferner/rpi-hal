@@ -34,7 +34,7 @@ export default defineConfig({
         },
         {
           label: "Reference",
-          items: ["boards"],
+          items: ["supported-devices", "boards"],
         },
       ],
     }),
