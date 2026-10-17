@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`mailbox::Mailbox::measured_clock_rate_hz`** (tag `0x0003_0047`,
+  "Get Clock Rate Measured"): the rate a clock is actually running at, as
+  the firmware measures it. `clock_rate_hz` reports the rate the firmware
+  has *set*, which can differ when the firmware moves a clock on its own,
+  so its documentation no longer calls that the "real, current" rate.
+  The `mailbox_props` example prints both for the ARM clock. On a Pi 2B
+  they disagree from boot, 600 MHz set and 900 measured, and
+  `set_clock_rate_hz`'s documentation now says so: it claimed an unasked
+  ARM clock stays at its floor, when it runs at full speed for a while
+  and drops to the floor later.
+
 ### Fixed
 
 - **A nested critical section hung with the `multicore` feature.** The

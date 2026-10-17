@@ -97,6 +97,17 @@ pub extern "C" fn kmain() -> ! {
             }
         }
 
+        // What the ARM is really running at, which the firmware can move
+        // without changing the setting above.
+        match mailbox.measured_clock_rate_hz(ClockId::Arm) {
+            Ok(hz) => {
+                let _ = writeln!(uart, "ARM clock (meas.): {} MHz", hz / 1_000_000);
+            }
+            Err(e) => {
+                let _ = writeln!(uart, "ARM clock (meas.): error {e:?}");
+            }
+        }
+
         match mailbox.clock_rate_hz(ClockId::Core) {
             Ok(hz) => {
                 let _ = writeln!(uart, "core clock:        {} MHz", hz / 1_000_000);
