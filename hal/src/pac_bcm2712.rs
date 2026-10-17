@@ -44,6 +44,21 @@ pub use bcm2711_lpa::systmr;
 /// is, so only [`UART0::PTR`] differs.
 pub use bcm2711_lpa::uart0;
 
+/// The VideoCore mailbox register block.
+///
+/// Re-exported from `bcm2711-lpa` for the same reason as [`systmr`]: the
+/// BCM2712's mailbox is the same `brcm,bcm2835-mbox` block, so only
+/// [`VCMAILBOX::PTR`] differs.
+pub use bcm2711_lpa::vcmailbox;
+
+/// The SD host controller register block.
+///
+/// Re-exported from `bcm2711-lpa`'s `EMMC`, whose layout is the standard
+/// SDHCI register map the BCM2712's `brcm,bcm2712-sdhci` controller
+/// follows (Linux drives it with the generic `sdhci` core plus a few
+/// Broadcom-specific writes to a separate block, [`SDIO1::CFG`]).
+pub use bcm2711_lpa::emmc;
+
 /// Physical address of bus address 0 on the SoC's peripheral bus.
 pub const SOC_BASE: usize = 0x10_0000_0000;
 
@@ -98,6 +113,107 @@ impl core::fmt::Debug for SYSTMR {
     /// Prints the token's name; it has no state to show.
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("SYSTMR").finish()
+    }
+}
+
+/// The VideoCore mailbox, through which the firmware's property interface
+/// is reached.
+pub struct VCMAILBOX {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for VCMAILBOX {}
+
+impl VCMAILBOX {
+    /// Pointer to the register block.
+    pub const PTR: *const vcmailbox::RegisterBlock = (SOC_BASE + 0x7c01_3880) as *const _;
+
+    /// Returns the pointer to the register block.
+    #[inline(always)]
+    pub const fn ptr() -> *const vcmailbox::RegisterBlock {
+        Self::PTR
+    }
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Deref for VCMAILBOX {
+    type Target = vcmailbox::RegisterBlock;
+
+    /// The register block at [`VCMAILBOX::PTR`].
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*Self::PTR }
+    }
+}
+
+impl core::fmt::Debug for VCMAILBOX {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("VCMAILBOX").finish()
+    }
+}
+
+/// The SD host controller wired to the Pi 5's card slot (`sdio1` in
+/// `bcm2712.dtsi`, `mmc@fff000`).
+pub struct SDIO1 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for SDIO1 {}
+
+impl SDIO1 {
+    /// Pointer to the SDHCI register block (the node's `host` region).
+    pub const PTR: *const emmc::RegisterBlock = (SOC_BASE + 0x00ff_f000) as *const _;
+
+    /// Address of the controller's Broadcom configuration block (the
+    /// node's `cfg` region), outside the SDHCI register map: pin and
+    /// timing selection, and a card-detect override.
+    pub const CFG: usize = SOC_BASE + 0x00ff_f400;
+
+    /// Returns the pointer to the register block.
+    #[inline(always)]
+    pub const fn ptr() -> *const emmc::RegisterBlock {
+        Self::PTR
+    }
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Deref for SDIO1 {
+    type Target = emmc::RegisterBlock;
+
+    /// The register block at [`SDIO1::PTR`].
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*Self::PTR }
+    }
+}
+
+impl core::fmt::Debug for SDIO1 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("SDIO1").finish()
     }
 }
 
@@ -242,8 +358,12 @@ static TAKEN: AtomicBool = AtomicBool::new(false);
 
 /// All the peripherals.
 pub struct Peripherals {
+    /// The VideoCore mailbox.
+    pub VCMAILBOX: VCMAILBOX,
     /// The System Timer.
     pub SYSTMR: SYSTMR,
+    /// The SD card's host controller.
+    pub SDIO1: SDIO1,
     /// RP1's UART0.
     pub UART0: UART0,
     /// RP1's header GPIO bank.
@@ -271,7 +391,9 @@ impl Peripherals {
     pub unsafe fn steal() -> Self {
         TAKEN.store(true, Ordering::Relaxed);
         Self {
+            VCMAILBOX: unsafe { VCMAILBOX::steal() },
             SYSTMR: unsafe { SYSTMR::steal() },
+            SDIO1: unsafe { SDIO1::steal() },
             UART0: unsafe { UART0::steal() },
             GPIO: unsafe { GPIO::steal() },
             GIO_AON: unsafe { GIO_AON::steal() },

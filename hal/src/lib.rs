@@ -54,7 +54,6 @@ mod critical_section;
 /// Blocking driver for the DMA controller.
 #[cfg(not(feature = "bcm2712"))]
 pub mod dma;
-#[cfg(not(feature = "bcm2712"))]
 mod emmc;
 // Installs `__unhandled_exception` rather than offering an API, so there
 // is nothing here to make public -- see the module's own documentation.
@@ -110,7 +109,6 @@ pub mod irq;
 #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 pub mod lic;
 /// Blocking driver for the VideoCore mailbox property interface.
-#[cfg(not(feature = "bcm2712"))]
 pub mod mailbox;
 /// Where the loaded image ends and free RAM begins — see
 /// [`mem::heap_region`], which is how a program sizes a heap without
@@ -207,8 +205,7 @@ pub mod pwm;
 #[cfg(not(feature = "bcm2712"))]
 pub mod rng;
 /// Blocking driver for the on-board SD card slot (Arasan EMMC host
-/// controller).
-#[cfg(not(feature = "bcm2712"))]
+/// controller, or the SDHCI that replaced it on the Pi 4 and Pi 5).
 pub mod sd;
 /// Blocking driver for the SD card slot over the *other* host
 /// controller, SDHOST — the one that leaves the Arasan controller free

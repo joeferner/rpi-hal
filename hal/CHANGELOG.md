@@ -30,7 +30,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   this chip `init` sets RP1's UART clock itself, to its 50 MHz crystal,
   rather than relying on the firmware's choice; `init_bluetooth` and the
   `async` half are left out. `Uart::set_baud` now computes its divisor
-  from the chip's UART clock instead of a hardcoded 48 MHz. The
+  from the chip's UART clock instead of a hardcoded 48 MHz. `mailbox`
+  builds too, at the BCM2712's address. Its firmware takes plain
+  physical buffer addresses rather than the `0xC000_0000` alias the
+  older chips need, so the translation is the identity there. `sd`
+  builds too, over the Pi 5's `sdio1` SDHCI controller (`pac::SDIO1`)
+  with the same API; `sd_read`, `sd_resident_fat_read` and `sd_fat_write`
+  run unchanged. The card's power and I/O voltage are always-on GPIO
+  lines on this board, so `Sd::init` power-cycles the card through them
+  into 3.3 V signalling rather than inheriting whatever mode the
+  bootloader left it in. The base clock is a fixed 200 MHz, so `init`
+  takes but doesn't use `mailbox` there. No DMA or async variants, and
+  `sd::Error::Dma` doesn't exist under `bcm2712`. The
   AArch64 MMU maps the chip's peripherals above 4 GiB. The rest of the
   crate is `cfg`'d out on this chip until each driver is checked against
   it. `multicore`, `fault-report`, `vchiq`/`mmal` and `v3d` are rejected
@@ -39,6 +50,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`sd_fat_read`, `sd_fat_write` and `sd_resident_fat_read` didn't build
+  for the Pi 4.** They took the controller as `peripherals.EMMC`, which
+  is the card's controller only on the Pi 2/3. They use
+  `Sd::steal_emmc()` now, which names the right one on every chip, and
+  `sd_fat_write` seeds its test value from the System Timer instead of
+  the Pi 2/3-only hardware RNG.
 - **AArch64 images started with unwind tables instead of code.** With
   the current nightly, `.eh_frame_hdr`/`.eh_frame` are emitted for
   `aarch64-unknown-none-softfloat`, and `linker64.ld` didn't place them,

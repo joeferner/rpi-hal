@@ -115,7 +115,11 @@ pub extern "C" fn kmain() -> ! {
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
     let _ = writeln!(uart, "initializing SD card...");
-    let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, &timer) {
+    // `steal_emmc` rather than `peripherals.EMMC`: it names whichever
+    // controller this chip's card slot is on, which is only `EMMC` on the
+    // Pi 2/3.
+    let emmc = unsafe { Sd::steal_emmc() };
+    let sd = match Sd::init(&peripherals.GPIO, emmc, &mut mailbox, &timer) {
         Ok(sd) => sd,
         Err(e) => {
             let _ = writeln!(uart, "SD init failed: {e:?}");

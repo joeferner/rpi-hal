@@ -22,8 +22,9 @@ copy onto it differs.
   partial, and differs in kind: it is ARMv6, so it needs a different
   target and a nightly toolchain, and `multicore`/`generic_timer`/`pmu`
   do not exist on it at all. A Pi 5 (BCM2712, the `bcm2712` feature) is
-  the most partial of all: 64-bit only, and only `blink`, `blink_act`,
-  `uart_hello` and `uart_echo` build for it so far.
+  the most partial of all: 64-bit only, and only the examples
+  `make build-bcm2712` lists build for it so far (GPIO, the UART, the
+  mailbox and the SD card).
 - A microSD card and a way to write it from your host machine.
 - An LED, a ~330Ω resistor, and two jumper wires (or a breadboard) for
   examples that drive GPIO.

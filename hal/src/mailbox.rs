@@ -47,7 +47,9 @@
 //! address — that's what keeps the *VideoCore's own* L2 cache out of
 //! the picture, a second cache this driver has no maintenance
 //! operations for at all. Both pieces are needed: one for the ARM
-//! core's cache, one for the VideoCore's.
+//! core's cache, one for the VideoCore's. The BCM2712 (Pi 5) is the
+//! exception: its firmware takes plain physical addresses, so the
+//! translation is the identity there.
 //!
 //! ## Sources
 //!
@@ -1671,7 +1673,7 @@ impl Mailbox {
             while self.vcmailbox.status0().read().empty().bit_is_set() {}
             let response = self.vcmailbox.read().read().bits();
             if response & 0xF == channel {
-                return (response & !0xF) - 0xC000_0000;
+                return from_vc_bus_address(response & !0xF);
             }
         }
     }
@@ -1682,13 +1684,30 @@ impl Mailbox {
 /// bypasses the VideoCore's own L2 cache entirely, so this driver only
 /// has to reason about the ARM core's cache (see this module's doc
 /// comment), not a second one it has no maintenance operations for.
+#[cfg(not(feature = "bcm2712"))]
 fn to_vc_bus_address(physical_address: u32) -> u32 {
     (physical_address & 0x3FFF_FFFF) | 0xC000_0000
+}
+
+/// On the BCM2712 the firmware takes plain ARM physical addresses: there
+/// is no `0xC000_0000` alias to translate to. Its firmware node carries
+/// an empty `dma-ranges` (`bcm2712-rpi.dtsi`), an identity mapping, where
+/// the BCM2711's `soc` node maps RAM to bus `0xC000_0000`.
+#[cfg(feature = "bcm2712")]
+fn to_vc_bus_address(physical_address: u32) -> u32 {
+    physical_address
 }
 
 /// Translates a VideoCore bus address (as returned by, e.g.,
 /// [`Mailbox::allocate_framebuffer`]'s buffer allocation) back to a
 /// plain ARM physical address — the inverse of [`to_vc_bus_address`].
+#[cfg(not(feature = "bcm2712"))]
 fn from_vc_bus_address(bus_address: u32) -> u32 {
     bus_address & 0x3FFF_FFFF
+}
+
+/// The identity on the BCM2712 — see that chip's [`to_vc_bus_address`].
+#[cfg(feature = "bcm2712")]
+fn from_vc_bus_address(bus_address: u32) -> u32 {
+    bus_address
 }
