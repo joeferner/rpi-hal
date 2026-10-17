@@ -1,0 +1,11 @@
+# Kept here rather than at the repository root, which must stay free of a
+# cargo config so rpi-hal itself and rpi-loader are not retargeted by it.
+#
+# `-Trpi-link.x` is the linker script rpi-hal publishes on the linker search
+# path, so nothing has to be copied or generated here. The same line serves
+# both architectures.
+[target.armv7a-none-eabi]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
+
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["-C", "link-arg=-Trpi-link.x"]
