@@ -161,10 +161,11 @@ The project selector picks the right one for the board you choose, and
 names it the way your board's firmware expects.
 
 :::note[Update, 2026-10-17]
-There is no loader image for the Pi 5 yet. rpi-hal's Pi 5 support has
-started (see [supported devices](/rpi-hal/supported-devices/)), and a
-loader for it is the next step. When it lands it will be a sixth image,
-`bcm2712` `kernel8.img`. As with the Pi 4, its card needs no
-`bootcode.bin`, and on the Pi 5 it needs no `start.elf` or `fixup.dat`
-either: that firmware lives in the board's EEPROM.
+The loader now runs on the Pi 5 too, as a preliminary sixth image,
+`bcm2712` `kernel8.img`, built from source until the next release (see
+[supported devices](/rpi-hal/supported-devices/)). It boots images and
+reads the card; the `eeprom-*` commands wait on rpi-hal I2C support for
+that chip. As with the Pi 4, its card needs no `bootcode.bin`, and on the
+Pi 5 it needs no `start.elf` or `fixup.dat` either: that firmware lives in
+the board's EEPROM.
 :::

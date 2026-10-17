@@ -2,7 +2,7 @@
 name = "rpi-loader-firmware"
 version = "0.5.1"
 edition = "2021"
-description = "Self-relocating UART upload loader for Raspberry Pi 2/3/4 (BCM2836/BCM2837/BCM2711) — flash once, then upload new firmware over serial instead of rewriting the SD card"
+description = "Self-relocating UART upload loader for Raspberry Pi 1/Zero/2/3/4/5 (BCM2835/BCM2836/BCM2837/BCM2711/BCM2712) — flash once, then upload new firmware over serial instead of rewriting the SD card"
 license = "MIT OR Apache-2.0"
 # The floor comes from `rpi-hal`, which declares 1.88; nothing in this
 # package needs anything newer. A meaningful number only since the build
@@ -123,6 +123,7 @@ bcm2711 = ["rpi-hal/bcm2711"]
 # what is missing on a BCM2835 relative to a BCM2837 is all things this
 # firmware never touches.
 bcm2835 = ["rpi-hal/bcm2835"]
+bcm2712 = ["rpi-hal/bcm2712"]
 
 [profile.dev]
 panic = "abort"

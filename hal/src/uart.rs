@@ -336,6 +336,18 @@ impl Uart {
         while self.uart0.fr().read().busy().bit_is_set() {}
     }
 
+    /// Whether [`set_baud`](Self::set_baud) would accept `baud`, without
+    /// touching the hardware.
+    ///
+    /// For a protocol that has to agree to a rate before switching to it,
+    /// as `rpi-loader` acknowledges a baud change at the old rate first:
+    /// it can refuse the request up front instead of acknowledging a rate
+    /// `set_baud` then rejects. Computed against the same reference clock
+    /// as `set_baud`, so the two always agree, on every chip.
+    pub const fn supports_baud(baud: u32) -> bool {
+        divisor(baud).is_some()
+    }
+
     /// Reprograms the baud rate on the fly, returning `false` (leaving
     /// the current rate untouched) if `baud` can't be represented.
     ///
