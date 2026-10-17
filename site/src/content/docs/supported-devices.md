@@ -93,9 +93,9 @@ crate out. Working:
 
 These keep the API they have on the other boards, so the `blink`,
 `uart_hello` and SD card examples build for the Pi 5 unchanged. There is
-no interrupt controller support, second core, I2C, DMA or USB here yet,
-and the loader, Embassy and the project template don't support the Pi 5
-yet either.
+no interrupt controller support, second core, I2C, DMA or USB here yet.
+The loader runs on it, built from source (its `eeprom-*` commands wait on
+I2C); Embassy and the project template don't support the Pi 5 yet.
 
 The Pi 5 boots from firmware in its on-board EEPROM, so its card holds no
 firmware files, just `kernel8.img` and a `config.txt` with `os_check=0`,

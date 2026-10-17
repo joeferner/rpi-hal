@@ -8,6 +8,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`uart::Uart::supports_baud`**: whether `set_baud` would accept a
+  rate, without touching the hardware, computed against the chip's own
+  UART clock. For a protocol that agrees to a rate before switching to
+  it, as `rpi-loader` acknowledges a baud change at the old rate.
 - **`mailbox::Mailbox::measured_clock_rate_hz`** (tag `0x0003_0047`,
   "Get Clock Rate Measured"): the rate a clock is actually running at, as
   the firmware measures it. `clock_rate_hz` reports the rate the firmware

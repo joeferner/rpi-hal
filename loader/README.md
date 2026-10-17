@@ -24,9 +24,16 @@ Supported boards:
   ARMv6, its own boot stub (`firmware/src/boot6.s`), and a `kernel.img`
   with no digit. AArch32 only, the ARM1176 having no 64-bit mode, and the
   only build here that needs a nightly toolchain (see "Or build one").
-- Not yet the Pi 5 (BCM2712). `rpi-hal`'s support for it is preliminary
-  and doesn't yet reach everything the loader uses, so there is no
-  `bcm2712` build here so far.
+- Pi 5 (BCM2712) — the `bcm2712` build (`make build64-bcm2712`),
+  **preliminary**: AArch64 only, the only state the Pi 5's firmware
+  starts, and built from source only so far, not part of a release.
+  `boot`, `sd-list` and `sd-read` have been run on a Pi 5. `eeprom-read`/
+  `eeprom-write` are not available: `rpi-hal` has no I2C for this chip
+  yet, so the loader answers them with "not supported". The card needs no
+  firmware files (the Pi 5's lives in its EEPROM), just the loader as
+  `kernel8.img` and a `config.txt` with `os_check=0`,
+  `kernel_address=0x80000` and `pciex4_reset=0`. The last keeps the PCIe
+  link to the RP1 chip up, and the console's GPIO14/15 are on RP1.
 
 A green CI badge means it compiles, and nothing more. Every check that
 runs there is either a compile-time one or a protocol test against a fake
@@ -294,7 +301,8 @@ copy it to the SD card as described under "Onto the card" below.
 ### Download a released image
 
 Each release carries five images, one per board and execution state.
-Pick the one matching yours:
+Pick the one matching yours (none is for the Pi 5 yet; build that one,
+below):
 
 | Asset | Board | Execution state |
 | --- | --- | --- |
@@ -338,6 +346,12 @@ make build64-bcm2837   # -> firmware/target/kernel8.img
 Both have `-bcm2711` counterparts for Pi 4 boards. Run `make` from the
 repository root; it drives cargo inside `firmware/`, which is where the
 bare metal target and toolchain are pinned. Everything builds on stable.
+
+For a Pi 5, which has no released image yet:
+
+```sh
+make build64-bcm2712   # -> firmware/target/kernel8.img
+```
 
 For a Pi 1 or Pi Zero:
 

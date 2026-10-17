@@ -19,8 +19,10 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 | `bcm2711` | Pi 4 | `kernel7.img` (32-bit), `kernel8.img` (64-bit) |
 | `bcm2835` | Pi 1, Pi Zero | `kernel.img` |
 
-There is no Pi 5 image yet. rpi-hal's Pi 5 support has started, and a
-loader for it is next.
+The Pi 5 has a preliminary `bcm2712` build (`make build64-bcm2712`, a
+`kernel8.img`), from source only so far: it isn't in a release yet. It
+boots images and reads the card; its `eeprom-*` commands answer "not
+supported", since rpi-hal has no I2C for that chip yet.
 
 [Start a project](../../start/) puts the right image on the card under
 the right name. Releases carry all five images and their checksums; the

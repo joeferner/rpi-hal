@@ -13,6 +13,32 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [Unreleased]
+
+### Added
+
+- **Preliminary Pi 5 (BCM2712) firmware**, behind a new `bcm2712`
+  feature, built with `make build64-bcm2712` into `kernel8.img` (AArch64
+  only). `boot`, `sd-list` and `sd-read` run on a Pi 5. It is not among a
+  release's images yet. Nothing in the boot stub changed: the loader runs
+  with the MMU off, which reaches the Pi 5's peripherals above 4 GiB
+  directly, and hands off at EL2 as on the other boards. The card needs
+  `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
+  `config.txt`, and no firmware files.
+- **Error code 19, "not supported"**, which the Pi 5 firmware answers to
+  `eeprom-read`/`eeprom-write`: `rpi-hal` has no I2C for that chip yet.
+  The firmware reads the command's whole header before refusing, so the
+  link stays in step. The CLI names the new code; an older CLI prints
+  "error code 19". `PROTOCOL_VERSION` is unchanged, since no board that
+  had the commands lost them.
+
+### Changed
+
+- **`CMD_SET_BAUD` checks the rate with `rpi-hal`'s
+  `Uart::supports_baud`** instead of the firmware's own copy of the
+  divisor arithmetic, which assumed the 48 MHz UART clock of every board
+  before the Pi 5 (50 MHz there).
+
 ## [0.5.1] - 2026-10-16
 
 ### Changed

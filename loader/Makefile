@@ -17,6 +17,7 @@
 #
 # `build-bcm2711`/`build64-bcm2711` -> Pi 4 (BCM2711)
 # `build-bcm2837`/`build64-bcm2837` -> Pi 2/3 (BCM2836/2837)
+# `build64-bcm2712` -> Pi 5 (BCM2712; AArch64 only, and no `eeprom-*`)
 #   firmware/target/kernel7.img (AArch32, loads at 0x8000)
 #   firmware/target/kernel8.img (AArch64, loads at 0x80000)
 #
@@ -48,7 +49,7 @@ CLI := cli
 OTA := ota
 
 .PHONY: build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 \
-	build-bcm2835 build-cli \
+	build-bcm2835 build64-bcm2712 build-cli \
 	fmt fmt-check clippy clippy6 clippy64 clippy-cli clippy-ota test-cli \
 	test-ota doc package package-ota pre-commit clean
 
@@ -92,6 +93,14 @@ build64-bcm2837:
 	cd $(FIRMWARE) && cargo build --release --target $(ARCH64)
 	cd $(FIRMWARE) && cargo objcopy --release --target $(ARCH64) -- -O binary target/kernel8.img
 
+# Pi 5 (BCM2712). AArch64 only: its firmware starts nothing else. The
+# feature rides on the default `bcm2837` the same way `bcm2711` does above,
+# winning rpi-hal's chip selection. rpi-hal has no I2C for this chip yet,
+# so the `eeprom-*` commands answer "not supported" here.
+build64-bcm2712:
+	cd $(FIRMWARE) && cargo build --release --target $(ARCH64) --features bcm2712
+	cd $(FIRMWARE) && cargo objcopy --release --target $(ARCH64) --features bcm2712 -- -O binary target/kernel8.img
+
 # The host CLI, built for whatever the host is -- no target override, no
 # `objcopy`. This is the package that gets published to crates.io.
 build-cli:
@@ -112,6 +121,7 @@ clippy:
 
 clippy64:
 	cd $(FIRMWARE) && cargo clippy --release --target $(ARCH64) -- -D warnings
+	cd $(FIRMWARE) && cargo clippy --release --target $(ARCH64) --features bcm2712 -- -D warnings
 
 # See `build-bcm2835` for the nightly and the feature flags.
 clippy6:
@@ -197,7 +207,7 @@ package:
 package-ota:
 	../scripts/ci/package-verify.sh loader/ota
 
-pre-commit: fmt clippy clippy6 clippy64 clippy-cli clippy-ota build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-bcm2835 build-cli test-cli test-ota doc
+pre-commit: fmt clippy clippy6 clippy64 clippy-cli clippy-ota build-bcm2711 build64-bcm2711 build-bcm2837 build64-bcm2837 build-bcm2835 build64-bcm2712 build-cli test-cli test-ota doc
 
 clean:
 	cd $(FIRMWARE) && cargo clean
