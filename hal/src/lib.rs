@@ -321,7 +321,7 @@ compile_error!(
      `bcm2711` (Pi 4), `bcm2835` (Pi 1, Pi Zero) or `bcm2712` (Pi 5) features. \
      None is a default, since there is no sensible default target chip -- add \
      one to this crate's dependency entry, e.g. \
-     `rpi-hal = { version = \"0.9\", features = [\"bcm2837\"] }`."
+     `rpi-hal = { version = \"0.10\", features = [\"bcm2837\"] }`."
 );
 // The Pi 5's boot firmware starts 64-bit kernels only, so a 32-bit build
 // would produce an image nothing can run -- and `pac`'s addresses, all

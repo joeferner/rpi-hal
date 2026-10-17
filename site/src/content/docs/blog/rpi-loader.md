@@ -161,10 +161,10 @@ The project selector picks the right one for the board you choose, and
 names it the way your board's firmware expects.
 
 :::note[Update, 2026-10-17]
-The loader now runs on the Pi 5 too, as a preliminary sixth image,
-`bcm2712` `kernel8.img`, built from source until the next release (see
+The loader now runs on the Pi 5 too: from 0.6.0, releases carry a
+preliminary sixth image, `bcm2712` `kernel8.img` (see
 [supported devices](/rpi-hal/supported-devices/)). As with the Pi 4,
-its card needs no `bootcode.bin`, and on the
-Pi 5 it needs no `start.elf` or `fixup.dat` either: that firmware lives in
-the board's EEPROM.
+its card needs no `bootcode.bin`, and on the Pi 5 it needs no
+`start.elf` or `fixup.dat` either: that firmware lives in the board's
+EEPROM.
 :::

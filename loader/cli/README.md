@@ -5,7 +5,7 @@
 
 Host-side CLI for [rpi-loader](https://github.com/joeferner/rpi-hal/tree/main/loader), a
 self-relocating UART command agent for the Raspberry Pi 1, Zero, 2, 3 and 4,
-with preliminary Pi 5 support (built from source; no released image yet).
+with preliminary Pi 5 support (from 0.6.0).
 Flash
 the loader onto an SD card once; after that this tool drives it over
 serial — upload firmware to memory and jump to it, or read, write, list

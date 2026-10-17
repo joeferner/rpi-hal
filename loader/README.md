@@ -26,8 +26,7 @@ Supported boards:
   only build here that needs a nightly toolchain (see "Or build one").
 - Pi 5 (BCM2712) — the `bcm2712` build (`make build64-bcm2712`),
   **preliminary**: AArch64 only, the only state the Pi 5's firmware
-  starts, and built from source only so far, not part of a release. It
-  has every command, `eeprom-*` included: the HAT ID bus is the same
+  starts, and released as an image from 0.6.0. It has every command, `eeprom-*` included: the HAT ID bus is the same
   GPIO0/1, driven by RP1's I2C0 rather than the BSC. The card needs no
   firmware files (the Pi 5's lives in its EEPROM), just the loader as
   `kernel8.img` and a `config.txt` with `os_check=0`,
@@ -299,9 +298,8 @@ copy it to the SD card as described under "Onto the card" below.
 
 ### Download a released image
 
-Each release carries five images, one per board and execution state.
-Pick the one matching yours (none is for the Pi 5 yet; build that one,
-below):
+Each release carries six images, one per board and execution state.
+Pick the one matching yours:
 
 | Asset | Board | Execution state |
 | --- | --- | --- |
@@ -310,9 +308,10 @@ below):
 | `rpi-loader-<version>-bcm2711-kernel7.img` | Pi 4 | AArch32 |
 | `rpi-loader-<version>-bcm2711-kernel8.img` | Pi 4 | AArch64 |
 | `rpi-loader-<version>-bcm2835-kernel.img` | Pi 1, Pi Zero | ARMv6 |
+| `rpi-loader-<version>-bcm2712-kernel8.img` | Pi 5 (from 0.6.0) | AArch64 |
 
 ```sh
-VERSION=0.5.1
+VERSION=0.6.0
 BASE=https://github.com/joeferner/rpi-hal/releases/download/loader-v$VERSION
 curl -LO $BASE/rpi-loader-$VERSION-bcm2837-kernel8.img
 curl -LO $BASE/SHA256SUMS
@@ -346,7 +345,7 @@ Both have `-bcm2711` counterparts for Pi 4 boards. Run `make` from the
 repository root; it drives cargo inside `firmware/`, which is where the
 bare metal target and toolchain are pinned. Everything builds on stable.
 
-For a Pi 5, which has no released image yet:
+For a Pi 5:
 
 ```sh
 make build64-bcm2712   # -> firmware/target/kernel8.img

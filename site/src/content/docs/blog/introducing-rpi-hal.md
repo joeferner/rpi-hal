@@ -16,10 +16,10 @@ The Pi Zero 2 W and the Pi 5 are on the list for later; the
 board stands.
 
 :::note[Update, 2026-10-17]
-The Pi 5 has started. A preliminary `bcm2712` feature is on `main`:
-boot, the System Timer, the header GPIO and the UART console, with the
-same API as the other boards, so the `blink` program below builds for a
-Pi 5 unchanged. It ships with the next release.
+The Pi 5 has started. rpi-hal 0.10.0 has a preliminary `bcm2712`
+feature: boot, the System Timer, the header GPIO, the UART console, the
+mailbox, the SD card and I2C, with the same API as the other boards, so
+the `blink` program below builds for a Pi 5 unchanged.
 :::
 
 If you have written firmware for an STM32 or an RP2040 in Rust, it is

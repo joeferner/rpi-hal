@@ -11,7 +11,7 @@ Every crate releases on its own tag, with its own version and changelog:
 | `embassy-v<version>` | `rpi-hal-embassy` | `embassy/CHANGELOG.md` | crates.io + a GitHub release |
 | `kickstart-v<version>` | `rpi-kickstart` | `kickstart/CHANGELOG.md` | crates.io + a GitHub release |
 | `loader-ota-v<version>` | `rpi-loader-ota` | `loader/ota/CHANGELOG.md` | crates.io + a GitHub release |
-| `loader-v<version>` | the `rpi-loader` CLI and the five loader images | `loader/CHANGELOG.md` | crates.io + a GitHub release with the images, marked **Latest** |
+| `loader-v<version>` | the `rpi-loader` CLI and the six loader images | `loader/CHANGELOG.md` | crates.io + a GitHub release with the images, marked **Latest** |
 
 Tags from before these crates shared a repository have no prefix:
 rpi-hal's are the bare `v0.1.0`…`v0.9.0` here, and the others' were
@@ -141,7 +141,7 @@ environment. A run then:
    crates.io at the version this commit has;
 4. runs the full `cargo package`, with every dependency resolved from
    crates.io;
-5. for the loader, builds the five images, the bash completion and
+5. for the loader, builds the six images, the bash completion and
    `SHA256SUMS`;
 6. creates the GitHub release from the changelog section;
 7. publishes, unless that version is already on crates.io.
@@ -160,7 +160,7 @@ environment. A run then:
   items confirm the `--cfg docsrs` path worked.
 - **The release page:** the notes should be this version's section, not
   the whole changelog.
-- **The loader**, in addition: the release carries five images, a bash
+- **The loader**, in addition: the release carries six images, a bash
   completion and `SHA256SUMS`, and is marked Latest:
 
   | Asset | Board | Execution state |
@@ -170,6 +170,7 @@ environment. A run then:
   | `rpi-loader-<version>-bcm2711-kernel7.img` | Pi 4 | AArch32 |
   | `rpi-loader-<version>-bcm2711-kernel8.img` | Pi 4 | AArch64 |
   | `rpi-loader-<version>-bcm2835-kernel.img` | Pi 1, Pi Zero | AArch32 (ARMv6) |
+  | `rpi-loader-<version>-bcm2712-kernel8.img` | Pi 5 | AArch64 |
   | `rpi-loader-<version>.bash` | — | host-side shell completion |
 
   The images are named per chip and version because a release page

@@ -103,6 +103,7 @@ jobs:
       - run: make build-bcm2711
       - run: make build64-bcm2711
       - run: make build-bcm2835
+      - run: make build64-bcm2712
       - run: make build-cli
       - run: make test-cli
       - run: make test-ota

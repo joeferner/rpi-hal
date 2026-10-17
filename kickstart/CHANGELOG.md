@@ -4,6 +4,16 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-17
+
+### Changed
+
+- **`rpi-hal` 0.9 → 0.10 and `rpi-hal-embassy` 0.9 → 0.10.** Breaking only
+  in that a consumer's own `rpi-hal` and `rpi-hal-embassy` must move with
+  them, since their types cross this crate's API. Nothing in this crate
+  changed. `rpi-hal` 0.10's preliminary Pi 5 support has no `bcm2712`
+  feature here yet; the chip features this crate forwards are unchanged.
+
 ## [0.3.0] - 2026-10-16
 
 ### Added
@@ -483,6 +493,7 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
+[0.4.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.1.0

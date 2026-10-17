@@ -13,14 +13,15 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-17
 
 ### Added
 
 - **Preliminary Pi 5 (BCM2712) firmware**, behind a new `bcm2712`
   feature, built with `make build64-bcm2712` into `kernel8.img` (AArch64
   only), with every command, `eeprom-*` included (through RP1's I2C0 on
-  the same GPIO0/1). It is not among a release's images yet. Nothing in
+  the same GPIO0/1). Releases carry it as a sixth image,
+  `rpi-loader-<version>-bcm2712-kernel8.img`. Nothing in
   the boot stub changed: the loader runs with the MMU off, which reaches
   the Pi 5's peripherals above 4 GiB directly, and hands off at EL2 as on
   the other boards. The card needs `os_check=0`, `kernel_address=0x80000`
@@ -39,6 +40,9 @@ flag here is no reason to bump their dependency.
   `init_id_with_frequency`, which asks for the real core clock first; a
   mailbox failure there is reported as an I2C error before the bus is
   touched.
+- **The firmware builds against `rpi-hal` 0.10.** The wire protocol, the
+  CLI's arguments and the load addresses are unchanged, so a 0.5 CLI and
+  a 0.6 loader work together either way round.
 
 ## [0.5.1] - 2026-10-16
 
@@ -278,6 +282,7 @@ flag here is no reason to bump their dependency.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
 
+[0.6.0]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.6.0
 [0.5.1]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.5.1
 [0.5.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.4.0

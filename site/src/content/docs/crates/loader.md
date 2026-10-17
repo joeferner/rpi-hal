@@ -18,12 +18,10 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 | `bcm2837` | Pi 2, Pi 3 | `kernel7.img` (32-bit), `kernel8.img` (64-bit; not a Pi 2 v1.1, whose cores are 32-bit only) |
 | `bcm2711` | Pi 4 | `kernel7.img` (32-bit), `kernel8.img` (64-bit) |
 | `bcm2835` | Pi 1, Pi Zero | `kernel.img` |
-
-The Pi 5 has a preliminary `bcm2712` build (`make build64-bcm2712`, a
-`kernel8.img`), from source only so far: it isn't in a release yet.
+| `bcm2712` | Pi 5 (preliminary, from 0.6.0) | `kernel8.img` (64-bit only) |
 
 [Start a project](../../start/) puts the right image on the card under
-the right name. Releases carry all five images and their checksums; the
+the right name (not yet for the Pi 5). Releases carry all six images and their checksums; the
 firmware loads only the bare names, so an image downloaded by hand has to
 be renamed on the way to the card.
 
