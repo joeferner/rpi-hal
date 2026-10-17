@@ -2,7 +2,7 @@
 # already pinned in .cargo/config.toml, so plain `cargo` invocations
 # pick them up without repeating flags here.
 
-.PHONY: build-bcm2837 build-bcm2711 build-bcm2835 examples fmt fmt-check clippy doc package pre-commit clean
+.PHONY: build-bcm2837 build-bcm2711 build-bcm2835 build-bcm2712 examples fmt fmt-check clippy doc package pre-commit clean
 
 # `bcm2837`/`bcm2711`/`bcm2835` (see Cargo.toml) are chip selection: none
 # is a default feature, since there's no sensible default target chip, so
@@ -17,6 +17,13 @@ build-bcm2837:
 # selection itself, not full example coverage.
 build-bcm2711:
 	cargo build --release --features bcm2711
+
+# `bcm2712` (Pi 5) is AArch64-only, so it names `--target` over the
+# ARMv7-A one `.cargo/config.toml` pins. Only the library and the
+# examples checked on it so far: most of the crate is `cfg`'d out on
+# this chip (see `lib.rs`), and the other examples reach for those modules.
+build-bcm2712:
+	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo
 
 # `bcm2835` (Pi 1, Pi Zero) is the only chip whose *target* differs too:
 # ARMv6 rather than ARMv7-A, so it names `--target` here instead of taking
@@ -102,6 +109,8 @@ clippy:
 	# Library-only lint for BCM2711 -- see `build-bcm2711`'s comment on why
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
+	# And BCM2712, on its own AArch64 target -- see `build-bcm2712`.
+	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo -- -D warnings
 	# And for BCM2835, on its own ARMv6 target -- see `build-bcm2835`'s
 	# comment for why this one is narrower than the others, and
 	# `examples`' for why the examples are named one by one.
@@ -152,6 +161,11 @@ clippy:
 doc:
 	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --no-deps --features bcm2837,multicore,async,embedded-sdmmc,resident-fat,smoltcp,v3d,mmal
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features bcm2711,multicore,async,embedded-sdmmc,resident-fat,smoltcp
+	# Broken intra-doc links are allowed on BCM2712 alone: the CPU-state
+	# modules it shares with the other chips link into ones it doesn't
+	# build (`generic_timer`, `mailbox`, `multicore`). Those links resolve,
+	# and are checked, in the two builds above.
+	RUSTDOCFLAGS="-D warnings -A rustdoc::broken_intra_doc_links" cargo doc --no-deps --target aarch64-unknown-none-softfloat --features bcm2712
 
 # A chip feature is not optional here, and the reason is easy to trip over:
 # `cargo package` and `cargo publish` finish by building the packaged tarball,
@@ -175,7 +189,7 @@ doc:
 package:
 	../scripts/ci/package-verify.sh hal --features bcm2837
 
-pre-commit: fmt clippy build-bcm2837 build-bcm2711 build-bcm2835 examples doc
+pre-commit: fmt clippy build-bcm2837 build-bcm2711 build-bcm2835 build-bcm2712 examples doc
 
 clean:
 	cargo clean

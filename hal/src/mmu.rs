@@ -50,19 +50,59 @@
 // -- `crate::dma`/`crate::watchdog` need it regardless of whether this
 // (`mmu`-gated) module is even compiled.
 
+//
+// The BCM2712 is the odd one out: every peripheral it has sits above 4 GiB,
+// and the whole low 4 GiB is RAM. So it has none of the low-memory
+// peripheral consts below, and instead names its MMIO as whole 1 GiB
+// regions in `HIGH_DEVICE` (from `bcm2712.dtsi`'s `soc` and `pcie2`
+// `ranges`).
+
+#[cfg(not(feature = "bcm2712"))]
 use crate::soc::PERIPHERAL_BASE;
+
+/// Exclusive top of the RAM the identity map marks Normal: everything
+/// below the peripheral block on chips that keep it in the low 4 GiB, and
+/// the whole low 4 GiB on the BCM2712. Also the bound [`set_uncached`]
+/// checks a region against.
+///
+/// On the BCM2712 that is 4 GiB of address space whatever the board's RAM:
+/// RAM above 4 GiB (8 GB and 16 GB boards) is not mapped, and on a 2 GB
+/// board the top half of what is mapped has nothing behind it.
+#[cfg(not(feature = "bcm2712"))]
+const RAM_END: u64 = PERIPHERAL_BASE as u64;
+#[cfg(feature = "bcm2712")]
+const RAM_END: u64 = 1 << 32;
+
+/// 1 GiB regions above 4 GiB to map as Device, by base address.
+///
+/// On the BCM2712: the two that hold the SoC's own peripheral bus
+/// (`0x10_0000_0000`, 2 GiB, which includes the System Timer, the always-on
+/// GPIO and the GIC), and the one RP1's peripheral window opens into
+/// (`0x1f_0000_0000`). Empty on every other chip.
+#[cfg(feature = "bcm2712")]
+const HIGH_DEVICE: &[u64] = &[0x10_0000_0000, 0x10_4000_0000, 0x1f_0000_0000];
+#[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
+const HIGH_DEVICE: &[u64] = &[];
 
 /// End of the mapped peripheral block (inclusive) -- a round,
 /// 1MB-aligned number comfortably covering every peripheral address this
 /// crate can reach.
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 const PERIPHERAL_END: u32 = 0xFEFF_FFFF;
-#[cfg(all(not(feature = "bcm2711"), feature = "bcm2837"))]
+#[cfg(all(
+    not(feature = "bcm2712"),
+    not(feature = "bcm2711"),
+    feature = "bcm2837"
+))]
 const PERIPHERAL_END: u32 = 0x3FFF_FFFF;
 /// BCM2835's peripheral block is 16MB, from `PERIPHERAL_BASE` out past
 /// USB at `0x2098_0e00`. Same "no chip selected" arm as
 /// [`PERIPHERAL_BASE`] -- see `soc.rs`.
-#[cfg(all(not(feature = "bcm2711"), not(feature = "bcm2837")))]
+#[cfg(all(
+    not(feature = "bcm2712"),
+    not(feature = "bcm2711"),
+    not(feature = "bcm2837")
+))]
 const PERIPHERAL_END: u32 = 0x20FF_FFFF;
 
 /// The ARM-local peripheral block (per-core timers, IRQ routing, and the
@@ -74,22 +114,49 @@ const PERIPHERAL_END: u32 = 0x20FF_FFFF;
 ///
 /// `None` on a chip that has no such block at all, in which case the
 /// identity map has no device region above the peripheral block.
-#[cfg(all(not(feature = "bcm2711"), feature = "bcm2837"))]
+#[cfg(all(
+    not(feature = "bcm2712"),
+    not(feature = "bcm2711"),
+    feature = "bcm2837"
+))]
 const LOCAL_PERIPHERAL: Option<(u32, u32)> = Some((0x4000_0000, 0x400F_FFFF));
 /// BCM2711 low-peripheral-mode base (`bcm2711.dtsi`'s `ranges` entry
 /// mapping bus address `0x4000_0000` to this physical address; GIC-400's
 /// distributor/CPU-interface registers live at `0xFF84_1000`/`0xFF84_2000`
 /// within this block), for the 8MB that entry's size covers -- which runs
 /// to the top of the 32-bit address space.
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 const LOCAL_PERIPHERAL: Option<(u32, u32)> = Some((0xFF80_0000, 0xFFFF_FFFF));
 /// The BCM2835 has no ARM-local peripheral block. It is a uniprocessor
 /// part: the block first appears on the BCM2836 to carry what a second
 /// core needs -- per-core timers and interrupt routing, and the mailboxes
 /// cores signal each other through -- none of which exists here. Nothing
 /// above the peripheral block is mapped at all.
-#[cfg(all(not(feature = "bcm2711"), not(feature = "bcm2837")))]
+#[cfg(all(
+    not(feature = "bcm2712"),
+    not(feature = "bcm2711"),
+    not(feature = "bcm2837")
+))]
 const LOCAL_PERIPHERAL: Option<(u32, u32)> = None;
+
+/// Whether the 2MB block at `base`, somewhere at or above [`RAM_END`] in
+/// the low 4 GiB, is MMIO to map as Device rather than leave invalid.
+#[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
+fn is_low_device(base: u64) -> bool {
+    let in_local_block = match LOCAL_PERIPHERAL {
+        Some((local_base, local_end)) => {
+            base >= u64::from(local_base) && base <= u64::from(local_end)
+        }
+        None => false,
+    };
+    base <= u64::from(PERIPHERAL_END) || in_local_block
+}
+/// The BCM2712 has no MMIO in the low 4 GiB, all of which is below
+/// [`RAM_END`] anyway.
+#[cfg(feature = "bcm2712")]
+fn is_low_device(_base: u64) -> bool {
+    false
+}
 
 #[cfg(target_arch = "arm")]
 #[path = "mmu32.rs"]
@@ -238,7 +305,7 @@ pub unsafe fn set_uncached(base: usize, len: usize) -> Result<(), Error> {
     }
     let end = base
         .checked_add(len)
-        .filter(|end| *end <= PERIPHERAL_BASE as usize)
+        .filter(|end| *end as u64 <= RAM_END)
         .ok_or(Error::NotRam)?;
 
     // Write back and drop every cached copy *before* the memory type

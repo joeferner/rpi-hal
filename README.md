@@ -31,7 +31,9 @@ generates a project on rpi-hal and rpi-kickstart that logs a heartbeat on
 the UART console. `make sd-card` fetches what goes on the SD card, and
 `make run` uploads and boots it with rpi-loader. The boards it offers,
 and everything it knows about each, live in
-[`template/boards.toml`](template/boards.toml).
+[`template/boards.toml`](template/boards.toml). The Pi 5 isn't among them
+yet: rpi-hal's support for it is preliminary, and there is no rpi-loader
+image for it.
 
 Each directory is a separate cargo project with its own toolchain pin
 and `.cargo/config.toml`, so run `cargo` and `make` from inside it (or

@@ -20,8 +20,8 @@ LAN7800) and the on-board Wi-Fi radio.
 | `bcm2837` (default) | Pi 2, Pi 3 |
 | `bcm2835` | Pi 1, Pi Zero |
 
-Not the Pi 4 yet: the time driver is interrupt-driven, and rpi-hal has no
-Pi 4 interrupt controller.
+Not the Pi 4 or the Pi 5 yet: the time driver is interrupt-driven, and
+rpi-hal has no interrupt controller for either.
 
 Its version tracks rpi-hal's, so matching numbers go together.
 

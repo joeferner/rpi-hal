@@ -4,7 +4,8 @@
 [![crates.io](https://img.shields.io/crates/v/rpi-loader.svg)](https://crates.io/crates/rpi-loader)
 
 Host-side CLI for [rpi-loader](https://github.com/joeferner/rpi-hal/tree/main/loader), a
-self-relocating UART command agent for the Raspberry Pi 2, 3 and 4. Flash
+self-relocating UART command agent for the Raspberry Pi 1, Zero, 2, 3 and 4
+(not yet the Pi 5). Flash
 the loader onto an SD card once; after that this tool drives it over
 serial — upload firmware to memory and jump to it, or read, write, list
 and delete files on the card — instead of pulling the card for every

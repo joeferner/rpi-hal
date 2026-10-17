@@ -7,9 +7,10 @@
 set -euo pipefail
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-    echo "usage: $0 <example-name> [bcm2837|bcm2711]" >&2
+    echo "usage: $0 <example-name> [bcm2837|bcm2711|bcm2712]" >&2
     echo "  e.g. $0 aarch64_smoke" >&2
     echo "       $0 aarch64_smoke bcm2711   # Pi 4" >&2
+    echo "       $0 blink bcm2712           # Pi 5" >&2
     exit 1
 fi
 

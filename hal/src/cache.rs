@@ -13,6 +13,12 @@
 //! architecture-specific piece — the cache-maintenance instructions —
 //! lives in a single place.
 
+// The BCM2712 build has none of those DMA-driven drivers yet, so only
+// `clean_invalidate_range` (for `mmu::set_uncached`) has a caller there.
+// The rest stays compiled rather than `cfg`'d out, ready for the first
+// one that arrives.
+#![cfg_attr(feature = "bcm2712", allow(dead_code))]
+
 use crate::barrier::dsb;
 use core::arch::asm;
 

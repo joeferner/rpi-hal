@@ -18,8 +18,34 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `set_clock_rate_hz`'s documentation now says so: it claimed an unasked
   ARM clock stays at its floor, when it runs at full speed for a while
   and drops to the floor later.
+- **Preliminary BCM2712 (Pi 5) support**, behind a new `bcm2712` chip
+  feature, AArch64 only. There is no generated PAC for the chip, so
+  `pac` is a small hand-written module of the same shape. What builds:
+  the System Timer (`timer`), the 40-pin header's GPIO0-27 on the RP1
+  south bridge (`gpio`, the same `Pin` API as the other chips, so the
+  `blink` example builds unchanged), the SoC's always-on GPIO block
+  (`gio_aon`), which carries the ACT LED (new example `blink_act`), and
+  `uart` on RP1's UART0, the same GPIO14/15 pins and `Uart::init` call as
+  the other chips, so `uart_hello` and `uart_echo` build unchanged. On
+  this chip `init` sets RP1's UART clock itself, to its 50 MHz crystal,
+  rather than relying on the firmware's choice; `init_bluetooth` and the
+  `async` half are left out. `Uart::set_baud` now computes its divisor
+  from the chip's UART clock instead of a hardcoded 48 MHz. The
+  AArch64 MMU maps the chip's peripherals above 4 GiB. The rest of the
+  crate is `cfg`'d out on this chip until each driver is checked against
+  it. `multicore`, `fault-report`, `vchiq`/`mmal` and `v3d` are rejected
+  with a `compile_error!`. The card needs `pciex4_reset=0` in
+  `config.txt` to reach RP1.
 
 ### Fixed
+
+- **AArch64 images started with unwind tables instead of code.** With
+  the current nightly, `.eh_frame_hdr`/`.eh_frame` are emitted for
+  `aarch64-unknown-none-softfloat`, and `linker64.ld` didn't place them,
+  so the linker put them at the load address ahead of `.text`. `_start`
+  moved to `0x80800`, and the firmware, which jumps to the load address,
+  started executing `.eh_frame_hdr` data. `linker64.ld` now discards both
+  sections; every profile is `panic = "abort"`, so nothing reads them.
 
 - **A nested critical section hung with the `multicore` feature.** The
   `critical-section` crate allows nesting, and code nests without meaning
