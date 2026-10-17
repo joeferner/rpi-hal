@@ -312,6 +312,15 @@ pub(crate) fn select_function(n: u8, funcsel: u32) {
     }
 }
 
+/// Sets bank-0 pin `n`'s output drive strength to 12mA, the strongest the
+/// pad offers (`DRIVE`, bits 5:4, `0b11`). For drivers that mux their own
+/// pins onto a bus with external pull-ups and capacitance to drive, as
+/// [`crate::i2c`] does: the strength Linux's `rp1.dtsi` gives its I2C pins.
+pub(crate) fn set_drive_12ma(n: u8) {
+    const PAD_DRIVE: u32 = 0b11 << 4;
+    pad_modify(n, PAD_DRIVE, PAD_DRIVE);
+}
+
 /// Applies `pull` to bank-0 pin `n`. The implementation behind
 /// [`Pin::set_pull`], for drivers that mux their own pins.
 pub(crate) fn set_pull(n: u8, pull: Pull) {

@@ -26,10 +26,9 @@ Supported boards:
   only build here that needs a nightly toolchain (see "Or build one").
 - Pi 5 (BCM2712) — the `bcm2712` build (`make build64-bcm2712`),
   **preliminary**: AArch64 only, the only state the Pi 5's firmware
-  starts, and built from source only so far, not part of a release.
-  `boot`, `sd-list` and `sd-read` have been run on a Pi 5. `eeprom-read`/
-  `eeprom-write` are not available: `rpi-hal` has no I2C for this chip
-  yet, so the loader answers them with "not supported". The card needs no
+  starts, and built from source only so far, not part of a release. It
+  has every command, `eeprom-*` included: the HAT ID bus is the same
+  GPIO0/1, driven by RP1's I2C0 rather than the BSC. The card needs no
   firmware files (the Pi 5's lives in its EEPROM), just the loader as
   `kernel8.img` and a `config.txt` with `os_check=0`,
   `kernel_address=0x80000` and `pciex4_reset=0`. The last keeps the PCIe

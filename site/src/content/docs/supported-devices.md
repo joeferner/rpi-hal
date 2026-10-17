@@ -89,13 +89,15 @@ crate out. Working:
 - the ACT LED, on the SoC's own always-on GPIO block;
 - the UART console on GPIO14/15, RP1's UART0;
 - the VideoCore mailbox;
-- the SD card, reads and writes, through both FAT layers.
+- the SD card, reads and writes, through both FAT layers;
+- I2C on the header's GPIO2/3 and the HAT ID bus's GPIO0/1, through RP1's
+  own controllers.
 
 These keep the API they have on the other boards, so the `blink`,
-`uart_hello` and SD card examples build for the Pi 5 unchanged. There is
-no interrupt controller support, second core, I2C, DMA or USB here yet.
-The loader runs on it, built from source (its `eeprom-*` commands wait on
-I2C); Embassy and the project template don't support the Pi 5 yet.
+`uart_hello`, SD card and I2C examples build for the Pi 5 unchanged. There is
+no interrupt controller support, second core, DMA or USB here yet. The
+loader runs on it, built from source; Embassy and the project template
+don't support the Pi 5 yet.
 
 The Pi 5 boots from firmware in its on-board EEPROM, so its card holds no
 firmware files, just `kernel8.img` and a `config.txt` with `os_check=0`,

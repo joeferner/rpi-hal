@@ -8,6 +8,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **I2C constructors that take a frequency**:
+  `I2c::<BSC1>::init_with_frequency` and `I2c::<BSC0>::init_with_frequency`
+  / `init_id_with_frequency`, each `(gpio, bsc, frequency_hz, &mut
+  mailbox, timer) -> Result<Self, mailbox::Error>`. They ask the firmware
+  for the core clock and compute the divider with `divider_for`, so SCL
+  is the rate asked for (or the nearest below it) on any board and any
+  `config.txt`. They exist on the Pi 5 too (all but the camera-bus one),
+  so I2C code written against them builds for every chip. Every I2C
+  example uses them now.
 - **`uart::Uart::supports_baud`**: whether `set_baud` would accept a
   rate, without touching the hardware, computed against the chip's own
   UART clock. For a protocol that agrees to a rate before switching to
@@ -45,12 +54,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into 3.3 V signalling rather than inheriting whatever mode the
   bootloader left it in. The base clock is a fixed 200 MHz, so `init`
   takes but doesn't use `mailbox` there. No DMA or async variants, and
-  `sd::Error::Dma` doesn't exist under `bcm2712`. The
+  `sd::Error::Dma` doesn't exist under `bcm2712`. `i2c` builds too, as a
+  new driver for RP1's I2C controllers (Synopsys DesignWare), with
+  `pac::BSC1` naming I2C1 on GPIO2/3 and `pac::BSC0` I2C0 on GPIO0/1 so
+  header-bus code ports across; it does real repeated starts between a
+  transaction's operations, and `i2c_sh1106_oled` runs unchanged. The
   AArch64 MMU maps the chip's peripherals above 4 GiB. The rest of the
   crate is `cfg`'d out on this chip until each driver is checked against
   it. `multicore`, `fault-report`, `vchiq`/`mmal` and `v3d` are rejected
   with a `compile_error!`. The card needs `pciex4_reset=0` in
   `config.txt` to reach RP1.
+
+### Deprecated
+
+- **`I2c::<BSC1>::init`, `I2c::<BSC0>::init` and `I2c::<BSC0>::init_id`**,
+  which take a raw `DIV.CDIV`, in favour of the `init*_with_frequency`
+  constructors. A raw divider only means what its caller thinks at one
+  core clock: the reset default `0x05dc`, documented as 100 kHz, is
+  166 kHz on a board whose core runs at 250 MHz, and the Pi 5's
+  controller has no divider at all. `i2c::divider_for` stays, for working
+  out the rate a divider produces.
 
 ### Fixed
 

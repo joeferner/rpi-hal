@@ -271,16 +271,18 @@ pub extern "C" fn kmain() -> ! {
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let _ = writeln!(uart, "embassy: async I2C");
 
-    // The divider is computed from the core clock the firmware reports,
-    // not from the datasheet's nominal one — on a board running its core
-    // at 250MHz the difference is a bus two thirds faster than asked for,
-    // which would quietly shrink the transfer this example is timing.
+    // `init_with_frequency` below computes the divider from the core clock
+    // the firmware reports, not from the datasheet's nominal one — on a
+    // board running its core at 250MHz the difference is a bus two thirds
+    // faster than asked for, which would quietly shrink the transfer this
+    // example is timing. The same arithmetic is repeated here only to
+    // print the rate that results.
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
     let core_hz = match mailbox.clock_rate_hz(ClockId::Core) {
         Ok(hz) => hz,
         Err(e) => {
-            let _ = writeln!(uart, "core clock query failed ({e:?}); assuming 250MHz");
-            250_000_000
+            let _ = writeln!(uart, "core clock query failed: {e:?}");
+            halt();
         }
     };
     let divider = i2c::divider_for(core_hz, BUS_HZ);
@@ -320,12 +322,19 @@ pub extern "C" fn kmain() -> ! {
     // the time driver owns is untouched here.
     let mut i2c_timer = Timer::new(unsafe { pac::Peripherals::steal() }.SYSTMR);
     let i2c_timer: &'static Timer = unsafe { make_static(&mut i2c_timer) };
-    let i2c = I2c::<pac::BSC1>::init(
+    let i2c = match I2c::<pac::BSC1>::init_with_frequency(
         &peripherals.GPIO,
         unsafe { pac::Peripherals::steal() }.BSC1,
-        divider,
+        BUS_HZ,
+        &mut mailbox,
         i2c_timer,
-    );
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(uart, "core clock query failed: {e:?}");
+            halt();
+        }
+    };
 
     let mut shared = SharedUart::new(uart);
     let uart: &'static SharedUart = unsafe { make_static(&mut shared) };

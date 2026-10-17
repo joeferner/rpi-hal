@@ -217,6 +217,76 @@ impl core::fmt::Debug for SDIO1 {
     }
 }
 
+/// RP1's I2C1, the controller the header's GPIO2/3 (SDA1/SCL1) route to.
+///
+/// Named `BSC1` after the BCM2835 controller in that role on every earlier
+/// Pi, so code naming the header bus builds on both, but the hardware is
+/// different: a Synopsys DesignWare I2C (`snps,designware-i2c` in
+/// `rp1.dtsi`), driven by [`crate::i2c`]. No `Deref`: the driver reaches
+/// its registers through [`BSC1::ADDR`].
+pub struct BSC1 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for BSC1 {}
+
+impl BSC1 {
+    /// Address of the controller's register block.
+    pub const ADDR: usize = RP1_BASE + 0x0007_4000;
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl core::fmt::Debug for BSC1 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("BSC1").finish()
+    }
+}
+
+/// RP1's I2C0, the controller the header's GPIO0/1 (`ID_SD`/`ID_SC`, the
+/// HAT ID EEPROM bus) route to. Named `BSC0` for the same reason as
+/// [`BSC1`], and the same DesignWare hardware.
+pub struct BSC0 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for BSC0 {}
+
+impl BSC0 {
+    /// Address of the controller's register block.
+    pub const ADDR: usize = RP1_BASE + 0x0007_0000;
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl core::fmt::Debug for BSC0 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("BSC0").finish()
+    }
+}
+
 /// RP1's UART0, the PL011 that GPIO14/15 on the header route to.
 pub struct UART0 {
     _marker: PhantomData<*const ()>,
@@ -366,6 +436,10 @@ pub struct Peripherals {
     pub SDIO1: SDIO1,
     /// RP1's UART0.
     pub UART0: UART0,
+    /// RP1's I2C0 (the HAT ID bus).
+    pub BSC0: BSC0,
+    /// RP1's I2C1 (the header's I2C bus).
+    pub BSC1: BSC1,
     /// RP1's header GPIO bank.
     pub GPIO: GPIO,
     /// The always-on GPIO block.
@@ -395,6 +469,8 @@ impl Peripherals {
             SYSTMR: unsafe { SYSTMR::steal() },
             SDIO1: unsafe { SDIO1::steal() },
             UART0: unsafe { UART0::steal() },
+            BSC0: unsafe { BSC0::steal() },
+            BSC1: unsafe { BSC1::steal() },
             GPIO: unsafe { GPIO::steal() },
             GIO_AON: unsafe { GIO_AON::steal() },
         }

@@ -20,9 +20,7 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 | `bcm2835` | Pi 1, Pi Zero | `kernel.img` |
 
 The Pi 5 has a preliminary `bcm2712` build (`make build64-bcm2712`, a
-`kernel8.img`), from source only so far: it isn't in a release yet. It
-boots images and reads the card; its `eeprom-*` commands answer "not
-supported", since rpi-hal has no I2C for that chip yet.
+`kernel8.img`), from source only so far: it isn't in a release yet.
 
 [Start a project](../../start/) puts the right image on the card under
 the right name. Releases carry all five images and their checksums; the

@@ -7,16 +7,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use embedded_alloc::LlffHeap as Heap;
-// The EEPROM commands drive I2C on BSC0, which rpi-hal does not cover on
-// the BCM2712 yet; everything EEPROM-related is compiled out there and the
-// two commands answer `ERR_UNSUPPORTED` instead (see `cmd_eeprom_read`).
-#[cfg(not(feature = "bcm2712"))]
 use embedded_hal::i2c::I2c as _;
 use resident_fat::{FatError, FileSystem};
-#[cfg(not(feature = "bcm2712"))]
 use rpi_hal::i2c::I2c;
 use rpi_hal::mailbox::Mailbox;
-#[cfg(not(feature = "bcm2712"))]
 use rpi_hal::pac::BSC0;
 use rpi_hal::sd::{Sd, SdBlockDevice, SdBlockDeviceError};
 use rpi_hal::timer::Timer;
@@ -102,13 +96,9 @@ const ERR_SD_INIT: u8 = 1;
 const ERR_NOT_FOUND: u8 = 2;
 const ERR_FS: u8 = 3;
 const ERR_BAD_PATH: u8 = 5;
-#[cfg(not(feature = "bcm2712"))]
 const ERR_I2C: u8 = 7;
-#[cfg(not(feature = "bcm2712"))]
 const ERR_VERIFY: u8 = 8;
-#[cfg(not(feature = "bcm2712"))]
 const ERR_RANGE: u8 = 9;
-#[cfg(not(feature = "bcm2712"))]
 const ERR_READBACK: u8 = 10;
 const ERR_BAD_NAME: u8 = 11;
 const ERR_EXISTS: u8 = 12;
@@ -118,11 +108,6 @@ const ERR_NO_SPACE: u8 = 15;
 const ERR_NO_MEMORY: u8 = 16;
 const ERR_CARD: u8 = 17;
 const ERR_NO_VOLUME: u8 = 18;
-/// A command this build of the loader doesn't implement on its board: the
-/// `CMD_EEPROM_*` pair on the BCM2712. Only that build sends it, but the
-/// code is reserved on every board, like every other here.
-#[cfg(feature = "bcm2712")]
-const ERR_UNSUPPORTED: u8 = 19;
 
 /// Stay clear of the relocated loader's own copy — see `boot.s`. Every
 /// `CMD_MEM_WRITE`/`CMD_EXEC` address must fall below this, so a client
@@ -139,20 +124,15 @@ const STREAM_CHUNK_SIZE: usize = 4096;
 /// the wire (to stay in sync) and rejected with [`ERR_BAD_PATH`].
 const MAX_PATH: usize = 255;
 
-/// BSC clock divider for the EEPROM bus: the reset default, 100kHz at a
-/// 150MHz core clock and 166kHz at 250MHz. Either is within what every
-/// 24C-series part does, and the HAT specification only asks for 100kHz —
-/// there is nothing to gain from computing an exact rate here, which
-/// would mean asking the mailbox for the real core clock first.
-#[cfg(not(feature = "bcm2712"))]
-const EEPROM_CDIV: u16 = 0x05dc;
+/// SCL rate for the EEPROM bus: what the HAT specification requires the ID
+/// EEPROM to work at, and within what every 24C-series part does.
+const EEPROM_FREQUENCY_HZ: u32 = 100_000;
 
 /// One past the highest EEPROM byte this loader will address. The two-byte
 /// addressing it uses (what every part from the 24C32 up expects, and the
 /// HAT specification's floor is a 24C32) reaches 64 KiB and no further, so
 /// a request past this is refused with [`ERR_RANGE`] rather than
 /// silently wrapping to the start of the device.
-#[cfg(not(feature = "bcm2712"))]
 const EEPROM_LIMIT: usize = 0x1_0000;
 
 /// Largest page write accepted from the host. A page write must not cross
@@ -160,13 +140,11 @@ const EEPROM_LIMIT: usize = 0x1_0000;
 /// page rather than carrying, so an overrunning write silently overwrites
 /// the *start* of the same page. The host names its part's page size; this
 /// only bounds the buffer.
-#[cfg(not(feature = "bcm2712"))]
 const EEPROM_MAX_PAGE: usize = 128;
 
 /// How long to leave a page alone after writing it, while the part
 /// performs its internal write cycle. Datasheets quote 5ms maximum for
 /// this family; this is that, rounded up.
-#[cfg(not(feature = "bcm2712"))]
 const EEPROM_WRITE_CYCLE_MS: u32 = 6;
 
 /// How many times the verifying read is attempted before the page is
@@ -174,7 +152,6 @@ const EEPROM_WRITE_CYCLE_MS: u32 = 6;
 /// datasheet number rather than a measurement of the part actually
 /// fitted: a slow one answers nothing on the first attempt, and the cost
 /// of finding out is one more transfer.
-#[cfg(not(feature = "bcm2712"))]
 const EEPROM_READBACK_ATTEMPTS: u32 = 4;
 
 /// The heap `resident-fat` keeps a mounted volume's allocation table and
@@ -570,7 +547,6 @@ fn cmd_sd_mkdir(uart: &mut Uart, timer: &Timer) -> Result<(), u8> {
 /// leading `OK` is out, the stream is committed, and a later bus error
 /// can only stop it short and leave the host's per-chunk timeout to
 /// report it.
-#[cfg(not(feature = "bcm2712"))]
 fn cmd_eeprom_read(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
     let address = uart.read_byte();
     let offset = read_u32_le(uart) as usize;
@@ -579,7 +555,7 @@ fn cmd_eeprom_read(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Resu
         return Err(ERR_RANGE);
     }
 
-    let mut i2c = init_i2c(timer);
+    let mut i2c = init_i2c(timer)?;
     let mut probe = [0u8; 1];
     eeprom_read_at(&mut i2c, address, offset as u16, &mut probe).map_err(|_| ERR_I2C)?;
 
@@ -623,7 +599,6 @@ fn cmd_eeprom_read(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Resu
 /// already written rather than failing. It must divide the page size of
 /// the real part; the HAT specification's floor (a 24C32) has 32-byte
 /// pages, which is what the host defaults to.
-#[cfg(not(feature = "bcm2712"))]
 fn cmd_eeprom_write(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Result<(), u8> {
     let address = uart.read_byte();
     let offset = read_u32_le(uart) as usize;
@@ -646,7 +621,7 @@ fn cmd_eeprom_write(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Res
         return Err(ERR_RANGE);
     }
 
-    let mut i2c = init_i2c(timer);
+    let mut i2c = init_i2c(timer)?;
     uart.write_byte(OK);
 
     let mut failure = None;
@@ -704,7 +679,6 @@ fn cmd_eeprom_write(uart: &mut Uart, timer: &Timer, chunk_buf: &mut [u8]) -> Res
 /// out [`EEPROM_WRITE_CYCLE_MS`] has no such race, and the read-back that
 /// follows is the real evidence the page took — so the delay only has to
 /// be long enough, not exact.
-#[cfg(not(feature = "bcm2712"))]
 fn eeprom_write_pages(
     i2c: &mut I2c<'_, BSC0>,
     timer: &Timer,
@@ -756,11 +730,11 @@ fn eeprom_write_pages(
 /// read the part answers from its address counter, incrementing through.
 ///
 /// The two are separate transactions with a STOP between them rather than
-/// a repeated start, which this hardware's driver does not offer. That is
-/// safe here specifically because the address write carries no data byte:
-/// the part latches the counter without starting a write cycle, and the
-/// counter survives the STOP.
-#[cfg(not(feature = "bcm2712"))]
+/// a repeated start, which the Pi 1-4's I2C driver does not offer (the
+/// Pi 5's does, but one sequence that works on every board is simpler).
+/// That is safe here specifically because the address write carries no
+/// data byte: the part latches the counter without starting a write cycle,
+/// and the counter survives the STOP.
 fn eeprom_read_at(
     i2c: &mut I2c<'_, BSC0>,
     address: u8,
@@ -773,7 +747,6 @@ fn eeprom_read_at(
 
 /// Whether `offset..offset + length` fits inside what two-byte addressing
 /// can reach (see [`EEPROM_LIMIT`]).
-#[cfg(not(feature = "bcm2712"))]
 fn in_eeprom_range(offset: usize, length: usize) -> bool {
     offset
         .checked_add(length)
@@ -788,40 +761,25 @@ fn in_eeprom_range(offset: usize, length: usize) -> bool {
 /// takes: BSC0's other one is GPIO44/45, the camera/display connector bus,
 /// and the two cannot both be muxed at once.
 ///
+/// On a Pi 5 the same pins belong to RP1's I2C0, and the same constructor
+/// reaches them.
+///
 /// Re-`steal()`s its peripherals per command, exactly as [`mount`] does,
 /// so nothing has to be threaded through the command loop; sound for the
 /// same reason — single core, and the previous command's driver is long
-/// dropped.
-#[cfg(not(feature = "bcm2712"))]
-fn init_i2c(timer: &Timer) -> I2c<'_, BSC0> {
+/// dropped. Fails with [`ERR_I2C`] if the firmware won't report the core
+/// clock the bus rate is divided from, before anything touches the bus.
+fn init_i2c(timer: &Timer) -> Result<I2c<'_, BSC0>, u8> {
     let peripherals = unsafe { pac::Peripherals::steal() };
-    I2c::<BSC0>::init_id(&peripherals.GPIO, peripherals.BSC0, EEPROM_CDIV, timer)
-}
-
-/// `CMD_EEPROM_READ` on the BCM2712, where rpi-hal has no I2C driver yet:
-/// reads the command's header (`u8` address, `u32` offset, `u32` length)
-/// so the link stays in step, then refuses with [`ERR_UNSUPPORTED`]. The
-/// host sends nothing more until it sees `OK`, so the header is all there
-/// is to drain.
-#[cfg(feature = "bcm2712")]
-fn cmd_eeprom_read(uart: &mut Uart, _: &Timer, _: &mut [u8]) -> Result<(), u8> {
-    let _address = uart.read_byte();
-    let _offset = read_u32_le(uart);
-    let _length = read_u32_le(uart);
-    Err(ERR_UNSUPPORTED)
-}
-
-/// `CMD_EEPROM_WRITE` on the BCM2712: as [`cmd_eeprom_read`], draining its
-/// header (`u8` address, then `u32` offset, total size, chunk size and
-/// page size) before refusing. The payload only follows an `OK`, so none
-/// is sent.
-#[cfg(feature = "bcm2712")]
-fn cmd_eeprom_write(uart: &mut Uart, _: &Timer, _: &mut [u8]) -> Result<(), u8> {
-    let _address = uart.read_byte();
-    for _ in 0..4 {
-        let _ = read_u32_le(uart);
-    }
-    Err(ERR_UNSUPPORTED)
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    I2c::<BSC0>::init_id_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC0,
+        EEPROM_FREQUENCY_HZ,
+        &mut mailbox,
+        timer,
+    )
+    .map_err(|_| ERR_I2C)
 }
 
 /// A mounted FAT volume on the SD card.

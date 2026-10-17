@@ -4,9 +4,9 @@
 //! GPIO2 (SDA1)/GPIO3 (SCL1), the general-purpose bus on the 40-pin header,
 //! and [`I2c<BSC0>`] drives BSC0, on either of its two
 //! routings — GPIO44 (SDA0)/GPIO45 (SCL0), the one the camera/display
-//! connectors use on a Pi 3 ([`I2c::<BSC0>::init`]),
+//! connectors use on a Pi 3 ([`I2c::<BSC0>::init_with_frequency`]),
 //! or GPIO0 (ID_SD)/GPIO1 (ID_SC), the HAT ID EEPROM bus on the 40-pin
-//! header ([`I2c::<BSC0>::init_id`]). The
+//! header ([`I2c::<BSC0>::init_id_with_frequency`]). The
 //! register layout is identical across instances (both deref to the same PAC
 //! register block); only the pin mux and the peripheral token differ, so
 //! the transfer logic is shared and each routing gets its own constructor.
@@ -18,7 +18,7 @@
 //! is the caller's `with_timeout` rather than the deadline below.
 //!
 //! Every blocking transfer is bounded against the System Timer, which is why
-//! [`I2c::init`] takes a [`Timer`]. I2C is the one
+//! the constructors take a [`Timer`]. I2C is the one
 //! bus in this crate where a *foreign* device — not silicon on the same
 //! die — decides whether a transfer ever finishes, and a device that
 //! acknowledges its address and then stops driving sets neither `S.ERR`
@@ -30,6 +30,7 @@
 
 use core::ops::Deref;
 
+use crate::mailbox::{ClockId, Mailbox};
 use crate::pac::{bsc0, BSC0, BSC1, GPIO};
 use crate::timer::Timer;
 
@@ -123,8 +124,9 @@ impl embedded_hal::i2c::Error for Error {
 }
 
 /// The `DIV.CDIV` value that clocks SCL at or below `target_hz`, given
-/// the SoC core clock `core_hz` — the arithmetic behind `init`'s
-/// `clock_divider`, in one place rather than in every application.
+/// the SoC core clock `core_hz` — what the `init*_with_frequency`
+/// constructors program, public so the rate actually produced
+/// (`core_hz / returned`) can be worked out ahead of time.
 ///
 /// SCL is `core_hz / CDIV`, so this is that division rounded *up*, and
 /// then up again to the even value the hardware requires (it rounds an
@@ -137,11 +139,11 @@ impl embedded_hal::i2c::Error for Error {
 /// actually produced is `core_hz / returned`.
 ///
 /// `core_hz` has to come from the firmware rather than a constant, which
-/// is the whole reason `init` does not take a frequency itself:
+/// is why those constructors take the mailbox:
 ///
 /// ```ignore
 /// let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
-/// let i2c = I2c::init(gpio, bsc1, i2c::divider_for(core_hz, 100_000), &timer);
+/// let actual_hz = core_hz / u32::from(i2c::divider_for(core_hz, 100_000));
 /// ```
 ///
 /// The core clock moves with `config.txt` and with the firmware's own
@@ -168,9 +170,10 @@ pub fn divider_for(core_hz: u32, target_hz: u32) -> u16 {
 
 /// Blocking driver for a BCM2835 BSC I2C controller, generic over the
 /// instance `I` (defaulting to [`BSC1`] so `I2c` alone means the
-/// general-purpose header bus). Construct with [`I2c::<BSC1>::init`] for
-/// I2C1 on GPIO2/3, [`I2c::<BSC0>::init`] for BSC0 on GPIO44/45, or
-/// [`I2c::<BSC0>::init_id`] for BSC0 on GPIO0/1.
+/// general-purpose header bus). Construct with
+/// [`I2c::<BSC1>::init_with_frequency`] for I2C1 on GPIO2/3,
+/// [`I2c::<BSC0>::init_with_frequency`] for BSC0 on GPIO44/45, or
+/// [`I2c::<BSC0>::init_id_with_frequency`] for BSC0 on GPIO0/1.
 ///
 /// A note on BSC0: one controller, two routings this crate can select
 /// between — GPIO44/45 (the camera/display connector bus on a Pi 3) and
@@ -182,7 +185,7 @@ pub fn divider_for(core_hz: u32, target_hz: u32) -> u16 {
 /// camera/display bus — so a program driving the GPIO44/45 routing should
 /// have taken the machine over rather than leaving the firmware's camera
 /// stack running to race on the bus. The GPIO0/1 routing is quieter; see
-/// [`I2c::<BSC0>::init_id`] for why.
+/// [`I2c::<BSC0>::init_id_with_frequency`] for why.
 ///
 /// Implements `embedded_hal::i2c::I2c` via its single required
 /// `transaction` method — every [`embedded_hal::i2c::Operation`] in a
@@ -210,27 +213,54 @@ pub struct I2c<'a, I = BSC1> {
 }
 
 impl<'a> I2c<'a, BSC1> {
-    /// Routes GPIO2/3 to BSC1 (ALT0: SDA1, SCL1), sets the clock
-    /// divider, and enables the peripheral (idle, no transfer yet).
+    /// Routes GPIO2/3 to BSC1 (ALT0: SDA1, SCL1), sets SCL to
+    /// `frequency_hz` or the nearest rate below it, and enables the
+    /// peripheral (idle, no transfer yet).
     ///
-    /// `clock_divider` is passed straight through to `DIV.CDIV` rather
-    /// than computed from a target frequency, for the same reason as
-    /// `spi::Spi::init`'s `clock_divider`: the core clock isn't a
-    /// fixed, firmware-guaranteed value the way UART0's reference
-    /// clock is (see `uart.rs`'s `init`) — a divider computed against
-    /// an assumed core clock would silently be wrong on a board
-    /// configured differently. The reset default (`0x5dc` = 1500)
-    /// gives 100kHz standard mode at BCM2835's typical 150MHz core
-    /// clock; halve it for 400kHz fast mode at that same clock.
+    /// The divider is computed against the core clock the firmware reports
+    /// (`mailbox`, [`ClockId::Core`]), so
+    /// the rate is the one asked for on any board and any `config.txt`;
+    /// see [`divider_for`]. Fails only if that query does.
     ///
-    /// To pick one from a frequency instead — which is the only way to
-    /// get the rate you asked for on a board whose core clock is not
-    /// 150MHz — ask the mailbox for the real core clock and hand it to
-    /// [`divider_for`].
+    /// The same constructor exists on the Pi 5, whose I2C controller has
+    /// no divider at all, so code using it builds for every chip.
     ///
     /// `timer` bounds every transfer this driver performs — see this
     /// type's doc comment.
+    pub fn init_with_frequency(
+        gpio: &GPIO,
+        bsc1: BSC1,
+        frequency_hz: u32,
+        mailbox: &mut Mailbox,
+        timer: &'a Timer,
+    ) -> Result<Self, crate::mailbox::Error> {
+        let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+        Ok(Self::with_divider(
+            gpio,
+            bsc1,
+            divider_for(core_hz, frequency_hz),
+            timer,
+        ))
+    }
+
+    /// Routes GPIO2/3 to BSC1 and passes `clock_divider` straight through
+    /// to `DIV.CDIV`.
+    ///
+    /// Deprecated because a raw divider only means what its caller thinks
+    /// it means at one core clock: the reset default (`0x5dc` = 1500) is
+    /// documented as 100kHz for the datasheet's 150MHz core and is 166kHz
+    /// on a board running 250MHz, and the Pi 5's controller has no divider
+    /// at all. [`init_with_frequency`](Self::init_with_frequency) asks for
+    /// the rate instead, and gets it right on every chip.
+    #[deprecated(
+        note = "use `init_with_frequency`, which sets SCL in Hz against the real core clock and exists on every chip"
+    )]
     pub fn init(gpio: &GPIO, bsc1: BSC1, clock_divider: u16, timer: &'a Timer) -> Self {
+        Self::with_divider(gpio, bsc1, clock_divider, timer)
+    }
+
+    /// The pin mux and setup both constructors share.
+    fn with_divider(gpio: &GPIO, bsc1: BSC1, clock_divider: u16, timer: &'a Timer) -> Self {
         gpio.gpfsel0()
             .modify(|_, w| w.fsel2().sda1().fsel3().scl1());
         Self::configure(bsc1, clock_divider, timer)
@@ -240,24 +270,36 @@ impl<'a> I2c<'a, BSC1> {
 impl<'a> I2c<'a, BSC0> {
     /// Routes GPIO44/45 to BSC0 (ALT1: SDA0, SCL0) — the camera/display
     /// connector bus on a Pi 3, not BSC0's GPIO0/1 HAT-EEPROM routing
-    /// ([`init_id`](Self::init_id)) — sets the clock divider, and enables
-    /// the peripheral.
+    /// ([`init_id_with_frequency`](Self::init_id_with_frequency)) — sets
+    /// SCL as [`I2c::<BSC1>::init_with_frequency`] does, and enables the
+    /// peripheral.
     ///
-    /// See [`I2c::<BSC1>::init`] on why `clock_divider` is a raw `CDIV`
-    /// value rather than a target frequency; the same reasoning applies.
-    /// See this type's doc comment on BSC0 being firmware-arbitrated,
-    /// and on `timer` bounding every transfer.
-    pub fn init(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
-        gpio.gpfsel4()
-            .modify(|_, w| w.fsel44().sda0().fsel45().scl0());
-        Self::configure(bsc0, clock_divider, timer)
+    /// See this type's doc comment on BSC0 being firmware-arbitrated, and
+    /// on `timer` bounding every transfer. Not on the Pi 5, whose camera
+    /// and display connectors have I2C buses of their own.
+    pub fn init_with_frequency(
+        gpio: &GPIO,
+        bsc0: BSC0,
+        frequency_hz: u32,
+        mailbox: &mut Mailbox,
+        timer: &'a Timer,
+    ) -> Result<Self, crate::mailbox::Error> {
+        let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+        Ok(Self::camera_with_divider(
+            gpio,
+            bsc0,
+            divider_for(core_hz, frequency_hz),
+            timer,
+        ))
     }
 
     /// Routes GPIO0/1 to BSC0 (ALT0: SDA0, SCL0) — `ID_SD`/`ID_SC` on
-    /// pins 27/28 of the 40-pin header, the HAT ID EEPROM bus — sets the
-    /// clock divider, and enables the peripheral.
+    /// pins 27/28 of the 40-pin header, the HAT ID EEPROM bus — sets SCL
+    /// as [`I2c::<BSC1>::init_with_frequency`] does, and enables the
+    /// peripheral. Exists on the Pi 5 too, for the same pins.
     ///
-    /// The *same* controller as [`init`](Self::init), on the other
+    /// The *same* controller as
+    /// [`init_with_frequency`](Self::init_with_frequency), on the other
     /// routing: one of the two, not both, since enabling a pin's ALT
     /// function is what connects it to the peripheral. Taking this one
     /// therefore gives up the camera/display bus, and a driver written
@@ -277,14 +319,56 @@ impl<'a> I2c<'a, BSC0> {
     /// boot-time probe, and that a HAT may itself expect to be the only
     /// thing here.
     ///
-    /// See [`I2c::<BSC1>::init`] on why `clock_divider` is a raw `CDIV`
-    /// value rather than a target frequency; the same reasoning applies.
     /// The HAT specification requires the ID EEPROM to work at 100kHz,
     /// and a HAT's designer had no reason to design for more, so this is
     /// the routing least worth overclocking. See this type's doc comment
     /// on `timer` bounding every transfer.
+    pub fn init_id_with_frequency(
+        gpio: &GPIO,
+        bsc0: BSC0,
+        frequency_hz: u32,
+        mailbox: &mut Mailbox,
+        timer: &'a Timer,
+    ) -> Result<Self, crate::mailbox::Error> {
+        let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
+        Ok(Self::id_with_divider(
+            gpio,
+            bsc0,
+            divider_for(core_hz, frequency_hz),
+            timer,
+        ))
+    }
+
+    /// [`init_with_frequency`](Self::init_with_frequency) with a raw
+    /// `DIV.CDIV` value instead of a frequency. Deprecated for the reason
+    /// given on [`I2c::<BSC1>::init`].
+    #[deprecated(
+        note = "use `init_with_frequency`, which sets SCL in Hz against the real core clock"
+    )]
+    pub fn init(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
+        Self::camera_with_divider(gpio, bsc0, clock_divider, timer)
+    }
+
+    /// [`init_id_with_frequency`](Self::init_id_with_frequency) with a raw
+    /// `DIV.CDIV` value instead of a frequency. Deprecated for the reason
+    /// given on [`I2c::<BSC1>::init`].
+    #[deprecated(
+        note = "use `init_id_with_frequency`, which sets SCL in Hz against the real core clock and exists on every chip"
+    )]
     pub fn init_id(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
-        // Pulls are left as they are, as in the other two `init`s. GPIO0/1
+        Self::id_with_divider(gpio, bsc0, clock_divider, timer)
+    }
+
+    /// The camera/display routing's pin mux and setup.
+    fn camera_with_divider(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
+        gpio.gpfsel4()
+            .modify(|_, w| w.fsel44().sda0().fsel45().scl0());
+        Self::configure(bsc0, clock_divider, timer)
+    }
+
+    /// The HAT ID routing's pin mux and setup.
+    fn id_with_divider(gpio: &GPIO, bsc0: BSC0, clock_divider: u16, timer: &'a Timer) -> Self {
+        // Pulls are left as they are, as on the other routings. GPIO0/1
         // power up pulled high, which is the direction an I2C line wants,
         // and the board's 1.8kΩ external pull-ups are what actually hold
         // the bus up regardless.
