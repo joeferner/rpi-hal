@@ -1,6 +1,6 @@
 [package]
 name = "rpi-loader-firmware"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Self-relocating UART upload loader for Raspberry Pi 1/Zero/2/3/4/5 (BCM2835/BCM2836/BCM2837/BCM2711/BCM2712) — flash once, then upload new firmware over serial instead of rewriting the SD card"
 license = "MIT OR Apache-2.0"
@@ -50,7 +50,7 @@ publish = false
 # chip's peripheral map and ARMv6 boot code arrived; 0.8.0 for the
 # `resident-fat` feature and its `sd::SdBlockDevice`; 0.9.0 for that
 # feature on `resident-fat` 0.3.
-rpi-hal = { version = "0.9.0", path = "../../hal", default-features = false, features = ["resident-fat"] }
+rpi-hal = { version = "0.10.0", path = "../../hal", default-features = false, features = ["resident-fat"] }
 # The FAT layer itself. rpi-hal only provides the `BlockDevice` adapter, so
 # the loader depends on this directly for the `FileSystem` it drives. Must
 # be the same major rpi-hal 0.9.0 pins: under a different one, rpi-hal's

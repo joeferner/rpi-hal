@@ -20,7 +20,7 @@ a default, because there is no sensible default chip:
 | `bcm2837` | BCM2836, BCM2837 | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2711` | BCM2711 | Pi 4 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2835` | BCM2835 | Pi 1, Pi Zero, Pi Zero W | `armv6-none-eabi` (nightly) |
-| `bcm2712` | BCM2712 | Pi 5 | `aarch64-unknown-none-softfloat` (unreleased) |
+| `bcm2712` | BCM2712 | Pi 5 | `aarch64-unknown-none-softfloat` (from 0.10.0) |
 
 ## Pi 2 and Pi 3
 
@@ -73,9 +73,8 @@ board needs **nightly** Rust and `-Z build-std`. A project from
 
 ## Pi 5
 
-**BCM2712, Cortex-A76. Preliminary, and not in a released version yet**:
-it is on rpi-hal's `main` branch, and arrives on crates.io with the next
-release. 64-bit only, since the Pi 5's firmware starts nothing else.
+**BCM2712, Cortex-A76. Preliminary**, from rpi-hal 0.10.0. 64-bit only,
+since the Pi 5's firmware starts nothing else.
 
 Most of the Pi 5's I/O moved off the SoC onto a separate chip, RP1,
 reached over PCIe, so its peripherals are new hardware rather than the
@@ -96,8 +95,8 @@ crate out. Working:
 These keep the API they have on the other boards, so the `blink`,
 `uart_hello`, SD card and I2C examples build for the Pi 5 unchanged. There is
 no interrupt controller support, second core, DMA or USB here yet. The
-loader runs on it, built from source; Embassy and the project template
-don't support the Pi 5 yet.
+loader runs on it (from 0.6.0); Embassy and the project template don't
+support the Pi 5 yet.
 
 The Pi 5 boots from firmware in its on-board EEPROM, so its card holds no
 firmware files, just `kernel8.img` and a `config.txt` with `os_check=0`,

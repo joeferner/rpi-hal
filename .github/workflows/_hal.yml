@@ -54,6 +54,9 @@ jobs:
       # `-Zbuild-std`. The ARMv6 examples ride along in `make examples`
       # below, and `make clippy` above lints both.
       - run: make build-bcm2835
+      # The BCM2712 (Pi 5) library and the examples built for it, on the
+      # AArch64 target the recipe names itself.
+      - run: make build-bcm2712
       - run: make examples
       - run: make doc
 
