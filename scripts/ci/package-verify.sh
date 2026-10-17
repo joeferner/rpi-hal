@@ -38,15 +38,6 @@ meta="$(cargo metadata --no-deps --format-version 1)"
 name="$(jq -r '.packages[0].name' <<<"$meta")"
 version="$(jq -r '.packages[0].version' <<<"$meta")"
 
-# Still refuses a dirty working tree, as `cargo package` does: what gets
-# checked is the committed state.
-cargo package --no-verify "$@"
-
-unpacked="$CARGO_TARGET_DIR/unpacked"
-rm -rf "$unpacked"
-mkdir -p "$unpacked"
-tar -xzf "$CARGO_TARGET_DIR/package/$name-$version.crate" -C "$unpacked"
-
 # Every dependency the manifest gives a `path` -- normal, dev or build --
 # once each. A patch the build doesn't end up using only draws a warning.
 patches=()
@@ -54,5 +45,21 @@ while IFS=$'\t' read -r dep path; do
     echo "package-verify: $dep from $path"
     patches+=(--config "patch.crates-io.$dep.path=\"$path\"")
 done < <(jq -r '[.packages[0].dependencies[] | select(.path != null) | [.name, .path]] | unique[] | @tsv' <<<"$meta")
+
+# Still refuses a dirty working tree, as `cargo package` does: what gets
+# checked is the committed state.
+#
+# The patches go here too, not only on the build below. Even with
+# `--no-verify`, packaging resolves every dependency to write the
+# package's lockfile, and it does so against crates.io; a requirement on a
+# sibling version that isn't published yet -- a release PR raising
+# rpi-hal-embassy's `rpi-hal` to the 0.x it is about to release, say --
+# then fails with "failed to select a version" before the build runs.
+cargo package --no-verify "$@" "${patches[@]}"
+
+unpacked="$CARGO_TARGET_DIR/unpacked"
+rm -rf "$unpacked"
+mkdir -p "$unpacked"
+tar -xzf "$CARGO_TARGET_DIR/package/$name-$version.crate" -C "$unpacked"
 
 cargo build --manifest-path "$unpacked/$name-$version/Cargo.toml" "$@" "${patches[@]}"
