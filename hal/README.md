@@ -47,9 +47,13 @@ Supported Devices:
   the Pi 5's I/O lives on the separate RP1 chip behind PCIe, and only a
   first slice of it is covered: boot, the MMU and caches, the System
   Timer, the header GPIO on RP1 (`blink`), the ACT LED on the SoC's
-  always-on GPIO block (`blink_act`), and the UART console on GPIO14/15,
-  RP1's UART0 (`uart_hello`). Those keep the same API as on the other
-  boards, so `blink` and `uart_hello` build unchanged. Everything else is
+  always-on GPIO block (`blink_act`), the UART console on GPIO14/15,
+  RP1's UART0 (`uart_hello`), the VideoCore mailbox (`mailbox_props`),
+  and the SD card, reads and writes, through both FAT layers (`sd_read`,
+  `sd_resident_fat_read`, `sd_fat_write`). Those keep the same API as on
+  the other boards, so each of those examples builds unchanged; the SD
+  driver's DMA and async variants are the exception, as on the Pi 4.
+  Everything else is
   compiled out for this chip until it has been brought up there. The card
   needs `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
   `config.txt` (see `docs/getting-started.md`).

@@ -6,11 +6,18 @@
 // `rpi_hal::sd` provides through the `embedded-sdmmc` FAT layer -- the
 // write-side companion to `sd_fat_read.rs`.
 //
-// It draws a random 32-bit value from the hardware RNG, writes it as a
-// decimal-text line to a scratch file, then reopens that file and reads
-// it back, checking the bytes round-trip exactly. A fresh random value
-// each run means a stale file left over from a previous run can't make
-// the check pass by accident.
+// It takes the System Timer's microsecond count at startup as a 32-bit
+// value, writes it as a decimal-text line to a scratch file, then reopens
+// that file and reads it back, checking the bytes round-trip exactly. The
+// firmware's boot time varies by far more than a microsecond from one
+// power-on to the next, so the value differs every run, and a stale file
+// left over from a previous run can't make the check pass by accident.
+// (The timer rather than the hardware RNG because every chip has one:
+// `rpi_hal::rng` covers the Pi 2/3 only.)
+//
+// The read-back can be served from `embedded-sdmmc`'s own block cache
+// rather than the card. The independent check is the card itself: put it
+// in a computer and `TEST.TXT` should hold the value this printed.
 //
 // SAFETY OF THE BOOT CARD: this writes only to `TEST.TXT` in the root of
 // the boot FAT partition, and never to the boot files (`kernel*.img`,
@@ -28,7 +35,6 @@ use embedded_sdmmc::{Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager};
 use rpi_hal::halt;
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::pac;
-use rpi_hal::rng::Rng;
 use rpi_hal::sd::{Sd, SdCard, SdCardError};
 use rpi_hal::timer::Timer;
 use rpi_hal::uart::Uart;
@@ -158,12 +164,16 @@ pub extern "C" fn kmain() -> ! {
     let timer = Timer::new(peripherals.SYSTMR);
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
 
-    // A fresh random value each run, so a stale scratch file can't make
-    // the round-trip check pass by coincidence.
-    let value = Rng::new().next_u32();
+    // A value that differs every run, so a stale scratch file can't make
+    // the round-trip check pass by coincidence -- see the module comment.
+    let value = timer.now_micros() as u32;
 
     let _ = writeln!(uart, "initializing SD card...");
-    let sd = match Sd::init(&peripherals.GPIO, peripherals.EMMC, &mut mailbox, &timer) {
+    // `steal_emmc` rather than `peripherals.EMMC`: it names whichever
+    // controller this chip's card slot is on, which is only `EMMC` on the
+    // Pi 2/3.
+    let emmc = unsafe { Sd::steal_emmc() };
+    let sd = match Sd::init(&peripherals.GPIO, emmc, &mut mailbox, &timer) {
         Ok(sd) => sd,
         Err(e) => {
             let _ = writeln!(uart, "SD init failed: {e:?}");

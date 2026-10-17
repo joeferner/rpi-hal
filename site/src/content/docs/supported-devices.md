@@ -87,11 +87,13 @@ crate out. Working:
 - the System Timer;
 - GPIO on the 40-pin header, through RP1;
 - the ACT LED, on the SoC's own always-on GPIO block;
-- the UART console on GPIO14/15, RP1's UART0.
+- the UART console on GPIO14/15, RP1's UART0;
+- the VideoCore mailbox;
+- the SD card, reads and writes, through both FAT layers.
 
-GPIO and the UART keep the API they have on the other boards, so the
-`blink` and `uart_hello` examples build for the Pi 5 unchanged. There is
-no interrupt controller support, second core, SD card or USB here yet,
+These keep the API they have on the other boards, so the `blink`,
+`uart_hello` and SD card examples build for the Pi 5 unchanged. There is
+no interrupt controller support, second core, I2C, DMA or USB here yet,
 and the loader, Embassy and the project template don't support the Pi 5
 yet either.
 

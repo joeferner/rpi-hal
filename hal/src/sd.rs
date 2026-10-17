@@ -62,13 +62,15 @@
 //!
 //! # Card presence
 //!
-//! Discovered, never sensed. No Raspberry Pi wires a card-detect line
-//! anywhere a driver could read it — GPIO47, the pin usually named for
-//! the job, is something different on every board and a card detect on
-//! none of them — and this controller doesn't implement the SDHCI
-//! present-state bits either. So an empty slot is found the only way
+//! Discovered, never sensed. No Raspberry Pi before the Pi 5 wires a
+//! card-detect line anywhere a driver could read it — GPIO47, the pin
+//! usually named for the job, is something different on every board and a
+//! card detect on none of them — and this controller doesn't implement the
+//! SDHCI present-state bits either. So an empty slot is found the only way
 //! available: [`init`](crate::sd::Sd::init) asks, gets no answer, and
-//! returns [`Error::NoCard`].
+//! returns [`Error::NoCard`]. The Pi 5 does have a detect line (always-on
+//! GPIO 5), but `init` overrides it and asks there too, so the behaviour
+//! is the same on every board.
 //! `examples/sd_presence.rs` shows it happening, card in and card out.
 //!
 //! # Async
@@ -115,45 +117,65 @@
 //! `DATA_REG_BUS_ADDRESS` uses) and likely its own DMA DREQ line — real
 //! values neither confirmed nor needed yet (nothing here uses the DMA
 //! path).
+//!
+//! # BCM2712 (Pi 5)
+//!
+//! The card slot is on `sdio1` (`pac::SDIO1`), a standard SDHCI driven
+//! through the same register block, plus a Broadcom `cfg` block for two
+//! settings (`bcm2712_configure_host`). Three things differ from the
+//! Pi 4, all taken from the Pi 5's device tree rather than the firmware:
+//!
+//! - **Power** is not a firmware power domain but two always-on GPIO
+//!   lines (`gio_aon`) switching the card's supply and its I/O
+//!   voltage. `init` power-cycles the card through them into 3.3V
+//!   signalling, since the bootloader may have left it at 1.8V
+//!   (`bcm2712_power_cycle_card`).
+//! - **The base clock** is a fixed 200MHz, so there is nothing to query.
+//!   `init` keeps its `mailbox` argument, unused, so a call site is the
+//!   same on every chip.
+//! - **No DMA or async**, as on the Pi 4: no DREQ route is known for this
+//!   controller, and no interrupt controller is supported on this chip.
 
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 use crate::dma::Channel;
 use crate::emmc::clock_divider;
-use crate::mailbox::{ClockId, Mailbox, PowerDeviceId};
-#[cfg(not(feature = "bcm2711"))]
+use crate::mailbox::Mailbox;
+#[cfg(not(feature = "bcm2712"))]
+use crate::mailbox::{ClockId, PowerDeviceId};
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 use crate::pac::EMMC;
 use crate::pac::GPIO;
 use crate::timer::Timer;
 
 // Scoped to `bcm2837` as well as to the feature: routing this
 // controller's line to the ARM core needs `crate::lic`, which the
-// BCM2711 doesn't have (its GIC-400 isn't supported yet), so on that
-// chip an async transfer could only ever park forever. The blocking
-// path is unaffected and is what a Pi 4 uses.
-#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+// BCM2711 and BCM2712 don't have (their GICs aren't supported yet), so on
+// those chips an async transfer could only ever park forever. The
+// blocking path is unaffected and is what a Pi 4 or Pi 5 uses.
+#[cfg(all(feature = "async", not(any(feature = "bcm2711", feature = "bcm2712"))))]
 mod asynch;
-#[cfg(all(feature = "async", not(feature = "bcm2711")))]
+#[cfg(all(feature = "async", not(any(feature = "bcm2711", feature = "bcm2712"))))]
 pub use asynch::on_irq;
 
 // The pins below, and everything that touches them, are BCM2836/2837
-// only: a Pi 4's card slot is on EMMC2, whose pins aren't in this bank
-// at all -- see `route_gpio_to_emmc`.
+// only: a Pi 4's or Pi 5's card slot is on a controller whose pins aren't
+// in this bank at all -- see `route_gpio_to_emmc`.
 /// GPIO pin carrying the SD clock (`CLK`). Only used computing the
 /// pull-mask below.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const GPIO_CLK: u32 = 48;
 /// GPIO pin carrying the SD command line (`CMD`). See `GPIO_CLK`.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const GPIO_CMD: u32 = 49;
 /// GPIO pins carrying the SD data lines (`DAT0`..`DAT3`). See `GPIO_CLK`.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const GPIO_DAT: [u32; 4] = [50, 51, 52, 53];
 /// GPIO alternate function routing GPIO48-53 to this controller.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const GPIO_ALT_FUNCTION: u8 = 0b111;
 /// Plain input, which is how GPIO34-39 are taken *off* this controller —
 /// see [`route_gpio_to_emmc`] for why that has to happen here.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const GPIO_INPUT: u8 = 0b000;
 
 /// Firmware property tag's `ClockId` for the EMMC base clock feeding
@@ -165,10 +187,16 @@ const GPIO_INPUT: u8 = 0b000;
 /// use the full 10-bit SDHCI 3.0 divider to reach the SD spec's
 /// ≤400kHz identification clock from it (an 8-bit divider tops out at
 /// ÷256, only reaching ~780kHz from 200MHz).
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const EMMC_CLOCK_ID: ClockId = ClockId::Emmc;
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 const EMMC_CLOCK_ID: ClockId = ClockId::Emmc2;
+
+/// The BCM2712's SD base clock, fixed rather than queried: `bcm2712.dtsi`
+/// gives the controller a `fixed-clock` (`clk_emmc2`) of 200MHz, with
+/// nothing for the firmware to be asked about.
+#[cfg(feature = "bcm2712")]
+const BCM2712_BASE_CLOCK_HZ: u32 = 200_000_000;
 
 /// BCM2711's EMMC2 controller — the block actually wired to a Pi 4's
 /// physical SD card slot (see this module's "BCM2711" doc section).
@@ -178,13 +206,13 @@ const EMMC_CLOCK_ID: ClockId = ClockId::Emmc2;
 /// device tree, and Broadcom's usual practice of reusing this core
 /// across SoC generations) — so this reuses that generated type via
 /// `Deref` at EMMC2's own address instead of duplicating it.
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 pub struct Emmc2 {
     _marker: core::marker::PhantomData<*const ()>,
 }
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 unsafe impl Send for Emmc2 {}
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 impl Emmc2 {
     /// Physical base address, from `bcm2711.dtsi`'s `emmc2` node
     /// (`mmc@7e340000`, the `0x7e00_0000`-bus-alias form of
@@ -204,13 +232,13 @@ impl Emmc2 {
         }
     }
 }
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 impl Default for Emmc2 {
     fn default() -> Self {
         Self::new()
     }
 }
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 impl core::ops::Deref for Emmc2 {
     type Target = crate::pac::emmc::RegisterBlock;
     fn deref(&self) -> &Self::Target {
@@ -219,13 +247,15 @@ impl core::ops::Deref for Emmc2 {
 }
 
 /// Which controller type [`Sd`] drives: the classic `EMMC` on
-/// BCM2836/2837, or [`Emmc2`] on BCM2711 (see this module's "BCM2711"
-/// doc section) — selected at compile time, like every other chip
-/// difference in this crate.
-#[cfg(not(feature = "bcm2711"))]
+/// BCM2836/2837, `Emmc2` on BCM2711 (see this module's "BCM2711" doc
+/// section), or `pac::SDIO1` on BCM2712 (see "BCM2712") — selected at
+/// compile time, like every other chip difference in this crate.
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 type SdEmmc = EMMC;
-#[cfg(feature = "bcm2711")]
+#[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
 type SdEmmc = Emmc2;
+#[cfg(feature = "bcm2712")]
+type SdEmmc = crate::pac::SDIO1;
 
 /// Target SD clock during the identification/initialization phase,
 /// before the card's real capabilities are known — the SD physical
@@ -368,7 +398,7 @@ const SCR_SD_BUS_WIDTH_4: u32 = 0x0000_0400;
 /// the DMA engine only moves a word when the FIFO signals it has data
 /// (read) or room (write). Not meaningful under `bcm2711` -- see this
 /// module's "BCM2711" doc section.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const DMA_DREQ_EMMC: u8 = 11;
 /// VideoCore *bus* address of the EMMC `DATA` register, the fixed FIFO
 /// port a DMA channel reads block data from / writes it to. The EMMC
@@ -376,7 +406,7 @@ const DMA_DREQ_EMMC: u8 = 11;
 /// expressed in the `0x7E00_0000` bus alias a bus master (the DMA engine)
 /// must use rather than the ARM physical address. Not meaningful under
 /// `bcm2711` -- see this module's "BCM2711" doc section.
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 const DATA_REG_BUS_ADDRESS: u32 = 0x7e30_0020;
 
 /// A 512-byte SD block. The unit [`Sd::read_blocks`]/[`Sd::write_blocks`]
@@ -477,6 +507,10 @@ pub enum Error {
     /// DMA-controller level (a channel length limit exceeded, or a
     /// hardware error mid-transfer); carries the underlying
     /// [`dma::Error`](crate::dma::Error).
+    ///
+    /// Absent under `bcm2712`, which has neither the DMA variants nor the
+    /// `dma` module this wraps.
+    #[cfg(not(feature = "bcm2712"))]
     Dma(crate::dma::Error),
     /// Right after configuring GPIO48-53's pull-ups, before any
     /// command has touched the bus, `CMD` and/or `DAT0`..`DAT3` weren't
@@ -534,15 +568,20 @@ impl Sd {
     /// pattern `rpi-loader` already re-steals under). On BCM2711,
     /// `Emmc2::new` carries no such requirement at all — this
     /// function is still marked `unsafe` uniformly so a caller doesn't
-    /// need to know which is true.
+    /// need to know which is true. On BCM2712 it steals `pac::SDIO1`,
+    /// with the same requirement as on BCM2836/2837.
     pub unsafe fn steal_emmc() -> SdEmmc {
-        #[cfg(not(feature = "bcm2711"))]
+        #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
         {
             unsafe { crate::pac::Peripherals::steal() }.EMMC
         }
-        #[cfg(feature = "bcm2711")]
+        #[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
         {
             Emmc2::new()
+        }
+        #[cfg(feature = "bcm2712")]
+        {
+            unsafe { crate::pac::SDIO1::steal() }
         }
     }
 
@@ -576,20 +615,31 @@ impl Sd {
         // appear to succeed while unpowered, since the register bus
         // itself lives on a different, always-on power rail than the
         // analog/PHY side actually driving the pins.
+        #[cfg(not(feature = "bcm2712"))]
         if !matches!(
             mailbox.set_power_state(PowerDeviceId::SdCard, true),
             Ok(true)
         ) {
             return Err(Error::PowerOnFailed);
         }
+        // The BCM2712 needs nothing from the firmware here: the card's
+        // power is a GPIO this driver switches itself, and the base clock
+        // is fixed. `mailbox` stays in the signature so a consumer's call
+        // site is the same on every chip.
+        #[cfg(feature = "bcm2712")]
+        {
+            let _ = mailbox;
+            bcm2712_power_cycle_card(timer);
+            bcm2712_configure_host();
+        }
 
-        #[cfg(not(feature = "bcm2711"))]
+        #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
         route_gpio_to_emmc(gpio);
-        // EMMC2's pins aren't in the GPIO bank at all -- see
-        // `route_gpio_to_emmc` on why muxing anything here would be
-        // actively wrong on a Pi 4. `gpio` stays in the signature so a
-        // consumer's call site is the same on either chip.
-        #[cfg(feature = "bcm2711")]
+        // EMMC2's pins (and the BCM2712's SD pins) aren't in the GPIO bank
+        // at all -- see `route_gpio_to_emmc` on why muxing anything here
+        // would be actively wrong on a Pi 4. `gpio` stays in the signature
+        // so a consumer's call site is the same on every chip.
+        #[cfg(any(feature = "bcm2711", feature = "bcm2712"))]
         let _ = gpio;
         // Let the pull-ups actually settle before trusting a level
         // read from them.
@@ -611,14 +661,17 @@ impl Sd {
         // already hardware-verified, and there's no way to confirm this
         // call is truly a harmless no-op there without a real BCM2836/
         // 2837 board to check it against.
-        #[cfg(feature = "bcm2711")]
+        #[cfg(all(feature = "bcm2711", not(feature = "bcm2712")))]
         mailbox
             .set_clock_state(EMMC_CLOCK_ID, true)
             .map_err(|_| Error::PowerOnFailed)?;
 
+        #[cfg(not(feature = "bcm2712"))]
         let base_clock_hz = mailbox
             .clock_rate_hz(EMMC_CLOCK_ID)
             .map_err(|_| Error::PowerOnFailed)?;
+        #[cfg(feature = "bcm2712")]
+        let base_clock_hz = BCM2712_BASE_CLOCK_HZ;
 
         // Reset the whole host circuit and wait for the reset bit to
         // self-clear.
@@ -641,8 +694,10 @@ impl Sd {
         // in this PAC's SVD -- the classic controller's hardware
         // doesn't use it, so it was never modeled -- hence the
         // read-modify-write through the raw escape hatch rather than a
-        // named accessor.
-        #[cfg(feature = "bcm2711")]
+        // named accessor. The BCM2712's controller is a standard SDHCI in
+        // the same way, so it gets the same write: Linux's `sdhci` core
+        // sets this byte for it too.
+        #[cfg(any(feature = "bcm2711", feature = "bcm2712"))]
         emmc.control0()
             .modify(|r, w| unsafe { w.bits(r.bits() | 0x0f00) });
 
@@ -802,9 +857,9 @@ impl Sd {
     /// a run past the controller's 16-bit block count and [`Error::Dma`]
     /// for a channel length limit or a hardware error mid-transfer.
     ///
-    /// Not available under `bcm2711` -- see this module's "BCM2711" doc
-    /// section.
-    #[cfg(not(feature = "bcm2711"))]
+    /// Not available under `bcm2711` or `bcm2712` -- see this module's
+    /// "BCM2711" and "BCM2712" doc sections.
+    #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
     pub fn read_blocks_dma(
         &self,
         block_index: u32,
@@ -891,9 +946,9 @@ impl Sd {
     /// a run past the controller's 16-bit block count and [`Error::Dma`]
     /// for a channel length limit or a hardware error mid-transfer.
     ///
-    /// Not available under `bcm2711` -- see this module's "BCM2711" doc
-    /// section.
-    #[cfg(not(feature = "bcm2711"))]
+    /// Not available under `bcm2711` or `bcm2712` -- see this module's
+    /// "BCM2711" and "BCM2712" doc sections.
+    #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
     pub fn write_blocks_dma(
         &self,
         block_index: u32,
@@ -1249,7 +1304,10 @@ impl Sd {
 /// `bcm2711-lpa`/`bcm2837-lpa` diff shows and what this comment used to
 /// rest on; a PAC diff describes the SoC's function numbering and can't
 /// see what a board wired to the pads.
-#[cfg(not(feature = "bcm2711"))]
+///
+/// Not compiled under `bcm2712` either: GPIO on a Pi 5 is RP1's, a
+/// different block altogether, and the card slot has dedicated pads.
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 fn route_gpio_to_emmc(gpio: &GPIO) {
     // Take the *wireless* pins off this controller first, which matters
     // only on a board that has already brought Wi-Fi up: `sdio::Sdio::init`
@@ -1308,7 +1366,7 @@ fn route_gpio_to_emmc(gpio: &GPIO) {
 /// The register access lives in [`crate::gpio`], which handles the
 /// BCM2836/2837-vs-BCM2711 split; these pins all sit in bank 1
 /// (GPIO32-53).
-#[cfg(not(feature = "bcm2711"))]
+#[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 fn set_emmc_pull_up(gpio: &GPIO) {
     let mask = (1 << (GPIO_CLK - 32))
         | (1 << (GPIO_CMD - 32))
@@ -1316,6 +1374,66 @@ fn set_emmc_pull_up(gpio: &GPIO) {
             .iter()
             .fold(0, |mask, pin| mask | (1 << (pin - 32)));
     crate::gpio::set_pull_bank(gpio, 1, mask, crate::gpio::Pull::Up);
+}
+
+/// Power-cycles the Pi 5's card into 3.3V signalling.
+///
+/// The card's supply and its I/O voltage are both switched by always-on
+/// GPIO lines (`bcm2712-rpi-5-b.dts`: `sd_vcc_reg` on line 4, active high;
+/// `sd_io_1v8_reg` on line 3, high selecting 1.8V). This driver runs the
+/// bus at 3.3V default speed, but the bootloader that read this image off
+/// the card may have switched it to 1.8V UHS signalling, and a card leaves
+/// 1.8V only by losing power — `CMD0` doesn't do it. So the card is
+/// switched off, the I/O rail set to 3.3V while it is off, and the card
+/// switched back on, leaving it in the state a freshly inserted card is
+/// in whatever happened before.
+///
+/// The SD spec wants the supply below 0.5V for at least 1ms; 50ms off
+/// leaves a generous margin for the slot's decoupling to discharge. 10ms
+/// on covers the supply's ramp and the I/O regulator's 5ms settling time
+/// (`regulator-settling-time-us` in the same file) before the controller
+/// starts clocking the card.
+#[cfg(feature = "bcm2712")]
+fn bcm2712_power_cycle_card(timer: &Timer) {
+    const SD_IO_1V8: u8 = 3;
+    const SD_VCC: u8 = 4;
+
+    crate::gio_aon::drive(SD_VCC, false);
+    crate::gio_aon::drive(SD_IO_1V8, false);
+    timer.delay_ms(50);
+    crate::gio_aon::drive(SD_VCC, true);
+    timer.delay_ms(10);
+}
+
+/// Programs the two Broadcom-specific settings the BCM2712's controller
+/// keeps outside the SDHCI register map, in its `cfg` block — what Linux's
+/// `sdhci-brcmstb.c` does for this chip, minus what only the UHS and eMMC
+/// speed modes need:
+///
+/// - `SD_PIN_SEL` (`+0x44`) to SD rather than eMMC timing (bit 1, of the
+///   low two), which Linux re-selects on every clock change.
+/// - `SDIO_CFG_CTRL` (`+0x00`) to report a card present regardless of
+///   the card-detect pin: test-enable (bit 31) set, the active-low test
+///   level (bit 30) clear. Linux does this for slots it doesn't poll. Here
+///   it keeps presence a thing the driver *discovers* by asking the card,
+///   the same as on every other chip, rather than something that depends
+///   on how the firmware left the detect pin muxed.
+#[cfg(feature = "bcm2712")]
+fn bcm2712_configure_host() {
+    const SDIO_CFG_CTRL: *mut u32 = crate::pac::SDIO1::CFG as *mut u32;
+    const SD_PIN_SEL: *mut u32 = (crate::pac::SDIO1::CFG + 0x44) as *mut u32;
+    const SDCD_N_TEST_EN: u32 = 1 << 31;
+    const SDCD_N_TEST_LEV: u32 = 1 << 30;
+    const PIN_SEL_MASK: u32 = 0b11;
+    const PIN_SEL_SD: u32 = 1 << 1;
+
+    unsafe {
+        let pin_sel = SD_PIN_SEL.read_volatile() & !PIN_SEL_MASK;
+        SD_PIN_SEL.write_volatile(pin_sel | PIN_SEL_SD);
+
+        let ctrl = SDIO_CFG_CTRL.read_volatile() & !SDCD_N_TEST_LEV;
+        SDIO_CFG_CTRL.write_volatile(ctrl | SDCD_N_TEST_EN);
+    }
 }
 
 /// Sets the SD clock to as close to (at or below) `target_hz` as this

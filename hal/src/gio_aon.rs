@@ -136,6 +136,16 @@ impl<const N: u8> embedded_hal::digital::InputPin for Pin<N, Input> {
     }
 }
 
+/// Drives line `n` as an output at `high`, setting the level before the
+/// direction so the line never glitches to a stale level on the way.
+///
+/// For drivers in this crate that own a board line outright, as
+/// [`crate::sd`] does the SD card's power and I/O-voltage switches.
+pub(crate) fn drive(n: u8, high: bool) {
+    modify(n, DATA, high);
+    modify(n, IODIR, false);
+}
+
 /// Lines in bank 0; bank 1 holds the rest (`brcm,gpio-bank-widths = <17
 /// 6>`).
 const BANK0_WIDTH: u8 = 17;
