@@ -93,6 +93,13 @@ SECTIONS
     {
         *(.comment)
         *(.note.*)
+        /* Unwind tables, which nothing here reads: every profile is
+           `panic = "abort"`. Not merely dead weight, either. Left to the
+           linker's orphan placement they landed *ahead* of .text, at the
+           load address itself, which pushed `_start` to 0x80800 and left
+           the firmware jumping into `.eh_frame_hdr` data. */
+        *(.eh_frame_hdr)
+        *(.eh_frame)
         *(.ARM.attributes)
         *(.ARM.exidx*)
         *(.ARM.extab*)
