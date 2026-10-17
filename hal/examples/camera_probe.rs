@@ -96,10 +96,24 @@ pub extern "C" fn kmain() -> ! {
     // touching I2C — comfortably past the sensors' clock-before-I2C minima.
     timer.delay_ms(50);
 
-    // BSC0 on GPIO44/45 at ~100kHz (0x5dc = 1500 divider at the typical
-    // core clock), the same conservative default the header-bus examples
-    // use.
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
+    // BSC0 on GPIO44/45 at 100kHz, the same conservative rate the
+    // header-bus examples use.
+    let mut i2c = match I2c::<BSC0>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC0,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     let mut found = false;
     for sensor in &SENSORS {

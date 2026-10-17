@@ -32,6 +32,7 @@
 use core::fmt::Write as _;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
+use rpi_hal::mailbox::Mailbox;
 use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
@@ -83,12 +84,27 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let timer = Timer::new(peripherals.SYSTMR);
-    // 0x05dc (1500) is the reset-default divider: 100kHz standard mode
-    // at BCM2835's typical 150MHz core clock. The SHT4x also does
-    // 400kHz fast mode, but there's nothing to gain here — six bytes a
-    // second isn't bus-limited, and the slower clock is the more
-    // forgiving one for jumper wiring.
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    // 100kHz standard mode. The SHT4x also does 400kHz fast mode, but
+    // there's nothing to gain here — six bytes a second isn't
+    // bus-limited, and the slower clock is the more forgiving one for
+    // jumper wiring.
+    let mut i2c = match I2c::<pac::BSC1>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC1,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     let _ = writeln!(uart, "sht41: resetting");
     if let Err(error) = i2c.write(SHT4X_ADDR, &[CMD_SOFT_RESET]) {

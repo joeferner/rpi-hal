@@ -17,7 +17,7 @@
 #
 # `build-bcm2711`/`build64-bcm2711` -> Pi 4 (BCM2711)
 # `build-bcm2837`/`build64-bcm2837` -> Pi 2/3 (BCM2836/2837)
-# `build64-bcm2712` -> Pi 5 (BCM2712; AArch64 only, and no `eeprom-*`)
+# `build64-bcm2712` -> Pi 5 (BCM2712; AArch64 only)
 #   firmware/target/kernel7.img (AArch32, loads at 0x8000)
 #   firmware/target/kernel8.img (AArch64, loads at 0x80000)
 #
@@ -95,8 +95,7 @@ build64-bcm2837:
 
 # Pi 5 (BCM2712). AArch64 only: its firmware starts nothing else. The
 # feature rides on the default `bcm2837` the same way `bcm2711` does above,
-# winning rpi-hal's chip selection. rpi-hal has no I2C for this chip yet,
-# so the `eeprom-*` commands answer "not supported" here.
+# winning rpi-hal's chip selection.
 build64-bcm2712:
 	cd $(FIRMWARE) && cargo build --release --target $(ARCH64) --features bcm2712
 	cd $(FIRMWARE) && cargo objcopy --release --target $(ARCH64) --features bcm2712 -- -O binary target/kernel8.img

@@ -151,9 +151,6 @@ fn err_name(code: u8) -> String {
         16 => "the device has no memory for that (the file, or the card's allocation table)".into(),
         17 => "SD card read/write failed".into(),
         18 => "no FAT32 volume on the card".into(),
-        19 => "this board's loader doesn't support that command yet (the Pi 5 loader has \
-               no EEPROM access)"
-            .into(),
         other => format!("error code {other}"),
     }
 }

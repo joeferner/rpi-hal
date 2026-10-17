@@ -119,7 +119,22 @@ pub extern "C" fn kmain() -> ! {
         framebuffer.width, framebuffer.height, framebuffer.pitch_bytes, framebuffer.address
     );
 
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
+    let mut i2c = match I2c::<BSC0>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC0,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(error) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {error:?}"
+            );
+            halt();
+        }
+    };
 
     // Gamma ~2.0 lookup (linear → display): out = sqrt(in × 255). Brightens
     // midtones without clipping highlights, the main fix for the dark

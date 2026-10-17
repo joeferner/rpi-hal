@@ -23,7 +23,7 @@ build-bcm2711:
 # examples checked on it so far: most of the crate is `cfg`'d out on
 # this chip (see `lib.rs`), and the other examples reach for those modules.
 build-bcm2712:
-	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence
+	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence --example i2c_scan --example i2c_sh1106_oled --example i2c_sht41 --example i2c_ads1115 --example i2c_hat_eeprom
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read
 
@@ -112,7 +112,7 @@ clippy:
 	# examples aren't included.
 	cargo clippy --release --features bcm2711 -- -D warnings
 	# And BCM2712, on its own AArch64 target -- see `build-bcm2712`.
-	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence -- -D warnings
+	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence --example i2c_scan --example i2c_sh1106_oled --example i2c_sht41 --example i2c_ads1115 --example i2c_hat_eeprom -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read -- -D warnings
 	# And for BCM2835, on its own ARMv6 target -- see `build-bcm2835`'s

@@ -10,24 +10,26 @@
 //!
 //! This is the other BSC0 routing to `camera_probe.rs`'s — one controller,
 //! two pin pairs, selected by which constructor is called
-//! ([`rpi_hal::i2c::I2c::<rpi_hal::pac::BSC0>::init_id`] here,
-//! [`rpi_hal::i2c::I2c::<rpi_hal::pac::BSC0>::init`] there) — so the two cannot
-//! both be live in one program.
+//! (`init_id_with_frequency` here, `init_with_frequency` there) — so the
+//! two cannot both be live in one program. On a Pi 5 the same pins belong
+//! to RP1's I2C0, and the same constructor reaches them.
 //!
 //! Reading a byte range from a 24C-series EEPROM is a two-byte address
-//! write followed by a read, and this driver puts a STOP between them
-//! rather than a repeated start (see [`rpi_hal::i2c::I2c`]). That is fine
-//! *here*, and the reason is worth knowing before reusing the pattern: the
-//! address write carries no data byte, so the part latches its address
-//! counter without starting an internal write cycle, and the counter
-//! survives the STOP. A device that resets its register pointer on a STOP
-//! would need the repeated start this driver doesn't have yet.
+//! write followed by a read. The Pi 1-4 driver puts a STOP between them
+//! rather than a repeated start (see [`rpi_hal::i2c::I2c`]; the Pi 5's
+//! does a real repeated start). That is fine *here*, and the reason is
+//! worth knowing before reusing the pattern: the address write carries no
+//! data byte, so the part latches its address counter without starting an
+//! internal write cycle, and the counter survives the STOP. A device that
+//! resets its register pointer on a STOP would need the repeated start the
+//! Pi 1-4 driver doesn't have yet.
 #![no_std]
 #![no_main]
 
 use core::fmt::Write as _;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
+use rpi_hal::mailbox::Mailbox;
 use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
@@ -81,11 +83,26 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let timer = Timer::new(peripherals.SYSTMR);
-    // 0x05dc (1500) is the reset-default divider: 100kHz at the typical
-    // 150MHz core clock, and 100kHz is what the HAT specification
-    // requires the ID EEPROM to work at. Nothing is gained by going
-    // faster on a bus whose device was designed by somebody else.
-    let mut i2c = I2c::<pac::BSC0>::init_id(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    // 100kHz is what the HAT specification requires the ID EEPROM to work
+    // at. Nothing is gained by going faster on a bus whose device was
+    // designed by somebody else.
+    let mut i2c = match I2c::<pac::BSC0>::init_id_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC0,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     let mut image = [0u8; IMAGE_LEN];
     if let Err(error) = read_from(&mut i2c, 0, &mut image) {

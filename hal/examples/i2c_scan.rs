@@ -16,6 +16,7 @@
 use core::fmt::Write;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
+use rpi_hal::mailbox::Mailbox;
 use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
@@ -31,7 +32,23 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let timer = Timer::new(peripherals.SYSTMR);
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    let mut i2c = match I2c::<pac::BSC1>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC1,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     loop {
         let _ = writeln!(uart, "scanning I2C1 (GPIO2/3)...");

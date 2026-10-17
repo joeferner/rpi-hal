@@ -94,6 +94,10 @@ pub mod hid_report;
 /// Blocking driver for I2C1 (BSC1).
 #[cfg(not(feature = "bcm2712"))]
 pub mod i2c;
+/// Blocking driver for the header's I2C buses, on the Pi 5's RP1.
+#[cfg(feature = "bcm2712")]
+#[path = "i2c_rp1.rs"]
+pub mod i2c;
 #[cfg(feature = "rt")]
 /// CPU-level IRQ enable/disable and the exception vector table.
 pub mod irq;

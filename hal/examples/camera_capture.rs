@@ -61,7 +61,22 @@ pub extern "C" fn kmain() -> ! {
     let _ = mailbox.set_power_domain(POWER_DOMAIN_UNICAM1, true);
     timer.delay_ms(50);
 
-    let mut i2c = I2c::<BSC0>::init(&peripherals.GPIO, peripherals.BSC0, 0x05dc, &timer);
+    let mut i2c = match I2c::<BSC0>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC0,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(error) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {error:?}"
+            );
+            halt();
+        }
+    };
 
     if !ov5647::detect(&mut i2c) {
         let _ = writeln!(uart, "OV5647 not found; aborting");

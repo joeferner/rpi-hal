@@ -16,7 +16,7 @@ alongside inherent methods rather than instead of them.
 | `bcm2837` | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2711` | Pi 4 (preliminary: no interrupt controller yet) | the same two |
 | `bcm2835` | Pi 1, Pi Zero (preliminary) | `armv6-none-eabi` (nightly) |
-| `bcm2712` | Pi 5 (preliminary and unreleased: GPIO, UART, System Timer, mailbox, SD card so far) | `aarch64-unknown-none-softfloat` |
+| `bcm2712` | Pi 5 (preliminary and unreleased: GPIO, UART, System Timer, mailbox, SD card, I2C so far) | `aarch64-unknown-none-softfloat` |
 
 None of the chip features is a default; an application names exactly one.
 

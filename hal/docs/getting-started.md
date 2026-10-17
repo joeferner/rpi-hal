@@ -24,7 +24,7 @@ copy onto it differs.
   do not exist on it at all. A Pi 5 (BCM2712, the `bcm2712` feature) is
   the most partial of all: 64-bit only, and only the examples
   `make build-bcm2712` lists build for it so far (GPIO, the UART, the
-  mailbox and the SD card).
+  mailbox, the SD card and I2C).
 - A microSD card and a way to write it from your host machine.
 - An LED, a ~330Ω resistor, and two jumper wires (or a breadboard) for
   examples that drive GPIO.

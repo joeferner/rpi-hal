@@ -49,10 +49,12 @@ Supported Devices:
   Timer, the header GPIO on RP1 (`blink`), the ACT LED on the SoC's
   always-on GPIO block (`blink_act`), the UART console on GPIO14/15,
   RP1's UART0 (`uart_hello`), the VideoCore mailbox (`mailbox_props`),
-  and the SD card, reads and writes, through both FAT layers (`sd_read`,
-  `sd_resident_fat_read`, `sd_fat_write`). Those keep the same API as on
-  the other boards, so each of those examples builds unchanged; the SD
-  driver's DMA and async variants are the exception, as on the Pi 4.
+  the SD card, reads and writes, through both FAT layers (`sd_read`,
+  `sd_resident_fat_read`, `sd_fat_write`), and I2C on GPIO2/3 and GPIO0/1
+  through RP1's own controllers (`i2c_sh1106_oled`). Those keep the same
+  API as on the other boards, so each of those examples builds unchanged;
+  the SD driver's DMA and async variants are the exception, as on the
+  Pi 4.
   Everything else is
   compiled out for this chip until it has been brought up there. The card
   needs `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
@@ -216,9 +218,10 @@ implementations where applicable, and all verified on real hardware:
   `i2c_sht41.rs` (an SHT41 temperature/humidity sensor) and
   `i2c_ads1115.rs` (an ADS1115 16-bit ADC).
   `I2c<BSC0>` drives BSC0 on either of its two routings, one controller
-  and two pin pairs: `init` takes GPIO44/45 (ALT1), the Pi 3
-  camera/display connector bus, used to read an OV5647 camera sensor's
-  chip ID (see `examples/camera_probe.rs`); `init_id` takes GPIO0/1
+  and two pin pairs: `init_with_frequency` takes GPIO44/45 (ALT1), the
+  Pi 3 camera/display connector bus, used to read an OV5647 camera
+  sensor's chip ID (see `examples/camera_probe.rs`);
+  `init_id_with_frequency` takes GPIO0/1
   (ALT0), `ID_SD`/`ID_SC` on header pins 27/28 — the HAT ID EEPROM bus,
   where a board's identity and per-unit calibration live (see
   `examples/i2c_hat_eeprom.rs`). Only one of the two can be live at a
@@ -231,23 +234,24 @@ implementations where applicable, and all verified on real hardware:
   1.8k pull-ups on both lines. What the warning still means is that a
   fitted HAT may expect to be the only thing on that bus.
 
-  Both buses take a raw divider rather than a frequency, because the
-  core clock they divide is not a constant: it moves with `config.txt`
-  and with the firmware's own scaling. The reset default of 1500 is
-  called 100kHz on the strength of the datasheet's nominal 150MHz core,
-  and is 166kHz on a board running 250MHz. `i2c::divider_for(core_hz,
-  target_hz)` and `spi::divider_for` do the conversion, including the
-  rounding these registers need — always upwards, so the bus never
-  clocks faster than asked, since what a device states is a maximum:
+  Both buses are set up from a frequency, through the mailbox, because
+  the core clock they divide is not a constant: it moves with
+  `config.txt` and with the firmware's own scaling.
+  `init_with_frequency`/`init_id_with_frequency` ask the firmware for it
+  and compute the divider (`i2c::divider_for`), rounding upwards so the
+  bus never clocks faster than asked, since what a device states is a
+  maximum:
 
   ```rust
-  let core_hz = mailbox.clock_rate_hz(ClockId::Core)?;
-  let i2c = I2c::init(&gpio, bsc1, i2c::divider_for(core_hz, 100_000), &timer);
+  let i2c = I2c::<BSC1>::init_with_frequency(&gpio, bsc1, 100_000, &mut mailbox, &timer)?;
   ```
 
-  The mailbox query stays in the caller's hands rather than being folded
-  into `init`: it can fail, it costs a round trip to the GPU, and an
-  application that brings up several buses wants to ask once.
+  The same constructors exist on the Pi 5, where the header bus is a
+  different controller on RP1 with no divider at all, so code using them
+  builds for every chip. The older `init`/`init_id`, which took a raw
+  `DIV.CDIV`, are deprecated: the reset default of 1500 is called 100kHz
+  on the strength of the datasheet's nominal 150MHz core, and is 166kHz
+  on a board running 250MHz, and a raw divider means nothing on the Pi 5.
 
   With the `async` feature the same type also implements
   `embedded_hal_async::i2c::I2c`, parking on the controller's

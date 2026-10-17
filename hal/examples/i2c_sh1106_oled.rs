@@ -23,7 +23,13 @@
 use core::fmt::Write as _;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
+use rpi_hal::mailbox::Mailbox;
 use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
+
+/// I2C clock: standard mode. The SH1106 accepts fast mode (400kHz) too,
+/// which redraws the frame four times as quickly; 100kHz is the rate every
+/// I2C part and every length of hookup wire manages.
+const I2C_FREQUENCY_HZ: u32 = 100_000;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -86,7 +92,23 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let timer = Timer::new(peripherals.SYSTMR);
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    let mut i2c = match I2c::<pac::BSC1>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC1,
+        I2C_FREQUENCY_HZ,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     if send_command(&mut i2c, OLED_ADDR, &INIT_SEQUENCE).is_err() {
         let _ = writeln!(

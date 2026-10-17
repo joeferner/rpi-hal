@@ -19,18 +19,12 @@ flag here is no reason to bump their dependency.
 
 - **Preliminary Pi 5 (BCM2712) firmware**, behind a new `bcm2712`
   feature, built with `make build64-bcm2712` into `kernel8.img` (AArch64
-  only). `boot`, `sd-list` and `sd-read` run on a Pi 5. It is not among a
-  release's images yet. Nothing in the boot stub changed: the loader runs
-  with the MMU off, which reaches the Pi 5's peripherals above 4 GiB
-  directly, and hands off at EL2 as on the other boards. The card needs
-  `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
-  `config.txt`, and no firmware files.
-- **Error code 19, "not supported"**, which the Pi 5 firmware answers to
-  `eeprom-read`/`eeprom-write`: `rpi-hal` has no I2C for that chip yet.
-  The firmware reads the command's whole header before refusing, so the
-  link stays in step. The CLI names the new code; an older CLI prints
-  "error code 19". `PROTOCOL_VERSION` is unchanged, since no board that
-  had the commands lost them.
+  only), with every command, `eeprom-*` included (through RP1's I2C0 on
+  the same GPIO0/1). It is not among a release's images yet. Nothing in
+  the boot stub changed: the loader runs with the MMU off, which reaches
+  the Pi 5's peripherals above 4 GiB directly, and hands off at EL2 as on
+  the other boards. The card needs `os_check=0`, `kernel_address=0x80000`
+  and `pciex4_reset=0` in `config.txt`, and no firmware files.
 
 ### Changed
 
@@ -38,6 +32,13 @@ flag here is no reason to bump their dependency.
   `Uart::supports_baud`** instead of the firmware's own copy of the
   divisor arithmetic, which assumed the 48 MHz UART clock of every board
   before the Pi 5 (50 MHz there).
+- **The EEPROM bus runs at 100 kHz on every board.** It was the BSC's
+  reset-default divider, documented as 100 kHz for a 150 MHz core clock,
+  which is 166 kHz on a board running its core at 250 MHz (a Pi 3, for
+  one). The firmware now sets it up with `rpi-hal`'s
+  `init_id_with_frequency`, which asks for the real core clock first; a
+  mailbox failure there is reported as an I2C error before the bus is
+  touched.
 
 ## [0.5.1] - 2026-10-16
 

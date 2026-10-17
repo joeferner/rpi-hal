@@ -23,6 +23,7 @@
 use core::fmt::Write as _;
 use embedded_hal::i2c::I2c as _;
 use rpi_hal::halt;
+use rpi_hal::mailbox::Mailbox;
 use rpi_hal::{i2c::I2c, pac, timer::Timer, uart::Uart};
 
 #[panic_handler]
@@ -105,11 +106,26 @@ pub extern "C" fn kmain() -> ! {
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     let timer = Timer::new(peripherals.SYSTMR);
-    // 0x05dc (1500) is the reset-default divider: 100kHz standard mode
-    // at BCM2835's typical 150MHz core clock. The ADS1115 also does
-    // 400kHz fast mode and 3.4MHz high-speed, but at 128 samples/second
-    // the bus is nowhere near the bottleneck.
-    let mut i2c = I2c::<pac::BSC1>::init(&peripherals.GPIO, peripherals.BSC1, 0x05dc, &timer);
+    let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
+    // 100kHz standard mode. The ADS1115 also does 400kHz fast mode and
+    // 3.4MHz high-speed, but at 128 samples/second the bus is nowhere near
+    // the bottleneck.
+    let mut i2c = match I2c::<pac::BSC1>::init_with_frequency(
+        &peripherals.GPIO,
+        peripherals.BSC1,
+        100_000,
+        &mut mailbox,
+        &timer,
+    ) {
+        Ok(i2c) => i2c,
+        Err(e) => {
+            let _ = writeln!(
+                uart,
+                "could not read the core clock for the I2C divider: {e:?}"
+            );
+            halt();
+        }
+    };
 
     match read_register(&mut i2c, REG_CONFIG) {
         Ok(config) => {
