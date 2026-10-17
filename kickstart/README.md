@@ -59,7 +59,9 @@ it.
 ## Chips
 
 `bcm2835` (Pi 1, Zero), `bcm2837` (Pi 2, 3) and `bcm2711` (Pi 4) forward
-to `rpi-hal`'s features of the same name. None is a default.
+to `rpi-hal`'s features of the same name. None is a default. There is no
+`bcm2712` (Pi 5) yet: `rpi-hal`'s support for that chip is preliminary,
+and doesn't yet cover what this crate builds on.
 
 Most boards never name one here: an application's own `rpi-hal` line
 already selects a chip and cargo unifies it across the graph. They exist
@@ -67,8 +69,8 @@ for a build that has no such line — this repository's own, and a consumer
 that depends on `rpi-kickstart` without depending on `rpi-hal` directly.
 
 They are not mutually exclusive, because cargo features cannot be. Two at
-once resolves by `rpi-hal`'s precedence — `bcm2711` > `bcm2837` >
-`bcm2835` — rather than failing, which is why nothing here builds with
+once resolves by `rpi-hal`'s precedence — `bcm2712` > `bcm2711` >
+`bcm2837` > `bcm2835` — rather than failing, which is why nothing here builds with
 `--all-features`; the `make` recipes name an explicit set instead.
 
 `entropy` and `heap` need a chip; `console` deliberately reaches nothing

@@ -20,6 +20,7 @@ a default, because there is no sensible default chip:
 | `bcm2837` | BCM2836, BCM2837 | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2711` | BCM2711 | Pi 4 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2835` | BCM2835 | Pi 1, Pi Zero, Pi Zero W | `armv6-none-eabi` (nightly) |
+| `bcm2712` | BCM2712 | Pi 5 | `aarch64-unknown-none-softfloat` (unreleased) |
 
 ## Pi 2 and Pi 3
 
@@ -70,10 +71,37 @@ the BCM2835 doesn't have.
 board needs **nightly** Rust and `-Z build-std`. A project from
 [Start a project](../start/) is set up for it already.
 
+## Pi 5
+
+**BCM2712, Cortex-A76. Preliminary, and not in a released version yet**:
+it is on rpi-hal's `main` branch, and arrives on crates.io with the next
+release. 64-bit only, since the Pi 5's firmware starts nothing else.
+
+Most of the Pi 5's I/O moved off the SoC onto a separate chip, RP1,
+reached over PCIe, so its peripherals are new hardware rather than the
+older blocks at a new address. The `bcm2712` feature therefore builds
+only what has been brought up on it so far, and leaves the rest of the
+crate out. Working:
+
+- boot, the MMU and the caches;
+- the System Timer;
+- GPIO on the 40-pin header, through RP1;
+- the ACT LED, on the SoC's own always-on GPIO block;
+- the UART console on GPIO14/15, RP1's UART0.
+
+GPIO and the UART keep the API they have on the other boards, so the
+`blink` and `uart_hello` examples build for the Pi 5 unchanged. There is
+no interrupt controller support, second core, SD card or USB here yet,
+and the loader, Embassy and the project template don't support the Pi 5
+yet either.
+
+The Pi 5 boots from firmware in its on-board EEPROM, so its card holds no
+firmware files, just `kernel8.img` and a `config.txt` with `os_check=0`,
+`kernel_address=0x80000` and `pciex4_reset=0`. The last one keeps RP1
+reachable; without it every header pin is dead.
+
 ## Planned
 
 - **Pi Zero 2 W** (RP3A0, the Pi 3's BCM2837 in a smaller package).
-- **Pi 5** (BCM2712, with most of its I/O moved onto the separate RP1
-  chip).
 
-Neither runs rpi-hal yet.
+It doesn't run rpi-hal yet.

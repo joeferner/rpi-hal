@@ -159,3 +159,12 @@ three chips, two of which can run either way, that makes five images:
 
 The project selector picks the right one for the board you choose, and
 names it the way your board's firmware expects.
+
+:::note[Update, 2026-10-17]
+There is no loader image for the Pi 5 yet. rpi-hal's Pi 5 support has
+started (see [supported devices](/rpi-hal/supported-devices/)), and a
+loader for it is the next step. When it lands it will be a sixth image,
+`bcm2712` `kernel8.img`. As with the Pi 4, its card needs no
+`bootcode.bin`, and on the Pi 5 it needs no `start.elf` or `fixup.dat`
+either: that firmware lives in the board's EEPROM.
+:::

@@ -24,5 +24,8 @@ generated project's `rust-toolchain.toml` takes care of it.
 time driver can't run there. The template's starter project doesn't use
 interrupts, so it runs on every board above.
 
-The Raspberry Pi Zero 2 W and the Pi 5 aren't supported yet; both are
-planned. See [Supported devices](../supported-devices/).
+The Raspberry Pi Zero 2 W isn't supported yet, and the Pi 5 isn't here
+yet either. rpi-hal itself has preliminary Pi 5 support (GPIO, the UART
+console and the System Timer, unreleased so far), but there is no loader
+image for it, so the template can't offer it. See
+[Supported devices](../supported-devices/).

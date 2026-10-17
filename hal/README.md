@@ -42,9 +42,21 @@ Supported Devices:
 
   Unlike the other boards, this one needs **nightly** — see "Toolchain".
 
+- Pi 5 (BCM2712, Cortex-A76) — **preliminary**, 64-bit
+  (`aarch64-unknown-none-softfloat`) only: the `bcm2712` feature. Most of
+  the Pi 5's I/O lives on the separate RP1 chip behind PCIe, and only a
+  first slice of it is covered: boot, the MMU and caches, the System
+  Timer, the header GPIO on RP1 (`blink`), the ACT LED on the SoC's
+  always-on GPIO block (`blink_act`), and the UART console on GPIO14/15,
+  RP1's UART0 (`uart_hello`). Those keep the same API as on the other
+  boards, so `blink` and `uart_hello` build unchanged. Everything else is
+  compiled out for this chip until it has been brought up there. The card
+  needs `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
+  `config.txt` (see `docs/getting-started.md`).
+
 Building for any of these requires picking exactly one of the
-`bcm2837`/`bcm2711`/`bcm2835` features (see "Features" below) — none is a
-default, since there's no sensible default target chip.
+`bcm2837`/`bcm2711`/`bcm2835`/`bcm2712` features (see "Features" below) —
+none is a default, since there's no sensible default target chip.
 
 ## Toolchain
 
@@ -844,16 +856,17 @@ has what's left.
   like `dma.rs`/`rng.rs` — kept as its own feature anyway since it's a
   large subsystem a consumer who doesn't need 3D shouldn't have to
   compile.
-- **`bcm2837`**/**`bcm2711`**/**`bcm2835`** (chip selection — none on by
-  default, pick exactly one): each pulls in that chip's PAC
-  (`bcm2837-lpa`/`bcm2711-lpa`/`bcm2835-lpa`) as `pac` (see
+- **`bcm2837`**/**`bcm2711`**/**`bcm2835`**/**`bcm2712`** (chip selection
+  — none on by default, pick exactly one): each pulls in that chip's PAC
+  (`bcm2837-lpa`/`bcm2711-lpa`/`bcm2835-lpa`; a hand-written one for
+  `bcm2712`, which has no generated PAC) as `pac` (see
   "Relationship to other crates" below) and selects that chip's
   `src/soc.rs`/`src/mmu.rs` memory map — `PERIPHERAL_BASE`/
   `LOCAL_PERIPHERAL_BASE`, and anything computed from them (`src/
   dma.rs`'s `DMA_BASE`, `src/watchdog.rs`'s `PM_BASE`). Compile-time,
   not runtime model detection, matching every other board/config choice
   in this crate. If more than one is enabled at once the precedence is
-  `bcm2711` > `bcm2837` > `bcm2835`, applied the same way everywhere a
+  `bcm2712` > `bcm2711` > `bcm2837` > `bcm2835`, applied the same way everywhere a
   chip is branched on; the losing PAC still compiles as an unused
   dependency, harmless but avoidable with `default-features = false`
   plus whichever of `rt`/`mmu` are still wanted (the same opt-out shape
@@ -884,6 +897,14 @@ has what's left.
   for `multicore` is a `compile_error!` rather than a quietly missing
   module. It is also the only one that needs nightly, for the tier-3
   `armv6-none-eabi` target.
+
+  `bcm2712` is **preliminary** in the narrowest way of the four: rather
+  than building every driver at a new base, it builds only the modules
+  brought up on it so far (see "Supported Devices") and leaves the rest
+  out, since most of the Pi 5's peripherals are different IP on the RP1
+  chip rather than the BCM283x blocks at a new address. `multicore`,
+  `fault-report`, `vchiq`/`mmal` and `v3d` are each a `compile_error!`
+  there. It needs an AArch64 target: the Pi 5 boots 64-bit kernels only.
 - Consumers that need their own boot sequence instead — e.g.
   `rpi-loader`'s self-relocating loader, which must control exactly
   how and where its own code executes during relocation — depend on
@@ -1034,7 +1055,11 @@ Depends on [`bcm2837-lpa`](https://crates.io/crates/bcm2837-lpa) and
 [`bcm2711-lpa`](https://crates.io/crates/bcm2711-lpa) for register
 access, each optional and behind the `bcm2837`/`bcm2711` feature it's
 named after (see "Features" above) — whichever is selected is
-re-exported as `pac`.
+re-exported as `pac`. The BCM2712 has no PAC of its own, so under
+`bcm2712` `pac` is a small hand-written module of the same shape instead,
+borrowing `bcm2711-lpa`'s register layouts for the blocks the two chips
+share (the System Timer, the PL011 UART) and supplying the BCM2712's
+addresses for them.
 
 [Embassy](https://embassy.dev) support — an `embassy-time` driver and an
 executor, so an application can `spawn` tasks and `await` deadlines — is

@@ -1,10 +1,49 @@
 use crate::pac::{GPIO, UART0};
 
-#[cfg(feature = "async")]
+// Not on the BCM2712: there is no interrupt controller driver for that chip
+// yet, so nothing would ever call `on_irq` to wake a future.
+#[cfg(all(feature = "async", not(feature = "bcm2712")))]
 mod asynch;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", not(feature = "bcm2712")))]
 pub use asynch::on_irq;
 use core::fmt;
+
+/// The PL011's reference clock (`UARTCLK`), which every baud divisor is
+/// computed against.
+///
+/// 48MHz on the BCM283x/BCM2711 — see [`Uart::init`] for how that was
+/// confirmed and what pins it.
+#[cfg(not(feature = "bcm2712"))]
+const UART_CLOCK_HZ: u32 = 48_000_000;
+/// 50MHz on the BCM2712, where this is RP1's `clk_uart` and this driver
+/// sets it itself: RP1's 50MHz crystal, divided by one (see
+/// [`clock_from_crystal`]).
+#[cfg(feature = "bcm2712")]
+const UART_CLOCK_HZ: u32 = 50_000_000;
+
+/// The PL011 divisor for `baud` against [`UART_CLOCK_HZ`], as `(IBRD,
+/// FBRD)`: `UART_CLOCK_HZ / (16 * baud)`, split into a 16-bit integer
+/// part and a 6-bit fractional part in sixty-fourths, rounded. `None`
+/// when the integer part rounds to 0 or overflows 16 bits.
+const fn divisor(baud: u32) -> Option<(u16, u8)> {
+    if baud == 0 {
+        return None;
+    }
+    // In sixty-fourths: clock / (16 * baud) * 64 = clock * 4 / baud.
+    let div_x64 = (UART_CLOCK_HZ as u64 * 4 + baud as u64 / 2) / baud as u64;
+    let ibrd = div_x64 / 64;
+    if ibrd == 0 || ibrd > u16::MAX as u64 {
+        return None;
+    }
+    Some((ibrd as u16, (div_x64 % 64) as u8))
+}
+
+/// [`divisor`] for the 115200 baud `init` brings the UART up at, checked
+/// at compile time: 26 + 3/64 at 48MHz, 27 + 8/64 at 50MHz.
+const DIVISOR_115200: (u16, u8) = match divisor(115_200) {
+    Some(divisor) => divisor,
+    None => panic!("115200 baud is unrepresentable at this UART clock"),
+};
 
 /// Disables the pull resistor on the GPIO0-31 pins selected by
 /// `pin_mask` (bank 0, whose bits map one-to-one to GPIO0-31 — the only
@@ -14,8 +53,50 @@ use core::fmt;
 /// The register access itself lives in [`crate::gpio`], which is where
 /// the BCM2836/2837-vs-BCM2711 split is handled; this exists only to
 /// name what the UART wants of it.
+#[cfg(not(feature = "bcm2712"))]
 fn disable_pull(gpio: &GPIO, pin_mask: u32) {
     crate::gpio::set_pull_bank(gpio, 0, pin_mask, crate::gpio::Pull::None);
+}
+
+/// Routes GPIO14/15 to RP1's UART0 (TX/RX): function 4 in RP1's pin
+/// function table, pulls off, as the BCM283x path does.
+#[cfg(feature = "bcm2712")]
+fn route_console_pins() {
+    const FUNCSEL_UART0: u32 = 4;
+    for pin in [14, 15] {
+        crate::gpio::set_pull(pin, crate::gpio::Pull::None);
+        crate::gpio::select_function(pin, FUNCSEL_UART0);
+    }
+}
+
+/// Sets RP1's `clk_uart` to the 50MHz crystal, undivided, and enables it.
+///
+/// Set rather than assumed, because on the BCM2712 nothing pins it: the
+/// clock takes one of nine sources and an integer divider, and what the
+/// firmware leaves there depends on what it did with RP1 before handing
+/// over. The crystal is the one source that is a fixed frequency without
+/// depending on a PLL being up. Register layout from Linux's `clk-rp1.c`:
+/// `CLK_UART_CTRL` holds the enable (bit 11) and the source mux (`AUXSRC`,
+/// bits 9:5, where 2 is `xosc`), `CLK_UART_DIV_INT` the divider.
+///
+/// The mux is not glitch-free, so the clock is stopped across the change.
+/// Nothing is using it then: `init` calls this before enabling the UART.
+#[cfg(feature = "bcm2712")]
+fn clock_from_crystal() {
+    const CLOCKS_MAIN: usize = crate::pac::RP1_BASE + 0x0001_8000;
+    const CLK_UART_CTRL: *mut u32 = (CLOCKS_MAIN + 0x54) as *mut u32;
+    const CLK_UART_DIV_INT: *mut u32 = (CLOCKS_MAIN + 0x58) as *mut u32;
+    const ENABLE: u32 = 1 << 11;
+    const AUXSRC: u32 = 0x1f << 5;
+    const AUXSRC_XOSC: u32 = 2 << 5;
+
+    unsafe {
+        let ctrl = CLK_UART_CTRL.read_volatile() & !(ENABLE | AUXSRC);
+        CLK_UART_CTRL.write_volatile(ctrl);
+        CLK_UART_DIV_INT.write_volatile(1);
+        CLK_UART_CTRL.write_volatile(ctrl | AUXSRC_XOSC);
+        CLK_UART_CTRL.write_volatile(ctrl | AUXSRC_XOSC | ENABLE);
+    }
 }
 
 /// Blocking driver for UART0 (PL011).
@@ -63,19 +144,42 @@ impl Uart {
     /// garbage at a plausible rate is the reference clock above, while
     /// nothing at all is the pins — either not muxed, or muxed and
     /// wired to the wrong end of the cable.
+    ///
+    /// # On the Pi 5
+    ///
+    /// GPIO14/15 there belong to RP1, and so does this UART: it is RP1's
+    /// UART0, reached over PCIe, so `pciex4_reset=0` has to be in
+    /// `config.txt` or the first register access hangs. The reference clock
+    /// is not the 48MHz above but RP1's `clk_uart`, which this sets to
+    /// 50MHz itself rather than trusting the firmware's setting, so no
+    /// `config.txt` line pins it either.
     pub fn init(gpio: &GPIO, uart0: UART0) -> Self {
-        const GPIO14_15_MASK: u32 = (1 << 14) | (1 << 15);
-        disable_pull(gpio, GPIO14_15_MASK);
+        #[cfg(not(feature = "bcm2712"))]
+        {
+            const GPIO14_15_MASK: u32 = (1 << 14) | (1 << 15);
+            disable_pull(gpio, GPIO14_15_MASK);
 
-        gpio.gpfsel1()
-            .modify(|_, w| w.fsel14().txd0().fsel15().rxd0());
+            gpio.gpfsel1()
+                .modify(|_, w| w.fsel14().txd0().fsel15().rxd0());
+        }
+        // The token is still taken on the BCM2712, so the signature (and
+        // the claim on the pins it stands for) is the same on every chip;
+        // the pins are reached through `crate::gpio`'s own addresses.
+        #[cfg(feature = "bcm2712")]
+        {
+            let _ = gpio;
+            route_console_pins();
+        }
 
         uart0.cr().write(|w| w.uarten().clear_bit());
 
-        // 115200 baud @ 48MHz UART clock: divisor = 48_000_000 / (16 * 115200) = 26.04.
+        #[cfg(feature = "bcm2712")]
+        clock_from_crystal();
+
+        let (ibrd, fbrd) = DIVISOR_115200;
         unsafe {
-            uart0.ibrd().write(|w| w.bauddivint().bits(26));
-            uart0.fbrd().write(|w| w.bauddivfrac().bits(3));
+            uart0.ibrd().write(|w| w.bauddivint().bits(ibrd));
+            uart0.fbrd().write(|w| w.bauddivfrac().bits(fbrd));
         }
 
         // 8 bits, FIFOs enabled, no parity, one stop bit.
@@ -126,6 +230,10 @@ impl Uart {
     /// before any firmware is loaded; raise it with
     /// [`set_baud`](Self::set_baud) only after the controller has been
     /// told to change rate (an HCI vendor command), never before.
+    ///
+    /// Not on the BCM2712: the Pi 5's radio hangs off the SoC's own UART,
+    /// not RP1's UART0, and there is no GPIO30-33 route to it.
+    #[cfg(not(feature = "bcm2712"))]
     pub fn init_bluetooth(gpio: &GPIO, uart0: UART0) -> Self {
         // GPPUDCLK0 reaches only GPIO0-31, which covers the two
         // flow-control lines GPIO30 (CTS0) and GPIO31 (RTS0). GPIO32/33
@@ -149,10 +257,11 @@ impl Uart {
 
         uart0.cr().write(|w| w.uarten().clear_bit());
 
-        // 115200 baud @ 48MHz UART clock, same divisor as `init`.
+        // 115200 baud, same divisor as `init`.
+        let (ibrd, fbrd) = DIVISOR_115200;
         unsafe {
-            uart0.ibrd().write(|w| w.bauddivint().bits(26));
-            uart0.fbrd().write(|w| w.bauddivfrac().bits(3));
+            uart0.ibrd().write(|w| w.bauddivint().bits(ibrd));
+            uart0.fbrd().write(|w| w.bauddivfrac().bits(fbrd));
         }
 
         // 8 bits, FIFOs enabled, no parity, one stop bit.
@@ -230,14 +339,13 @@ impl Uart {
     /// Reprograms the baud rate on the fly, returning `false` (leaving
     /// the current rate untouched) if `baud` can't be represented.
     ///
-    /// Uses the same 48MHz reference clock `init` assumes. The PL011
-    /// divisor is `48_000_000 / (16 * baud)`, split into a 16-bit
-    /// integer part (`IBRD`) and a 6-bit fractional part (`FBRD`,
-    /// sixty-fourths); this computes both as `192_000_000 / baud` in
-    /// 64ths, rounded. A `baud` so high that the integer part rounds to
-    /// 0, or so low it overflows `IBRD`, is rejected — hence the bool.
-    /// For example 1_500_000 baud gives an exact divisor of 2.0
-    /// (`IBRD = 2`, `FBRD = 0`).
+    /// Uses the same reference clock `init` does (48MHz, or 50MHz on the
+    /// Pi 5). The PL011 divisor is `clock / (16 * baud)`, split into a
+    /// 16-bit integer part (`IBRD`) and a 6-bit fractional part (`FBRD`,
+    /// sixty-fourths), rounded. A `baud` so high that the integer part
+    /// rounds to 0, or so low it overflows `IBRD`, is rejected — hence the
+    /// bool. For example 1_500_000 baud at 48MHz gives an exact divisor of
+    /// 2.0 (`IBRD = 2`, `FBRD = 0`).
     ///
     /// Caller must `flush` first if a byte the other end still needs to
     /// read cleanly (e.g. an acknowledgement) is in flight — this
@@ -247,21 +355,13 @@ impl Uart {
     /// (required on the PL011) without changing those.
     #[must_use]
     pub fn set_baud(&mut self, baud: u32) -> bool {
-        if baud == 0 {
+        let Some((ibrd, fbrd)) = divisor(baud) else {
             return false;
-        }
-        let div_x64 = (192_000_000 + baud / 2) / baud;
-        let ibrd = div_x64 / 64;
-        let fbrd = (div_x64 % 64) as u8;
-        if ibrd == 0 || ibrd > u16::MAX as u32 {
-            return false;
-        }
+        };
 
         self.uart0.cr().modify(|_, w| w.uarten().clear_bit());
         unsafe {
-            self.uart0
-                .ibrd()
-                .write(|w| w.bauddivint().bits(ibrd as u16));
+            self.uart0.ibrd().write(|w| w.bauddivint().bits(ibrd));
             self.uart0.fbrd().write(|w| w.bauddivfrac().bits(fbrd));
         }
         // Rewriting LCR_H is what latches the new IBRD/FBRD on the

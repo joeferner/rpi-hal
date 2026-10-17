@@ -2,7 +2,7 @@
 name = "rpi-hal"
 version = "0.9.1"
 edition = "2021"
-description = "Hardware abstraction layer for bare-metal Raspberry Pi: BCM2836/BCM2837 (Pi 2, Pi 3), with preliminary BCM2711 (Pi 4) and BCM2835 (Pi 1, Pi Zero) support"
+description = "Hardware abstraction layer for bare-metal Raspberry Pi: BCM2836/BCM2837 (Pi 2, Pi 3), with preliminary BCM2711 (Pi 4), BCM2835 (Pi 1, Pi Zero) and BCM2712 (Pi 5) support"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joeferner/rpi-hal"
 homepage = "https://joeferner.github.io/rpi-hal/crates/hal/"
@@ -228,7 +228,7 @@ multicore = ["mmu"]
 # faulting address is below the stack -- the one diagnosis a register
 # dump cannot reach on its own.
 fault-report = ["rt"]
-# Chip selection: exactly one of `bcm2837`/`bcm2711`/`bcm2835` must be
+# Chip selection: exactly one of `bcm2837`/`bcm2711`/`bcm2835`/`bcm2712` must be
 # enabled -- none is in `default`, since there's no sensible default
 # target chip. Each pulls in that chip's PAC as `pac` (see the
 # dependencies above and `lib.rs`'s re-export) and selects that chip's
@@ -253,9 +253,23 @@ fault-report = ["rt"]
 # matching boot/cache/MMU code. That target is tier 3, so it has no
 # precompiled `core` and needs `-Zbuild-std` and nightly -- a requirement
 # the other two chips don't carry (see `rust-version` above).
+#
+# `bcm2712` (Pi 5) is the newest and the thinnest. There is no PAC for it,
+# so `pac` is a small hand-written module instead (`src/pac_bcm2712.rs`),
+# shaped like the generated ones so the same `pac::Peripherals::take()` /
+# driver-takes-a-token code ports across. It still pulls in `bcm2711-lpa`,
+# but only for register *layouts*: the System Timer is the same IP block on
+# both chips, just at a different address, so its token derefs to
+# `bcm2711-lpa`'s register block and `timer.rs` builds unchanged. Most of
+# the I/O moved onto the RP1 south bridge behind PCIe, so only the System
+# Timer, GPIO (RP1's bank 0, the header) and the SoC's own always-on GPIO
+# (`gio_aon`, which carries the ACT LED) exist under it so far. AArch64
+# only: the BCM2712's Cortex-A76 firmware boots 64-bit kernels and nothing
+# else. It takes precedence over every other chip feature.
 bcm2837 = ["dep:bcm2837-lpa"]
 bcm2711 = ["dep:bcm2711-lpa"]
 bcm2835 = ["dep:bcm2835-lpa"]
+bcm2712 = ["dep:bcm2711-lpa"]
 # Async trait implementations (`embedded-hal-async`, `embedded-io-async`),
 # driven by the same interrupt sources the blocking drivers already
 # expose. Independent of any executor: the futures are plain
@@ -303,6 +317,12 @@ mmal = ["vchiq"]
 # GPU generation under the same "V3D" name that this feature does not
 # cover.
 v3d = []
+
+[[example]]
+# Pi 5 only: the ACT LED hangs off the BCM2712's always-on GPIO block,
+# which no other chip has.
+name = "blink_act"
+required-features = ["bcm2712"]
 
 [[example]]
 name = "multicore_blink"

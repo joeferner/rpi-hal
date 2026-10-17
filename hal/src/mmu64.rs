@@ -28,11 +28,14 @@
 //! inside this module, before anything could report why. Covering all four
 //! regions uniformly costs 16KB of `.bss` and removes the class of bug.
 //!
-//! Anything above 4GB, and anything within it not covered by a rule above,
-//! is left as an invalid (zero) descriptor, so touching genuinely unbacked
-//! address space faults -- same intent as the AArch32 map.
+//! Above 4GB, only the 1GB regions the parent module lists in
+//! `HIGH_DEVICE` are mapped, as level-1 Device blocks -- on the BCM2712,
+//! whose peripherals all live up there. Anything else above 4GB, and
+//! anything within it not covered by a rule above, is left as an invalid
+//! (zero) descriptor, so touching genuinely unbacked address space faults
+//! -- same intent as the AArch32 map.
 
-use super::{LOCAL_PERIPHERAL, PERIPHERAL_BASE, PERIPHERAL_END};
+use super::{is_low_device, HIGH_DEVICE, RAM_END};
 use core::arch::asm;
 use core::cell::UnsafeCell;
 
@@ -73,6 +76,19 @@ const ATTR_NORMAL_UNCACHED: u64 = 2 << 2;
 /// Bit[54] (UXN) and bit[53] (PXN): execute-never at every privilege --
 /// nothing should fetch instructions from MMIO space.
 const EXEC_NEVER: u64 = (1 << 54) | (1 << 53);
+
+/// `TCR_EL1.IPS`, the physical address size translation may output.
+///
+/// 40 bits (`0b010`) on the BCM2712, whose peripherals all sit above 4 GiB
+/// and up to `0x1f_xxxx_xxxx` for RP1; a descriptor pointing past the
+/// configured size is an Address Size fault, so `0` there would fault the
+/// first register access after the MMU came on. 40 bits is also what its
+/// Cortex-A76 implements (`ID_AA64MMFR0_EL1.PARange`).
+#[cfg(feature = "bcm2712")]
+const IPS: u64 = 0b010;
+/// 32 bits on every other chip: every address they reach is under 4 GiB.
+#[cfg(not(feature = "bcm2712"))]
+const IPS: u64 = 0b000;
 
 /// Flags for a Normal, cacheable, inner-shareable, executable RAM block.
 /// `AP` left `0b00` (bits[7:6]): read/write at EL1, no EL0 access.
@@ -141,15 +157,9 @@ fn fill_l2(table: &Table, region: usize) {
 
     for i in 0..ENTRIES {
         let base = region_base + i as u64 * BLOCK_2MB;
-        let in_local_block = match LOCAL_PERIPHERAL {
-            Some((local_base, local_end)) => {
-                base >= u64::from(local_base) && base <= u64::from(local_end)
-            }
-            None => false,
-        };
-        let descriptor = if base < u64::from(PERIPHERAL_BASE) {
+        let descriptor = if base < RAM_END {
             base | RAM_BLOCK_FLAGS
-        } else if base <= u64::from(PERIPHERAL_END) || in_local_block {
+        } else if is_low_device(base) {
             base | DEVICE_BLOCK_FLAGS
         } else {
             0
@@ -218,6 +228,14 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
                 .write_volatile(l2.0.get() as u64 | DESC_TABLE);
         }
 
+        // MMIO above 4 GiB (BCM2712 only) gets whole 1GB level-1 blocks:
+        // nothing up there needs a finer memory type, so a level-2 table
+        // per region would be 4KB of `.bss` each for no benefit.
+        for &base in HIGH_DEVICE {
+            l1.add((base / BLOCK_1GB) as usize)
+                .write_volatile(base | DEVICE_BLOCK_FLAGS);
+        }
+
         // Punch the guard out of the margin below the stack, while the
         // table is still only a pile of words in RAM -- see that
         // function for why doing it here costs no maintenance.
@@ -234,15 +252,15 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
 
         // TCR_EL1: T0SZ=25 (39-bit VA), walk memory Inner+Outer Write-Back
         // Write-Allocate (IRGN0/ORGN0=0b01) and Inner Shareable
-        // (SH0=0b11), and EPD1=1 to disable TTBR1 walks (this map is
-        // TTBR0-only). The zero-valued fields are left implicit: TG0=0b00
-        // (4KB granule) and IPS=0 (32-bit intermediate PA -- every address
-        // this crate reaches is well under 4GB).
+        // (SH0=0b11), EPD1=1 to disable TTBR1 walks (this map is
+        // TTBR0-only), and IPS (see `IPS`). TG0=0b00 (4KB granule) is left
+        // implicit.
         let tcr: u64 = 25
             | (0b01 << 8)   // IRGN0
             | (0b01 << 10)  // ORGN0
             | (0b11 << 12)  // SH0
-            | (1 << 23); // EPD1
+            | (1 << 23)     // EPD1
+            | (IPS << 32);
         asm!("msr tcr_el1, {0}", in(reg) tcr);
 
         // TTBR0_EL1: base of the level-1 table.

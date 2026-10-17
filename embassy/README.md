@@ -37,9 +37,12 @@ the same name, with `bcm2837` the default:
 | `bcm2837` (default) | Pi 2, Pi 3 | `armv7a-none-eabi`, `aarch64-unknown-none-softfloat` |
 | `bcm2835` | Pi 1, Pi Zero | `armv6-none-eabi` |
 
+Not the Pi 4 or the Pi 5: the time driver is interrupt-driven, and
+`rpi-hal` has no interrupt controller for either chip yet.
+
 It is a feature here rather than a hardcoded entry on the `rpi-hal`
 dependency line because `rpi-hal`'s chip features have a precedence order
-(`bcm2711` > `bcm2837` > `bcm2835`). A crate that names one on its own
+(`bcm2712` > `bcm2711` > `bcm2837` > `bcm2835`). A crate that names one on its own
 `rpi-hal` line leaves consumers no way to turn it off, and adding a
 lower-precedence chip alongside it selects the wrong peripheral base
 silently rather than failing. So a Pi Zero build is

@@ -6,7 +6,8 @@
 //! console has never worked before, it answers "are characters getting
 //! out" and "is this the chip the binary was built for" at the same
 //! time. `0x410fb767` is an ARM1176JZF-S (Pi 1, Pi Zero), `0x410fc075`
-//! a Cortex-A7 (Pi 2), `0x410fd034` a Cortex-A53 (Pi 3).
+//! a Cortex-A7 (Pi 2), `0x410fd034` a Cortex-A53 (Pi 3), `0x414fd0b1` a
+//! Cortex-A76 (Pi 5).
 //!
 //! Wiring is the standard console setup: a 3.3V USB-serial cable on
 //! GPIO14/15, 115200 8N1, plus an LED and resistor on GPIO4. See

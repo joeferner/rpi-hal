@@ -19,6 +19,9 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 | `bcm2711` | Pi 4 | `kernel7.img` (32-bit), `kernel8.img` (64-bit) |
 | `bcm2835` | Pi 1, Pi Zero | `kernel.img` |
 
+There is no Pi 5 image yet. rpi-hal's Pi 5 support has started, and a
+loader for it is next.
+
 [Start a project](../../start/) puts the right image on the card under
 the right name. Releases carry all five images and their checksums; the
 firmware loads only the bare names, so an image downloaded by hand has to

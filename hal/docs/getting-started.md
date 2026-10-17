@@ -21,7 +21,9 @@ copy onto it differs.
   tracks what is and isn't verified on that chip. `bcm2835` is also
   partial, and differs in kind: it is ARMv6, so it needs a different
   target and a nightly toolchain, and `multicore`/`generic_timer`/`pmu`
-  do not exist on it at all.
+  do not exist on it at all. A Pi 5 (BCM2712, the `bcm2712` feature) is
+  the most partial of all: 64-bit only, and only `blink`, `blink_act`,
+  `uart_hello` and `uart_echo` build for it so far.
 - A microSD card and a way to write it from your host machine.
 - An LED, a ~330Ω resistor, and two jumper wires (or a breadboard) for
   examples that drive GPIO.
@@ -62,6 +64,11 @@ revisions and sources, which makes it a bad first sanity check.
 
 On the 40-pin header, GPIO4 is physical pin 7; any Ground pin works
 (e.g. physical pin 6 or 9).
+
+On a Pi 5 the onboard LED is the better first check, and `blink_act`
+drives it: it hangs off the SoC itself, while every header pin goes
+through the RP1 chip and works only once the `config.txt` below has kept
+RP1 reachable.
 
 ## Wiring UART (FTDI-style cable)
 
@@ -203,6 +210,26 @@ Now populate it. The firmware files differ by board:
   about it: `Uart::init` remuxes GPIO14/15 to ALT0 itself, taking the
   header back for the PL011 whatever the firmware decided.
 
+- **Pi 5:** no firmware files at all. The Pi 5's boot firmware lives in
+  its on-board EEPROM, so the card holds only `config.txt` and
+  `kernel8.img`, and the `config.txt` is not optional:
+
+  ```ini
+  arm_64bit=1
+  kernel=kernel8.img
+  kernel_address=0x80000
+  os_check=0
+  pciex4_reset=0
+  ```
+
+  `os_check=0` stops the firmware refusing a kernel it can't match to a
+  device tree on the card. `kernel_address` pins the load address to the
+  one rpi-hal links at. `pciex4_reset=0` leaves the PCIe link to the RP1
+  chip up: every header pin and the UART are on RP1, and with the
+  firmware's default reset in place the first access to them hangs the
+  core silently. No UART clock line is needed either: on this board
+  `Uart::init` sets RP1's UART clock itself.
+
 After copying the kernel image too (next section), unmount before
 removing the card:
 
@@ -216,6 +243,7 @@ sudo umount /tmp/rpiboot
 ./scripts/build-example.sh <example-name>            # Pi 2/3, see examples/ for the available names
 ./scripts/build-example.sh <example-name> bcm2711    # Pi 4
 ./scripts/build-example.sh <example-name> bcm2835    # Pi 1, Pi Zero
+./scripts/build-example64.sh <example-name> bcm2712  # Pi 5 (64-bit only)
 ```
 
 This produces `target/kernel7.img` — or `target/kernel.img` for
@@ -223,12 +251,15 @@ This produces `target/kernel7.img` — or `target/kernel.img` for
 toolchain and `rust-src` described in README.md's "Toolchain". Not
 every example builds for that chip: the ones resting on hardware it
 does not have (the ARM generic timer, a second core) are excluded, and
-`make examples` lists the set that is known to build.
+`make examples` lists the set that is known to build. The Pi 5 line
+produces `target/kernel8.img` instead, and builds only the examples
+`make build-bcm2712` lists.
 
 Copy the image to the SD card's boot partition alongside the firmware
 files from "Prepare the SD card" above (`bootcode.bin`/`start.elf`/
 `fixup.dat` for Pi 1/2/3/Zero, `start4.elf`/`fixup4.dat` plus
-`config.txt` for Pi 4), eject safely, and boot the Pi.
+`config.txt` for Pi 4, just `config.txt` for Pi 5), eject safely, and
+boot the Pi.
 
 ## Building your own application against rpi-hal
 
@@ -246,7 +277,7 @@ target with a `rust-toolchain.toml`, which also installs it:
 [toolchain]
 channel = "stable"
 # 32-bit (Pi 2/3/4, kernel7.img):  "armv7a-none-eabi"
-# 64-bit (Pi 3/4, kernel8.img):    "aarch64-unknown-none-softfloat"
+# 64-bit (Pi 3/4/5, kernel8.img):  "aarch64-unknown-none-softfloat"
 # ARMv6 (Pi 1/Zero, kernel.img):   "armv6-none-eabi" -- see the note
 #   below; it goes in [build], never here.
 targets = ["aarch64-unknown-none-softfloat"]
@@ -281,8 +312,8 @@ Install [`cargo-binutils`](https://github.com/rust-embedded/cargo-binutils)
 Depend on `rpi-hal` from crates.io. Its default features `rt` (the
 `_start`/panic/IRQ boot sequence) and `mmu` are what a normal
 application wants. None of the chip features is a default, though —
-pick `bcm2837` (Pi 2/3), `bcm2711` (Pi 4) or `bcm2835` (Pi 1, Pi Zero)
-explicitly, matching the board you're targeting; add other integration
+pick `bcm2837` (Pi 2/3), `bcm2711` (Pi 4), `bcm2835` (Pi 1, Pi Zero) or
+`bcm2712` (Pi 5) explicitly, matching the board you're targeting; add other integration
 features (`smoltcp`, `embedded-sdmmc`, `multicore`, …) as needed:
 
 ```toml
@@ -293,7 +324,7 @@ rpi-hal = { version = "0.9", features = ["bcm2837"] }
 If you are writing a library on top of this one rather than an
 application, do **not** name a chip feature on that line. It makes the
 choice unconditional for everyone downstream, and the chip features have
-a precedence order (`bcm2711` > `bcm2837` > `bcm2835`), so a consumer
+a precedence order (`bcm2712` > `bcm2711` > `bcm2837` > `bcm2835`), so a consumer
 who adds a lower-precedence one gets the wrong memory map silently
 rather than an error. Give your own crate a feature per chip and forward
 it, defaulting to whichever board you expect:

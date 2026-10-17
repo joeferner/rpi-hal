@@ -24,6 +24,9 @@ Supported boards:
   ARMv6, its own boot stub (`firmware/src/boot6.s`), and a `kernel.img`
   with no digit. AArch32 only, the ARM1176 having no 64-bit mode, and the
   only build here that needs a nightly toolchain (see "Or build one").
+- Not yet the Pi 5 (BCM2712). `rpi-hal`'s support for it is preliminary
+  and doesn't yet reach everything the loader uses, so there is no
+  `bcm2712` build here so far.
 
 A green CI badge means it compiles, and nothing more. Every check that
 runs there is either a compile-time one or a protocol test against a fake

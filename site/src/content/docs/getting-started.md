@@ -11,7 +11,8 @@ same cable: the SD card stays in.
 ## What you need
 
 - A Raspberry Pi: a 1, Zero, 2, 3 or 4. See [Boards](../boards/) for
-  exactly which.
+  exactly which. Not a Pi 5 yet: rpi-hal's support for it has only just
+  started, and this template doesn't offer it.
 - A 3.3 V USB-to-serial cable. Its RX goes to GPIO14 (pin 8), its TX to
   GPIO15 (pin 10), and ground to pin 6.
 - An SD card with one FAT32 partition.
