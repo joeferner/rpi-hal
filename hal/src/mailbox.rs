@@ -655,14 +655,30 @@ impl Mailbox {
         self.memory_region(0x0001_0006)
     }
 
-    /// The real, current rate of `clock`, in Hz (tag `0x0003_0002`,
-    /// "Get Clock Rate") — what a caller needing an exact frequency
-    /// computes a clock divider against (see
+    /// The rate the firmware has set `clock` to, in Hz (tag
+    /// `0x0003_0002`, "Get Clock Rate") — what a caller needing an exact
+    /// frequency computes a clock divider against (see
     /// [`ClockId::Core`] for the two that do), instead of assuming a
     /// nominal value that may not match this specific board's
     /// configuration.
+    ///
+    /// This is the firmware's setting, not a reading of the clock.
+    /// [`Self::measured_clock_rate_hz`] measures it.
     pub fn clock_rate_hz(&mut self, clock: ClockId) -> Result<u32, Error> {
         let response = self.property_call(0x0003_0002, &[clock as u32], 2)?;
+        Ok(response[1])
+    }
+
+    /// The rate `clock` is actually running at, in Hz, as the firmware
+    /// measures it (tag `0x0003_0047`, "Get Clock Rate Measured").
+    ///
+    /// The one to use to find out how fast something really is, rather
+    /// than what it was asked to be: the firmware can move a clock on its
+    /// own — dynamic frequency scaling, or throttling (see
+    /// [`Self::throttled`]) — without the setting
+    /// [`Self::clock_rate_hz`] reports changing.
+    pub fn measured_clock_rate_hz(&mut self, clock: ClockId) -> Result<u32, Error> {
+        let response = self.property_call(0x0003_0047, &[clock as u32], 2)?;
         Ok(response[1])
     }
 
@@ -682,14 +698,19 @@ impl Mailbox {
     /// board goes".
     ///
     /// **A bare-metal program that wants full speed has to do this.** The
-    /// firmware brings the ARM core up at its *minimum* rate — 600 MHz on a
+    /// firmware sets the ARM core to its *minimum* rate — 600 MHz on a
     /// Pi 3 whose maximum is 1200 — and something has to ask for more.
     /// Under Linux that something is the cpufreq governor, reacting to
-    /// load through this same tag; with no OS there is no governor, so the
-    /// clock simply stays at the floor and every measurement comes out half
-    /// what the hardware can do, with nothing reported as wrong (see
-    /// [`Self::throttled`], which stays clear — the board isn't being held
-    /// back, it was never asked to go faster).
+    /// load through this same tag; with no OS there is no governor.
+    ///
+    /// What the setting means for speed isn't straightforward, which is
+    /// what makes this easy to miss. On a Pi 2B (firmware `0x6a7a1703`),
+    /// [`Self::clock_rate_hz`] reports 600 MHz from boot while
+    /// [`Self::measured_clock_rate_hz`] reads 900: the board runs at full
+    /// speed for a while regardless. Later it falls to the 600 it reports,
+    /// and a program's speed drops by a third partway through a run, with
+    /// [`Self::throttled`] still clear — the board isn't being held back,
+    /// it was never asked to go faster. Asking keeps it at the maximum.
     pub fn set_clock_rate_hz(&mut self, clock: ClockId, rate_hz: u32) -> Result<u32, Error> {
         // Third word is `skip_setting_turbo`: 0 lets the firmware move the
         // other turbo-mode clocks (core, SDRAM) along with the ARM clock,
