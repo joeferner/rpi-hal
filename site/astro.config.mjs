@@ -1,6 +1,7 @@
 // @ts-check
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
+import mermaid from "astro-mermaid";
 import starlightBlog from "starlight-blog";
 
 const repo = "https://github.com/joeferner/rpi-hal";
@@ -10,6 +11,10 @@ export default defineConfig({
   site: "https://joeferner.github.io",
   base: "/rpi-hal",
   integrations: [
+    // ```mermaid blocks, rendered in the browser and following the light
+    // and dark theme. Before Starlight, so it sees the blocks before
+    // Starlight's code highlighting turns them into code.
+    mermaid({ autoTheme: true }),
     starlight({
       title: "rpi-hal",
       description:
