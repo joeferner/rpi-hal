@@ -16,8 +16,10 @@
   "dependencies": {
     "@astrojs/starlight": "0.42.6",
     "astro": "7.3.8",
+    "astro-mermaid": "2.1.0",
     "fflate": "0.8.3",
     "liquidjs": "10.30.0",
+    "mermaid": "11.17.2",
     "starlight-blog": "0.30.2"
   }
 }
