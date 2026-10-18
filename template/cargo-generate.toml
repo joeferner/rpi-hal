@@ -9,7 +9,7 @@ ignore = ["boards.toml", "boards.json", "hooks"]
 [placeholders.board]
 type = "string"
 prompt = "Which board?"
-choices = ["pi3", "pi4", "pi2", "pi-zero", "pi1"]
+choices = ["pi3", "pi4", "pi5", "pi2", "pi-zero", "pi1"]
 default = "pi3"
 
 # Only boards that can start in either execution state ask; the hook

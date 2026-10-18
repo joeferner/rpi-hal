@@ -22,7 +22,8 @@ console on the UART and logs a heartbeat once a second.
 make sd-card
 ```
 
-This fetches the Raspberry Pi boot firmware and the
+This fetches the Raspberry Pi boot firmware this board needs (none on a
+Pi 5, whose firmware lives in its EEPROM) and the
 [rpi-loader](https://github.com/joeferner/rpi-hal/tree/main/loader) image
 into `sd-card/`, checking each against `sd-card.sha256`. Copy everything
 in `sd-card/` onto the card's boot partition, including `config.txt`.

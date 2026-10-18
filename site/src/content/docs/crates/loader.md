@@ -21,7 +21,7 @@ rpi-loader --device /dev/ttyUSB0 boot --load-addr 0x8000 target/kernel7.img
 | `bcm2712` | Pi 5 (preliminary, from 0.6.0) | `kernel8.img` (64-bit only) |
 
 [Start a project](../../start/) puts the right image on the card under
-the right name (not yet for the Pi 5). Releases carry all six images and their checksums; the
+the right name. Releases carry all six images and their checksums; the
 firmware loads only the bare names, so an image downloaded by hand has to
 be renamed on the way to the card.
 

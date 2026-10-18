@@ -62,8 +62,13 @@ def resolve(table: dict) -> dict:
 
             # What goes on the card: the name it has there, where it comes
             # from, and its checksum. The loader image is renamed to the
-            # bare kernel name.
-            firmware_files = board["firmware"] + ["LICENCE.broadcom"]
+            # bare kernel name. The Broadcom licence travels with the
+            # firmware files it covers, so a board that needs none of them
+            # (the Pi 5, whose firmware is in its EEPROM) gets no licence
+            # either.
+            firmware_files = board["firmware"] + (
+                ["LICENCE.broadcom"] if board["firmware"] else []
+            )
             card = [
                 {
                     "name": name,
