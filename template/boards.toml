@@ -33,15 +33,16 @@ ref = "1.20260824"
 # renamed to the bare kernel name on the card. The hashes are the
 # release's own `SHA256SUMS`.
 [loader]
-version = "0.5.1"
+version = "0.6.0"
 url = "https://github.com/joeferner/rpi-hal/releases/download/loader-v{version}"
 
 [loader.sha256]
-"rpi-loader-0.5.1-bcm2835-kernel.img" = "341d88a88e807982dad546ce543e995028a66ddd217f8f705b7b26c0ce1353e4"
-"rpi-loader-0.5.1-bcm2837-kernel7.img" = "e3a605968a296cba69a1639b565c2c0a995654bdffe99f81903fec0c9b12334d"
-"rpi-loader-0.5.1-bcm2837-kernel8.img" = "4e13bb416f429d7d8abc68f8c00520917846d559999c27e754e6d4ca6bc5acca"
-"rpi-loader-0.5.1-bcm2711-kernel7.img" = "d33bfbccd32d73167a4f20d056526cab830d7b49428cdd4278894362682263d3"
-"rpi-loader-0.5.1-bcm2711-kernel8.img" = "dc7330d53ced1ffb4352cacc6cc0933b4b7e52286968bc3c9360326165871b80"
+"rpi-loader-0.6.0-bcm2835-kernel.img" = "83961164ccf54f289fc6c3557fc1d71152f2e15cd7250f4caa1883be131c9661"
+"rpi-loader-0.6.0-bcm2837-kernel7.img" = "6c4af6a49783be1ede5d21abfd117880e538fa96c13a72bb3829ec72136eace0"
+"rpi-loader-0.6.0-bcm2837-kernel8.img" = "098590dbac5579ce260524ed288dcd75563c486c7a2a62eadfa1b31aba3ce757"
+"rpi-loader-0.6.0-bcm2711-kernel7.img" = "eb0211afedeaf5517649100f627a760ac0da3469eb7d3eb0264d51763a411dcc"
+"rpi-loader-0.6.0-bcm2711-kernel8.img" = "cd61dc0f7aab3a9b5115ba8a15a1ed144c211418d9cdb7de3c5ae9b129f25514"
+"rpi-loader-0.6.0-bcm2712-kernel8.img" = "a6a4a76a59cf80f4a931ff53d84c5d18cef8b038d41e7f45f749176c2641089d"
 
 # What each execution state needs, shared by every board that has it.
 #
@@ -119,6 +120,32 @@ disable_splash=1
 # Start the ARM cores in AArch64, so the firmware loads kernel8.img.
 arm_64bit=1
 disable_splash=1
+"""
+
+[[board]]
+id = "pi5"
+name = "Raspberry Pi 5 (preliminary)"
+chip = "bcm2712"
+# The Pi 5's boot firmware lives in its EEPROM, so the card carries none:
+# just config.txt and the loader.
+firmware = []
+# 64-bit only: the Pi 5's firmware starts nothing else.
+arches = ["64"]
+
+[board.config]
+64 = """
+arm_64bit=1
+kernel=kernel8.img
+# rpi-hal links AArch64 images at 0x80000; don't rely on the firmware's
+# default for an image without a Linux header.
+kernel_address=0x80000
+# Without this the firmware refuses a kernel it can't match to a device
+# tree on the card, and nothing here is a Linux kernel.
+os_check=0
+# Leave the PCIe link to the RP1 chip trained up rather than resetting it
+# before the kernel starts: the console's GPIO14/15, like every header
+# pin, are on RP1, and rpi-hal has no PCIe driver of its own.
+pciex4_reset=0
 """
 
 [[board]]

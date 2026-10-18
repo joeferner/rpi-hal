@@ -8,11 +8,11 @@ publish = false
 # The chip feature selects the SoC's peripheral memory map. None is a
 # default, because there is no sensible default chip; this one is for the
 # {{board_name}}.
-rpi-hal = { version = "0.9", features = ["{{chip}}"] }
+rpi-hal = { version = "0.10", features = ["{{chip}}"] }
 # The bring-up every board does: here only the console and `logln!`. Each
 # capability is a feature (heap, config, storage, net, web, ota, ...);
 # see https://docs.rs/rpi-kickstart.
-rpi-kickstart = { version = "0.3", features = ["console"] }
+rpi-kickstart = { version = "0.4", features = ["console"] }
 # Hands the console a UART that outlives `kmain`'s stack, without a
 # `static mut`.
 static_cell = "2.1"
