@@ -1,6 +1,7 @@
 //! Faults on purpose, to show what the `fault-report` feature prints.
 //!
-//! Run with `--features bcm2837,fault-report`. Without the feature the
+//! Run with `--features bcm2837,fault-report` (or `bcm2712,fault-report`
+//! for a Pi 5, AArch64 only). Without the feature the
 //! same program still faults and the vector table's weak handler parks
 //! the core silently, which is the comparison worth seeing once: the
 //! board goes quiet after `about to fault` and nothing else is ever
@@ -78,7 +79,14 @@ const FAULT: Fault = Fault::UnmappedRead;
 /// physical zero. There is no guard page, and nothing on these boards
 /// arranges one -- a null pointer bug on this platform corrupts memory
 /// instead of announcing itself.
+#[cfg(not(feature = "bcm2712"))]
 const UNMAPPED: usize = 0xf000_0000;
+/// The Pi 5's version of the same address. `0xf000_0000` will not do
+/// there: the BCM2712 has no MMIO below 4 GiB, so the whole low 4 GiB is
+/// mapped as RAM. 8 GiB is between that and the peripherals at
+/// `0x10_0000_0000`, a gigabyte the map leaves invalid at its first level.
+#[cfg(feature = "bcm2712")]
+const UNMAPPED: usize = 0x2_0000_0000;
 
 /// The faults this example knows how to cause on purpose.
 ///

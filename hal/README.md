@@ -914,8 +914,9 @@ has what's left.
   than building every driver at a new base, it builds only the modules
   brought up on it so far (see "Supported Devices") and leaves the rest
   out, since most of the Pi 5's peripherals are different IP on the RP1
-  chip rather than the BCM283x blocks at a new address. `fault-report`,
-  `vchiq`/`mmal` and `v3d` are each a `compile_error!` there. It needs an AArch64 target: the Pi 5 boots 64-bit kernels only.
+  chip rather than the BCM283x blocks at a new address. `vchiq`/`mmal`
+  and `v3d` are each a `compile_error!` there. It needs an AArch64
+  target: the Pi 5 boots 64-bit kernels only.
 - Consumers that need their own boot sequence instead — e.g.
   `rpi-loader`'s self-relocating loader, which must control exactly
   how and where its own code executes during relocation — depend on

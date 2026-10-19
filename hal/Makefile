@@ -27,6 +27,7 @@ build-bcm2712:
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,multicore --example multicore_id --example multicore_uart --example multicore_critical_section --example multicore_blink
+	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,fault-report --example fault_report
 
 # `bcm2835` (Pi 1, Pi Zero) is the only chip whose *target* differs too:
 # ARMv6 rather than ARMv7-A, so it names `--target` here instead of taking
@@ -117,6 +118,7 @@ clippy:
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,multicore --example multicore_id --example multicore_uart --example multicore_critical_section --example multicore_blink -- -D warnings
+	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,fault-report --example fault_report -- -D warnings
 	# And for BCM2835, on its own ARMv6 target -- see `build-bcm2835`'s
 	# comment for why this one is narrower than the others, and
 	# `examples`' for why the examples are named one by one.

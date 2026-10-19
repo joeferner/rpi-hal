@@ -50,6 +50,16 @@
 //! else, on a different pin set, gets its lines on GPIO14/15 instead.
 //! That trade is only ever paid by a board that is already dead.
 //!
+//! On the Pi 5 that UART is RP1's, behind PCIe, and re-initialising it
+//! also re-muxes the two pins and restarts RP1's `clk_uart` from the
+//! crystal -- all of it plain register writes, nothing that waits on an
+//! interrupt or a lock, so it is as safe from inside an exception as the
+//! BCM path. What it cannot survive is a fault caused by RP1 itself being
+//! unreachable (the PCIe link reset because `config.txt` lacks
+//! `pciex4_reset=0`): the access that faulted would stall, not fault, so
+//! the handler is never reached, and if it were, its own first write to
+//! the console would stall the same way.
+//!
 //! Nothing here allocates, locks, or calls into a driver beyond putting
 //! bytes in a FIFO. In particular it takes no critical section: the lock
 //! guarding an application's console may well be held by the code that
