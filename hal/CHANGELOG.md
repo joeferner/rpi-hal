@@ -28,6 +28,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   any other console write. The `fault_report` example reads 8 GiB there
   to fault (the BCM2712 maps its whole low 4 GiB as RAM, so the other
   boards' `0xf000_0000` is an ordinary read).
+- **`mem` on the Pi 5.** `mem::heap_region` and `mem::image_end` are
+  built for the BCM2712, where they had been compiled out with the rest
+  of the not-yet-ported modules though nothing in them is chip-specific.
+  `rpi-kickstart`'s `heap` needs them, so a Pi 5 board can have a heap
+  through it. `heap_alloc` builds for the Pi 5.
 
 ### Fixed
 
