@@ -15,6 +15,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address is inside the firmware's own reserved memory. `spawn` panics
   with the PSCI error code if the firmware refuses. The four multicore
   examples build for the Pi 5 unchanged, and `multicore_id` runs there.
+- **`pwm` on the Pi 5**, over RP1's two PWM blocks. `Pwm::<PWM0 |
+  PWM1>::init(block, clock_divisor)` runs the block from the 50MHz
+  crystal; `channel(&gpio, pin, range)` hands back a `Channel`
+  implementing `embedded_hal::pwm::SetDutyCycle`, with `set_inverted` /
+  `clr_inverted`. Pins are the header's GPIO12/13/18/19 (`Pwm0Pin`) and
+  the fan connector's GPIO45 (`Pwm1Pin`). `Pwm::<PWM1>::fan_rpm` reads the
+  fan's speed. New `pac::PWM0`/`PWM1` tokens, and the `pwm_fan` example,
+  which steps the fan from off to full and prints its RPM.
 
 ### Fixed
 
