@@ -19,6 +19,14 @@
 //!   cache-cleaning it (the target core reads with its caches still off)
 //!   before writing the core's slot with the address of
 //!   `__secondary_core_entry` (the secondary64.s trampoline).
+//! - **BCM2712 (Pi 5)**: there is no spin-table. The firmware runs ARM
+//!   Trusted Firmware, which holds cores 1-3 itself and starts one when
+//!   asked through PSCI (`CPU_ON`, an `smc` call) -- the device tree's
+//!   `enable-method = "psci"`. `launch` fills in `SECONDARY_PARAMS` exactly
+//!   as above and then makes that call with the trampoline as the entry
+//!   point. The spin-table's `0xd8` would be inside the 512 KiB at the
+//!   bottom of RAM that this firmware keeps for itself, so writing there
+//!   is not just unnecessary but corrupting.
 //!
 //! Either way the trampoline first leaves the privilege level the firmware
 //! released the core at — Hyp on AArch32, EL2 on AArch64 — then reads back
@@ -47,7 +55,10 @@
 //! feature.
 
 #[cfg(target_arch = "aarch64")]
-core::arch::global_asm!(include_str!("secondary64.s"));
+core::arch::global_asm!(
+    include_str!("secondary64.s"),
+    core_shift = const crate::cpu::MPIDR_CORE_SHIFT,
+);
 
 /// How much of a secondary core's [`Stack`] is carved off the top for
 /// IRQ-mode use, the rest going to main (SVC) mode.
@@ -117,7 +128,7 @@ fn launch<const BYTES: usize>(
 /// `armstub8` spin-table base: `spin_cpu0` sits at `0xd8` and core `C`
 /// polls `0xd8 + 8 * C`, jumping to the 64-bit address written there once
 /// released by `sev`.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
 const SPIN_TABLE_BASE: usize = 0xd8;
 
 #[cfg(target_arch = "aarch64")]
@@ -131,27 +142,23 @@ extern "C" {
     static SECONDARY_PARAMS: [u64; 8];
 }
 
-/// Writes `entry` and the core's stack into [`SECONDARY_PARAMS`], cleans
-/// those cache lines (the target core reads them with its caches still
-/// off), then releases the core by writing the trampoline's address into
-/// its spin-table slot and issuing `sev`. `clean_range`'s trailing `dsb`
-/// orders each write ahead of the wake.
+/// Writes `entry` and the core's stack into [`SECONDARY_PARAMS`] and
+/// cleans those cache lines, since the target core reads them with its
+/// caches still off. `clean_range`'s trailing `dsb` orders the writes
+/// ahead of whatever wakes the core.
 #[cfg(target_arch = "aarch64")]
-fn launch<const BYTES: usize>(
+fn write_params<const BYTES: usize>(
     core_id: usize,
     stack: &'static mut Stack<BYTES>,
     entry: extern "C" fn() -> !,
 ) {
-    use core::ptr::write_volatile;
-
     // AArch64 has no separate banked IRQ stack (exceptions to EL1h run on
     // SP_EL1), so the whole stack is the core's single stack. Mask to 16
     // bytes for the AArch64 stack-pointer alignment requirement.
     let sp = (stack.top() as u64) & !0xF;
 
     // SAFETY: SECONDARY_PARAMS is a fixed 4-core buffer defined in
-    // secondary64.s; core_id is 1..=3, so the slot is in bounds. The
-    // spin-table slot is the firmware's own release word for this core.
+    // secondary64.s; core_id is 1..=3, so the slot is in bounds.
     unsafe {
         let params = core::ptr::addr_of!(SECONDARY_PARAMS) as *mut u64;
         params.add(2 * core_id).write_volatile(sp);
@@ -159,13 +166,81 @@ fn launch<const BYTES: usize>(
             .add(2 * core_id + 1)
             .write_volatile(entry as usize as u64);
         crate::cache::clean_range(params.add(2 * core_id) as u32, 16);
+    }
+}
 
+/// Hands off the stack and `entry` through [`write_params`], then releases
+/// the core by writing the trampoline's address into its spin-table slot
+/// and issuing `sev`.
+#[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
+fn launch<const BYTES: usize>(
+    core_id: usize,
+    stack: &'static mut Stack<BYTES>,
+    entry: extern "C" fn() -> !,
+) {
+    use core::ptr::write_volatile;
+
+    write_params(core_id, stack, entry);
+
+    // SAFETY: the spin-table slot is the firmware's own release word for
+    // this core, and core_id is 1..=3.
+    unsafe {
         let slot = (SPIN_TABLE_BASE + 8 * core_id) as *mut u64;
         write_volatile(slot, __secondary_core_entry as *const () as u64);
         crate::cache::clean_range(slot as u32, 8);
 
         core::arch::asm!("sev");
     }
+}
+
+// ---- BCM2712: PSCI CPU_ON ------------------------------------------------
+
+/// PSCI `CPU_ON`, SMC64 calling convention: `x1` = target core's `MPIDR`,
+/// `x2` = entry point (physical), `x3` = a context value handed to the
+/// entry in `x0` (unused here: the trampoline finds its handoff by core
+/// id, the same way on every chip).
+#[cfg(feature = "bcm2712")]
+const PSCI_CPU_ON: u64 = 0xC400_0003;
+
+/// Hands off the stack and `entry` through [`write_params`], then asks the
+/// firmware to start the core at the trampoline.
+///
+/// Panics if the firmware refuses. Every refusal `CPU_ON` can give here
+/// is a bug rather than a condition to handle: `ALREADY_ON` (-4) or
+/// `ON_PENDING` (-5) means this core was started twice, which the
+/// ownership of `CoreN` is meant to rule out, and `INVALID_PARAMETERS`
+/// (-2) or `INVALID_ADDRESS` (-9) means the `MPIDR` or the trampoline's
+/// address is wrong. Returning quietly would leave the caller waiting on
+/// a core that never arrives, with nothing to say why.
+#[cfg(feature = "bcm2712")]
+fn launch<const BYTES: usize>(
+    core_id: usize,
+    stack: &'static mut Stack<BYTES>,
+    entry: extern "C" fn() -> !,
+) {
+    write_params(core_id, stack, entry);
+
+    let mpidr = (core_id as u64) << crate::cpu::MPIDR_CORE_SHIFT;
+    let mut result = PSCI_CPU_ON;
+    // SAFETY: an SMC Calling Convention call into the firmware, which may
+    // clobber x0-x17 -- covered by `clobber_abi("C")`. The entry point is
+    // the trampoline's identity-mapped (so physical) address, and
+    // `write_params` has already cleaned the handoff it will read.
+    unsafe {
+        core::arch::asm!(
+            "smc #0",
+            inout("x0") result,
+            in("x1") mpidr,
+            in("x2") __secondary_core_entry as *const () as u64,
+            in("x3") 0u64,
+            clobber_abi("C"),
+        );
+    }
+    let result = result as i64;
+    assert!(
+        result == 0,
+        "PSCI CPU_ON for core {core_id} failed with {result}"
+    );
 }
 
 // ---- Shared API ----------------------------------------------------------
@@ -289,7 +364,7 @@ impl_spawn!(Core3, 3);
 /// the *exclusives reservation granule*, the unit an exclusive monitor
 /// reserves.
 ///
-/// Both the Cortex-A7 and the Cortex-A53 use 64-byte lines. This is the
+/// The Cortex-A7, A53, A72 and A76 all use 64-byte lines. This is the
 /// *true* size, deliberately unlike the conservative lower bound the
 /// cache-maintenance helpers stride by: a stride smaller than the line is
 /// harmless there, whereas padding smaller than the line is exactly the

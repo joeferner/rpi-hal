@@ -8,7 +8,30 @@
 //! them -- an interrupt handler, or a panic handler naming the core it
 //! died on. Neither should have to enable a feature about spawning to ask.
 
-/// The calling core's id (0-3), from `MPIDR`'s Aff0 field.
+/// Bit position of the core id inside `MPIDR`: the bottom of Aff0 on every
+/// chip but the BCM2712, and the bottom of Aff1 there.
+///
+/// The Cortex-A76 is built for multithreaded designs, so it reports
+/// `MPIDR.MT = 1` and puts the core number one affinity level up, leaving
+/// Aff0 (the thread within the core) at zero. Read at Aff0, all four
+/// Pi 5 cores would call themselves core 0. The device tree says the same
+/// thing: its `cpu@N` nodes carry `reg = <0x000>`, `<0x100>`, `<0x200>`,
+/// `<0x300>`.
+///
+/// Shared with the assembly that reads `MPIDR_EL1` before any Rust runs
+/// (`boot64.s`'s core-0 check, `secondary64.s`'s handoff lookup), which
+/// takes it as a `global_asm!` `const` operand, so there is one place
+/// that knows where the field is.
+#[cfg(feature = "bcm2712")]
+pub(crate) const MPIDR_CORE_SHIFT: u32 = 8;
+/// See the BCM2712 sibling above. AArch64 only, since that is the only
+/// code that reads it: the AArch32 `core_id` and `boot.s` are never built
+/// for the BCM2712 and keep their plain Aff0 reads.
+#[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
+pub(crate) const MPIDR_CORE_SHIFT: u32 = 0;
+
+/// The calling core's id (0-3), from `MPIDR`'s Aff0 field (Aff1 on the
+/// BCM2712 -- see `MPIDR_CORE_SHIFT`).
 ///
 /// A `usize` rather than a `u8` because every use is an index or an offset
 /// multiplier: the ARM-local peripherals give each core its own copy of
@@ -53,7 +76,7 @@ pub fn core_id() -> usize {
     // SAFETY: as above. `MPIDR_EL1` is readable at EL1, which is where
     // `boot64.s` leaves every core.
     unsafe { core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr) };
-    (mpidr & 3) as usize
+    ((mpidr >> MPIDR_CORE_SHIFT) & 3) as usize
 }
 
 /// The `MIDR` Main ID register: which core this code is running on,
@@ -61,8 +84,9 @@ pub fn core_id() -> usize {
 ///
 /// The interesting field is the part number, bits\[15:4\]: `0xb76` is the
 /// ARM1176JZF-S (BCM2835 — Pi 1, Pi Zero), `0xc07` the Cortex-A7
-/// (BCM2836 — Pi 2), `0xc08` the Cortex-A53 (BCM2837 — Pi 3) and `0xd08`
-/// the Cortex-A72 (BCM2711 — Pi 4). Bits\[31:24\] are the implementer
+/// (BCM2836 — Pi 2), `0xc08` the Cortex-A53 (BCM2837 — Pi 3), `0xd08`
+/// the Cortex-A72 (BCM2711 — Pi 4) and `0xd0b` the Cortex-A76 (BCM2712 —
+/// Pi 5). Bits\[31:24\] are the implementer
 /// (`0x41`, ARM), and the rest are the variant and revision of that
 /// particular part.
 ///

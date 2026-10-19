@@ -1,18 +1,23 @@
-// AArch64 secondary-core entry, reached via the armstub8 spin-table (see
-// multicore.rs). A released core arrives here at EL2 with the MMU and
-// caches off. It drops to EL1 (same sequence as boot64.s's _start), reads
+// AArch64 secondary-core entry, reached via the armstub8 spin-table, or
+// via PSCI CPU_ON on the BCM2712 (see multicore.rs). A released core
+// arrives here with the MMU and caches off, at EL2 (TF-A's CPU_ON enters
+// the non-secure world at EL2 whenever EL2 is enabled, as the spin-table
+// does) or EL1. It drops to EL1 if it has to (same sequence as boot64.s's
+// _start), reads
 // its stack pointer and entry point from SECONDARY_PARAMS -- populated and
 // cache-cleaned by multicore::launch -- installs the shared exception
 // vectors, brings up its own MMU/caches, and jumps to the entry.
 //
 // Only assembled in when the `multicore` feature is on (included from
 // multicore.rs), so SECONDARY_PARAMS and this trampoline exist only then.
+// Included through a `global_asm!` with a `const` operand, so braces in
+// this file are format placeholders.
 
 .section ".text"
 .global __secondary_core_entry
 __secondary_core_entry:
-    // Drop EL2->EL1 if we arrived at EL2 (the armstub leaves us there),
-    // identical to boot64.s's drop.
+    // Drop EL2->EL1 if we arrived at EL2 (the armstub and TF-A's PSCI
+    // both leave us there), identical to boot64.s's drop.
     mrs     x0, CurrentEL
     lsr     x0, x0, #2
     cmp     x0, #2
@@ -33,10 +38,12 @@ __secondary_core_entry:
 
 .Lsec_el1:
     // Look up this core's sp and entry in SECONDARY_PARAMS (two u64s per
-    // core, indexed by core id). Read with the MMU still off, straight
-    // from RAM -- launch() cleaned the cache line before waking us.
+    // core, indexed by core id -- two bits of MPIDR_EL1 at `core_shift`,
+    // see cpu.rs's MPIDR_CORE_SHIFT). Read with the MMU still off,
+    // straight from RAM -- launch() cleaned the cache line before waking
+    // us.
     mrs     x0, mpidr_el1
-    and     x0, x0, #3
+    ubfx    x0, x0, #{core_shift}, #2
     adrp    x1, SECONDARY_PARAMS
     add     x1, x1, #:lo12:SECONDARY_PARAMS
     add     x1, x1, x0, lsl #4          // + 16 * core_id
