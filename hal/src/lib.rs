@@ -160,12 +160,6 @@ compile_error!(
 // not have yet. Each is a feature a consumer opts into by name, so it is
 // asking for something specific, and quietly compiling it away would leave
 // them a missing module or a link error instead of a reason.
-#[cfg(all(feature = "bcm2712", feature = "fault-report"))]
-compile_error!(
-    "the `fault-report` feature is not available on the BCM2712 (Pi 5) yet: \
-     its handler re-initialises UART0 from inside an exception, which has \
-     not been checked against that chip's RP1-hosted UART."
-);
 #[cfg(all(feature = "bcm2712", any(feature = "vchiq", feature = "v3d")))]
 compile_error!(
     "the `vchiq`, `mmal` and `v3d` features are not available on the BCM2712 \

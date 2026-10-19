@@ -23,6 +23,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the fan connector's GPIO45 (`Pwm1Pin`). `Pwm::<PWM1>::fan_rpm` reads the
   fan's speed. New `pac::PWM0`/`PWM1` tokens, and the `pwm_fan` example,
   which steps the fan from off to full and prints its RPM.
+- **`fault-report` on the Pi 5.** The handler needed no changes; the
+  `compile_error!` is gone, and the report goes out on RP1's UART0 like
+  any other console write. The `fault_report` example reads 8 GiB there
+  to fault (the BCM2712 maps its whole low 4 GiB as RAM, so the other
+  boards' `0xf000_0000` is an ordinary read).
 
 ### Fixed
 
