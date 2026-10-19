@@ -7,9 +7,11 @@
 // AArch32, expressed with AArch64 registers and an EL2->EL1 drop in place
 // of boot.s's HYP->SVC drop.
 //
-// Only core 0 is ever released here; cores 1-3 are held in the firmware's
-// own stub (AArch64 secondary-core bring-up is not implemented yet, so
-// there is no `__secondary_core_entry` here -- unlike boot.s).
+// Only core 0 is ever released here; cores 1-3 are held by the firmware
+// until `multicore` starts them at secondary64.s's `__secondary_core_entry`.
+//
+// Included through a `global_asm!` with a `const` operand (see boot.rs), so
+// braces in this file are format placeholders.
 
 .section ".text.boot"
 .global _start
@@ -17,9 +19,10 @@
 _start:
     // Only core 0 is released to this entry point; park any other core
     // that somehow arrives rather than run core 0's one-time init again.
-    // The low bits of MPIDR_EL1 are the core id (Aff0).
+    // The core id is two bits of MPIDR_EL1 at `core_shift`: Aff0 on most
+    // chips, Aff1 on the BCM2712 (see cpu.rs's MPIDR_CORE_SHIFT).
     mrs     x1, mpidr_el1
-    and     x1, x1, #3
+    ubfx    x1, x1, #{core_shift}, #2
     cbnz    x1, .Lhalt
 
     // Drop EL2->EL1 if the firmware handed off at EL2 (the default for a

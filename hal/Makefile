@@ -26,6 +26,7 @@ build-bcm2712:
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence --example i2c_scan --example i2c_sh1106_oled --example i2c_sht41 --example i2c_ads1115 --example i2c_hat_eeprom
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write
 	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read
+	cargo build --release --target aarch64-unknown-none-softfloat --features bcm2712,multicore --example multicore_id --example multicore_uart --example multicore_critical_section --example multicore_blink
 
 # `bcm2835` (Pi 1, Pi Zero) is the only chip whose *target* differs too:
 # ARMv6 rather than ARMv7-A, so it names `--target` here instead of taking
@@ -115,6 +116,7 @@ clippy:
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712 --example blink --example blink_act --example uart_hello --example uart_echo --example mailbox_props --example sd_read --example sd_presence --example i2c_scan --example i2c_sh1106_oled --example i2c_sht41 --example i2c_ads1115 --example i2c_hat_eeprom -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,embedded-sdmmc --example sd_fat_read --example sd_fat_write -- -D warnings
 	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,resident-fat --example sd_resident_fat_read -- -D warnings
+	cargo clippy --release --target aarch64-unknown-none-softfloat --features bcm2712,multicore --example multicore_id --example multicore_uart --example multicore_critical_section --example multicore_blink -- -D warnings
 	# And for BCM2835, on its own ARMv6 target -- see `build-bcm2835`'s
 	# comment for why this one is narrower than the others, and
 	# `examples`' for why the examples are named one by one.

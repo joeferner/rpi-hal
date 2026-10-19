@@ -160,12 +160,6 @@ compile_error!(
 // not have yet. Each is a feature a consumer opts into by name, so it is
 // asking for something specific, and quietly compiling it away would leave
 // them a missing module or a link error instead of a reason.
-#[cfg(all(feature = "bcm2712", feature = "multicore"))]
-compile_error!(
-    "the `multicore` feature is not available on the BCM2712 (Pi 5) yet: its \
-     secondary cores are started through PSCI calls to the boot firmware, \
-     not the ARM-local mailboxes this crate's `multicore` uses."
-);
 #[cfg(all(feature = "bcm2712", feature = "fault-report"))]
 compile_error!(
     "the `fault-report` feature is not available on the BCM2712 (Pi 5) yet: \

@@ -51,7 +51,9 @@ Supported Devices:
   RP1's UART0 (`uart_hello`), the VideoCore mailbox (`mailbox_props`),
   the SD card, reads and writes, through both FAT layers (`sd_read`,
   `sd_resident_fat_read`, `sd_fat_write`), and I2C on GPIO2/3 and GPIO0/1
-  through RP1's own controllers (`i2c_sh1106_oled`). Those keep the same
+  through RP1's own controllers (`i2c_sh1106_oled`), and starting cores
+  1-3 with the `multicore` feature (`multicore_id`), which the firmware
+  does through PSCI rather than a spin-table. Those keep the same
   API as on the other boards, so each of those examples builds unchanged;
   the SD driver's DMA and async variants are the exception, as on the
   Pi 4.
@@ -910,9 +912,8 @@ has what's left.
   than building every driver at a new base, it builds only the modules
   brought up on it so far (see "Supported Devices") and leaves the rest
   out, since most of the Pi 5's peripherals are different IP on the RP1
-  chip rather than the BCM283x blocks at a new address. `multicore`,
-  `fault-report`, `vchiq`/`mmal` and `v3d` are each a `compile_error!`
-  there. It needs an AArch64 target: the Pi 5 boots 64-bit kernels only.
+  chip rather than the BCM283x blocks at a new address. `fault-report`,
+  `vchiq`/`mmal` and `v3d` are each a `compile_error!` there. It needs an AArch64 target: the Pi 5 boots 64-bit kernels only.
 - Consumers that need their own boot sequence instead — e.g.
   `rpi-loader`'s self-relocating loader, which must control exactly
   how and where its own code executes during relocation — depend on

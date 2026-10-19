@@ -6,7 +6,10 @@ core::arch::global_asm!(include_str!("boot.s"));
 #[cfg(armv6)]
 core::arch::global_asm!(include_str!("boot6.s"));
 #[cfg(target_arch = "aarch64")]
-core::arch::global_asm!(include_str!("boot64.s"));
+core::arch::global_asm!(
+    include_str!("boot64.s"),
+    core_shift = const crate::cpu::MPIDR_CORE_SHIFT,
+);
 
 // See mmu_fallback.s: only included when `mmu` is off, so a build of this
 // crate never defines `rpi_hal_mmu_init` more than once itself (mmu.rs

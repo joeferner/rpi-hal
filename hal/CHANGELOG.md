@@ -4,6 +4,25 @@ Notable changes to `rpi-hal`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`multicore` on the Pi 5.** `Core1::spawn` and its siblings start
+  cores 1-3 on the BCM2712 through the firmware's PSCI `CPU_ON` call
+  (`smc`), which is how the Pi 5's ARM Trusted Firmware holds them; the
+  spin-table the other AArch64 boards use does not exist there, and its
+  address is inside the firmware's own reserved memory. `spawn` panics
+  with the PSCI error code if the firmware refuses. The four multicore
+  examples build for the Pi 5 unchanged, and `multicore_id` runs there.
+
+### Fixed
+
+- **`cpu::core_id` returned 0 on every Pi 5 core.** The Cortex-A76 puts
+  the core number in `MPIDR`'s Aff1 field, not Aff0. `core_id`, the boot
+  stub's core-0 check and the secondary-core trampoline now read Aff1 on
+  the BCM2712.
+
 ## [0.10.0] - 2026-10-17
 
 ### Added
