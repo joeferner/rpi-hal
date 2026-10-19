@@ -121,7 +121,7 @@ pub mod mailbox;
 /// Needs the `rt` feature, since the boundary it reports is the one this
 /// crate's linker script places. A program supplying its own script owns
 /// that layout instead.
-#[cfg(all(feature = "rt", not(feature = "bcm2712")))]
+#[cfg(feature = "rt")]
 pub mod mem;
 /// Blocking driver for the mini UART (UART1).
 #[cfg(not(feature = "bcm2712"))]

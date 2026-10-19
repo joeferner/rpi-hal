@@ -103,6 +103,11 @@ pub fn image_end() -> usize {
 /// still Strongly Ordered like everything else, which is slow rather than
 /// wrong.
 ///
+/// On the BCM2712 (Pi 5) there is no peripheral base below 4 GiB; the map
+/// is RAM up to there, and the firmware's answer is the first gigabyte
+/// whatever the board's size (`0x3fc0_0000` bytes on an 8 GB board), so
+/// the region is inside it the same way.
+///
 /// # Errors
 ///
 /// [`Error::Mailbox`] if the firmware does not answer, and
