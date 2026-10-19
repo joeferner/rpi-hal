@@ -13,10 +13,11 @@
 //! sense it one bit per pin, and `PADS_BANK0` owns its pulls and its input
 //! and output buffers. Register layout from Linux's `pinctrl-rp1.c`.
 //!
-//! Only bank 0 — GPIO0-27, the 40-pin header — is covered. RP1's banks 1
-//! and 2 (GPIO28-53) are wired to on-board functions (Ethernet PHY reset,
-//! the fan, the PWR LED, the camera/display connectors' control lines) and
-//! are not general-purpose on a Pi 5.
+//! Only bank 0 — GPIO0-27, the 40-pin header — is covered by [`Pin`]. RP1's
+//! banks 1 and 2 (GPIO28-53) are wired to on-board functions (Ethernet PHY
+//! reset, the fan, the PWR LED, the camera/display connectors' control
+//! lines) and are not general-purpose on a Pi 5; the drivers for those
+//! functions mux the pins themselves, as [`crate::pwm`] does with the fan.
 
 use crate::pac::GPIO;
 use core::marker::PhantomData;
@@ -295,17 +296,38 @@ fn select_rio(n: u8) {
     select_function(n, FUNCSEL_SYS_RIO);
 }
 
-/// Hands bank-0 pin `n` to function `funcsel` (`CTRL.FUNCSEL`, the column
-/// of RP1's pin function table), with both its input and output buffers
-/// enabled at the pad and the function itself in charge of the level and
-/// output enable — the same sequence Linux's `rp1_set_fsel` uses.
+/// Where RP1 GPIO `n` lives: the byte offset of its bank's blocks from bank
+/// 0's, and its index within the bank.
+///
+/// RP1 has three banks — GPIO0-27 (the header), 28-33 and 34-53 (board
+/// functions such as the fan) — and each bank's `IO_BANK`, `SYS_RIO` and
+/// `PADS_BANK` block sits `0x4000` above the previous bank's (Linux's
+/// `rp1_iobanks` table, and the RP1 datasheet's address map). Only the
+/// function-select and pad helpers below take pins outside bank 0; [`Pin`]
+/// and the `SYS_RIO` helpers stay on the header.
+fn bank_slot(n: u8) -> (usize, usize) {
+    match n {
+        0..=27 => (0, n as usize),
+        28..=33 => (0x4000, n as usize - 28),
+        34..=53 => (0x8000, n as usize - 34),
+        _ => panic!("RP1 has GPIO0..=53"),
+    }
+}
+
+/// Hands pin `n` (any bank — see [`bank_slot`]) to function `funcsel`
+/// (`CTRL.FUNCSEL`, the column of RP1's pin function table), with both its
+/// input and output buffers enabled at the pad and the function itself in
+/// charge of the level and output enable — the same sequence Linux's
+/// `rp1_set_fsel` uses.
 ///
 /// For the drivers in this crate that mux their own pins, as
-/// [`crate::uart`] does with GPIO14/15.
+/// [`crate::uart`] does with GPIO14/15 and [`crate::pwm`] with the fan's
+/// GPIO45.
 pub(crate) fn select_function(n: u8, funcsel: u32) {
     pad_modify(n, PAD_IE | PAD_OD, PAD_IE);
 
-    let ctrl = (GPIO::IO_BANK0 + 8 * n as usize + CTRL) as *mut u32;
+    let (bank, index) = bank_slot(n);
+    let ctrl = (GPIO::IO_BANK0 + bank + 8 * index + CTRL) as *mut u32;
     unsafe {
         let value = ctrl.read_volatile() & !(CTRL_FUNCSEL | CTRL_OUTOVER | CTRL_OEOVER);
         ctrl.write_volatile(value | funcsel);
@@ -332,10 +354,11 @@ pub(crate) fn set_pull(n: u8, pull: Pull) {
     pad_modify(n, PAD_PDE | PAD_PUE, field);
 }
 
-/// Address of pin `n`'s pad register: after the bank's 4-byte
+/// Address of pin `n`'s pad register: after its bank's 4-byte
 /// `VOLTAGE_SELECT`, one word per pin.
 fn pad_register(n: u8) -> *mut u32 {
-    (GPIO::PADS_BANK0 + 4 + 4 * n as usize) as *mut u32
+    let (bank, index) = bank_slot(n);
+    (GPIO::PADS_BANK0 + bank + 4 + 4 * index) as *mut u32
 }
 
 /// Reads pin `n`'s pad register.

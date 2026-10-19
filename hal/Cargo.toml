@@ -325,6 +325,12 @@ name = "blink_act"
 required-features = ["bcm2712"]
 
 [[example]]
+# Pi 5 only: the fan connector is driven by RP1's PWM1, which no other chip
+# has.
+name = "pwm_fan"
+required-features = ["bcm2712"]
+
+[[example]]
 name = "multicore_blink"
 required-features = ["multicore"]
 

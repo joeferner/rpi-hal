@@ -199,6 +199,11 @@ pub mod power;
 /// Blocking driver for the PWM controller.
 #[cfg(not(feature = "bcm2712"))]
 pub mod pwm;
+/// Blocking driver for the Pi 5's RP1 PWM blocks: the header's channels
+/// and the fan.
+#[cfg(feature = "bcm2712")]
+#[path = "pwm_rp1.rs"]
+pub mod pwm;
 /// Blocking driver for the hardware random number generator.
 #[cfg(not(feature = "bcm2712"))]
 pub mod rng;

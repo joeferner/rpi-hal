@@ -382,6 +382,75 @@ impl core::fmt::Debug for GPIO {
     }
 }
 
+/// RP1's PWM0, the PWM block whose four channels reach the header (GPIO12,
+/// 13, 18 and 19), driven by [`crate::pwm`].
+///
+/// Not the BCM `PWM0` of the earlier chips: RP1's is a different design,
+/// four channels with 32-bit counters, its registers set out in the RP1
+/// Peripherals datasheet's PWM chapter. No `Deref`: the driver reaches its
+/// registers through [`PWM0::ADDR`].
+pub struct PWM0 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for PWM0 {}
+
+impl PWM0 {
+    /// Address of the block's register file.
+    pub const ADDR: usize = RP1_BASE + 0x0009_8000;
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl core::fmt::Debug for PWM0 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("PWM0").finish()
+    }
+}
+
+/// RP1's PWM1, the same design as [`PWM0`]. Its only board use is the fan
+/// connector: channel 3 drives `FAN_PWM` (GPIO45).
+pub struct PWM1 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for PWM1 {}
+
+impl PWM1 {
+    /// Address of the block's register file.
+    pub const ADDR: usize = RP1_BASE + 0x0009_c000;
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl core::fmt::Debug for PWM1 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("PWM1").finish()
+    }
+}
+
 /// The BCM2712's always-on GPIO block (`gio_aon`): 23 lines in two banks
 /// (17 + 6) of Broadcom's set-top-box GPIO design, wired to board
 /// functions — on a Pi 5, line 9 is the green ACT LED.
@@ -442,6 +511,10 @@ pub struct Peripherals {
     pub BSC1: BSC1,
     /// RP1's header GPIO bank.
     pub GPIO: GPIO,
+    /// RP1's PWM0 (the header's PWM channels).
+    pub PWM0: PWM0,
+    /// RP1's PWM1 (the fan connector).
+    pub PWM1: PWM1,
     /// The always-on GPIO block.
     pub GIO_AON: GIO_AON,
 }
@@ -472,6 +545,8 @@ impl Peripherals {
             BSC0: unsafe { BSC0::steal() },
             BSC1: unsafe { BSC1::steal() },
             GPIO: unsafe { GPIO::steal() },
+            PWM0: unsafe { PWM0::steal() },
+            PWM1: unsafe { PWM1::steal() },
             GIO_AON: unsafe { GIO_AON::steal() },
         }
     }

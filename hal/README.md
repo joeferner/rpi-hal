@@ -56,7 +56,9 @@ Supported Devices:
   does through PSCI rather than a spin-table. Those keep the same
   API as on the other boards, so each of those examples builds unchanged;
   the SD driver's DMA and async variants are the exception, as on the
-  Pi 4.
+  Pi 4. PWM is there too, with its own API: RP1's two PWM blocks are a
+  different design from the BCM PWM. It covers the header's PWM pins and
+  the fan connector, with speed control and an RPM readout (`pwm_fan`).
   Everything else is
   compiled out for this chip until it has been brought up there. The card
   needs `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
