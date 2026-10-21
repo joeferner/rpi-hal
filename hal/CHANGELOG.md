@@ -53,6 +53,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for `Sdr104`. Taking the clock down fully and rewriting `SD_PIN_SEL` on
   every clock change, and selecting the delay-line PHY, follow Linux's
   `sdhci-brcmstb` for this chip.
+- **All of a Pi 5's RAM.** The firmware reports only the first gigabyte
+  to the ARM, whatever the board's size, and that is all `heap_region`
+  covers. New `mem::ram_bytes` gives the board's whole RAM from its
+  revision code, and `mem::high_ram_region` the rest above 1 GiB, with
+  what lies past 4 GiB mapped first by the new
+  `mmu::map_ram_above_4g` (1 GiB blocks, after boot, since the boot-time
+  map can't know how far the RAM goes). On an 8 GB board that is
+  `0x4000_0000..0x2_0000_0000`, 7 GiB on top of the 1014 MiB heap. The
+  `high_ram` example writes all of it with values made from each word's
+  address and reads them back. `mem::Error` gains `UnknownRam`.
 
 ### Fixed
 

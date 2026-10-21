@@ -66,8 +66,9 @@ use crate::soc::PERIPHERAL_BASE;
 /// checks a region against.
 ///
 /// On the BCM2712 that is 4 GiB of address space whatever the board's RAM:
-/// RAM above 4 GiB (8 GB and 16 GB boards) is not mapped, and on a 2 GB
-/// board the top half of what is mapped has nothing behind it.
+/// RAM above 4 GiB (8 GB and 16 GB boards) is not mapped at boot, only by
+/// [`map_ram_above_4g`] later, and on a 2 GB board the top half of what is
+/// mapped has nothing behind it.
 #[cfg(not(feature = "bcm2712"))]
 const RAM_END: u64 = PERIPHERAL_BASE as u64;
 #[cfg(feature = "bcm2712")]
@@ -256,7 +257,43 @@ pub(crate) unsafe fn install_stack_guard() {
     }
 }
 
-/// Why a [`set_uncached`] call was rejected.
+/// Maps the board's RAM from 4 GiB up to `end` as cacheable Normal memory,
+/// in 1 GiB blocks. BCM2712 only: an 8 GB or 16 GB Pi 5's RAM runs past
+/// 4 GiB, which the boot-time map stops at because it cannot know how far
+/// the RAM goes until the firmware has been asked.
+/// [`crate::mem::high_ram_region`] asks, and calls this — prefer that.
+///
+/// An `end` at or below 4 GiB maps nothing; the low 4 GiB is already RAM.
+///
+/// # Errors
+///
+/// [`Error::Misaligned`] unless `end` is a whole number of GiB, and
+/// [`Error::NotRam`] if it reaches the peripheral windows at 64 GiB and up.
+///
+/// # Safety
+///
+/// Everything from 4 GiB to `end` must be RAM on this board: an access to
+/// a mapped address with nothing behind it is an external abort rather
+/// than a translation fault, and the core may make one speculatively,
+/// without the program asking.
+#[cfg(feature = "bcm2712")]
+pub unsafe fn map_ram_above_4g(end: u64) -> Result<(), Error> {
+    if !end.is_multiple_of(imp::RAM_BLOCK_ABOVE_4G) {
+        return Err(Error::Misaligned);
+    }
+    if end > HIGH_DEVICE[0] {
+        return Err(Error::NotRam);
+    }
+    for base in (RAM_END..end).step_by(imp::RAM_BLOCK_ABOVE_4G as usize) {
+        // SAFETY: 1 GiB-aligned (checked), above the low 4 GiB and below the
+        // device windows (checked), and RAM by the caller's promise.
+        unsafe { imp::map_ram_block(base) };
+    }
+    Ok(())
+}
+
+/// Why a [`set_uncached`] call (or, on the BCM2712, a
+/// `map_ram_above_4g` call) was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// The base address or the length isn't a multiple of
@@ -268,7 +305,8 @@ pub enum Error {
     /// The region isn't entirely inside the RAM this table maps as Normal
     /// memory (below the peripheral block). Remapping MMIO space, or an
     /// address with no descriptor at all, is a caller bug rather than
-    /// something to silently do.
+    /// something to silently do. From `map_ram_above_4g` (BCM2712), an end
+    /// that reaches the peripheral windows.
     NotRam,
 }
 

@@ -548,17 +548,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-alloc"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2db634e07f552215f7a3572dc0a4d29760c637fcea5a8c18d2cc291f782c216c"
-dependencies = [
- "const-default",
- "critical-section",
- "rlsf",
-]
-
-[[package]]
 name = "embedded-hal"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1311,7 +1300,6 @@ dependencies = [
  "embassy-net",
  "embassy-sync",
  "embassy-time",
- "embedded-alloc",
  "embedded-io-async",
  "getrandom",
  "heapless 0.8.0",
@@ -1319,6 +1307,7 @@ dependencies = [
  "picoserve",
  "png",
  "resident-fat",
+ "rlsf",
  "rpi-hal",
  "rpi-hal-embassy",
  "rpi-loader-ota",

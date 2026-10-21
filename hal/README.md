@@ -59,7 +59,10 @@ Supported Devices:
   Pi 4. PWM is there too, with its own API: RP1's two PWM blocks are a
   different design from the BCM PWM. It covers the header's PWM pins and
   the fan connector, with speed control and an RPM readout (`pwm_fan`).
-  Everything else is
+  All of the board's RAM is reachable, not just the gigabyte the firmware
+  reports: `mem::high_ram_region` maps the rest, past 4 GiB on 8 GB and
+  16 GB boards (`high_ram`, which writes and checks all 7 GiB of it on an
+  8 GB board). Everything else is
   compiled out for this chip until it has been brought up there. The card
   needs `os_check=0`, `kernel_address=0x80000` and `pciex4_reset=0` in
   `config.txt` (see `docs/getting-started.md`).
