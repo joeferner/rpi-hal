@@ -66,6 +66,10 @@ pub enum Error {
         /// First address above the ARM's share of RAM.
         memory_end: usize,
     },
+    /// The board's revision code doesn't say how much RAM it has: an
+    /// old-style code (bit 23 clear, the Pi 1's), or a memory-size field
+    /// this crate has no size for. Carries the code.
+    UnknownRam(u32),
 }
 
 impl From<mailbox::Error> for Error {
@@ -133,4 +137,63 @@ pub fn heap_region(mailbox: &mut Mailbox) -> Result<Range<usize>, Error> {
     }
 
     Ok(start..end)
+}
+
+/// The board's RAM, in bytes, all of it: the VideoCore's share and, on a
+/// Pi 5, what lies above the first gigabyte included.
+///
+/// From the revision code ([`Mailbox::board_revision`]), whose bits 20-22
+/// give the size as 256 MiB shifted left by their value — 1 GB is 2, 8 GB
+/// is 5, 16 GB is 6 — in every new-style code (bit 23 set), which is every
+/// board since the Pi 2.
+///
+/// # Errors
+///
+/// [`Error::Mailbox`] if the firmware does not answer, and
+/// [`Error::UnknownRam`] for a code that doesn't say.
+pub fn ram_bytes(mailbox: &mut Mailbox) -> Result<u64, Error> {
+    const NEW_STYLE: u32 = 1 << 23;
+    let revision = mailbox.board_revision()?;
+    let size = (revision >> 20) & 0b111;
+    // 7 is unassigned; a board with it is newer than this code.
+    if revision & NEW_STYLE == 0 || size == 7 {
+        return Err(Error::UnknownRam(revision));
+    }
+    Ok((256 << 20) << size)
+}
+
+/// Where the Pi 5's RAM resumes above the firmware's: the first gigabyte
+/// is what [`Mailbox::arm_memory`] reports (`0x3fc0_0000` bytes, the last
+/// 4 MiB below 1 GiB being the firmware's own), and the rest starts here.
+#[cfg(feature = "bcm2712")]
+const HIGH_RAM_BASE: usize = 0x4000_0000;
+
+/// The Pi 5's RAM above the first gigabyte: from 1 GiB to the end of the
+/// board's RAM ([`ram_bytes`]), mapped as cacheable Normal memory and
+/// ready for a program to use — a second heap region, or one large
+/// buffer. Empty on a 1 GB board.
+///
+/// [`heap_region`] stops at the first gigabyte because that is all the
+/// firmware reports to the ARM, whatever the board's size. The boot-time
+/// map already makes RAM of everything up to 4 GiB; above that, on 8 GB
+/// and 16 GB boards, this maps the rest first
+/// ([`crate::mmu::map_ram_above_4g`]), when the `mmu` feature is on. Calling
+/// it again maps the same entries again, which is harmless.
+///
+/// # Errors
+///
+/// As [`ram_bytes`].
+#[cfg(feature = "bcm2712")]
+pub fn high_ram_region(mailbox: &mut Mailbox) -> Result<Range<usize>, Error> {
+    let end = usize::try_from(ram_bytes(mailbox)?).unwrap_or(usize::MAX);
+    if end <= HIGH_RAM_BASE {
+        return Ok(HIGH_RAM_BASE..HIGH_RAM_BASE);
+    }
+    #[cfg(feature = "mmu")]
+    // SAFETY: `end` is the board's own RAM size, so everything from 4 GiB
+    // to it is RAM; and every size a revision code gives is a whole number
+    // of GiB, well below the peripheral windows, so the call can't fail.
+    unsafe { crate::mmu::map_ram_above_4g(end as u64) }
+        .expect("RAM sizes from a revision code are whole GiB below the device windows");
+    Ok(HIGH_RAM_BASE..end)
 }

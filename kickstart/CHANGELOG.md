@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A `bcm2712` feature, and a heap over all of a Pi 5's RAM.** The
+  feature names the chip, forwarding to `rpi-hal`'s like `bcm2711` does,
+  and with it `heap::init` gives the allocator the board's RAM above the
+  first gigabyte (`rpi_hal::mem::high_ram_region`) as well as the
+  firmware's share below it: 8182 MiB on an 8 GB board, where it was 1014.
+
+### Changed
+
+- **The heap is `rlsf`'s TLSF driven directly**, in place of
+  `embedded-alloc`'s wrapper of the same allocator, which takes one
+  region where a Pi 5's heap is two. Same allocator, same `heap::init`
+  and `heap::usage`; `embedded-alloc` is no longer a dependency.
+
 ### Fixed
 
 - **`storage::mount` printed 512-byte clusters as "0 KiB".** The mount

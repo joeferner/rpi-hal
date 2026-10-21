@@ -29,43 +29,106 @@
 //!
 //! # Why TLSF rather than a linked list
 //!
-//! `embedded-alloc` offers both. A linked-list first-fit allocator is
-//! simpler, but its allocation cost grows with the number of free blocks
-//! and it fragments under repeated mixed-size allocate and free — which
-//! is exactly the workload here, since every TLS handshake allocates and
-//! frees a certificate chain. TLSF is bounded time for both operations
-//! and resists fragmentation by design, which is what a board expected to
-//! run for months without a power cycle wants: the cost of being wrong
-//! about it is a device that gets slower and then stops, long after
-//! anyone is watching the console.
+//! A linked-list first-fit allocator is simpler, but its allocation cost
+//! grows with the number of free blocks and it fragments under repeated
+//! mixed-size allocate and free — which is exactly the workload here,
+//! since every TLS handshake allocates and frees a certificate chain.
+//! TLSF is bounded time for both operations and resists fragmentation by
+//! design, which is what a board expected to run for months without a
+//! power cycle wants: the cost of being wrong about it is a device that
+//! gets slower and then stops, long after anyone is watching the console.
+//!
+//! # All of the RAM, in up to two regions
+//!
+//! On every board the heap is what [`rpi_hal::mem::heap_region`] gives:
+//! from the end of the image to the top of the share of RAM the firmware
+//! reports to the ARM. On a Pi 5, with the `bcm2712` feature, that share is
+//! the first gigabyte whatever the board's size, and the rest of the
+//! board's RAM is a second region above it (`rpi_hal::mem::high_ram_region`,
+//! 7 GiB on an 8 GB board) with the firmware's own 4 MiB between the two. So the allocator
+//! is `rlsf`'s TLSF driven directly, which takes any number of separate
+//! regions, rather than through `embedded-alloc`'s wrapper of the same
+//! allocator, which takes one.
 
+use core::alloc::{GlobalAlloc, Layout};
+use core::cell::RefCell;
+use core::ops::Range;
+use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use embedded_alloc::TlsfHeap;
+use critical_section::Mutex;
 use rpi_hal::mailbox::Mailbox;
 use rpi_hal::mem;
 
+/// `rlsf`'s TLSF, sized as `embedded-alloc` sizes it: `usize` bitmaps and a
+/// first level as wide as an address, so no block is too large for it.
+type Tlsf = rlsf::Tlsf<'static, usize, usize, { usize::BITS as usize }, { usize::BITS as usize }>;
+
+/// The most separate regions the heap takes: the firmware's share of RAM,
+/// and on a Pi 5 the rest of the board's above it.
+const MAX_REGIONS: usize = 2;
+
+/// The allocator's state: the TLSF structure, and the regions it was given,
+/// which [`usage`] walks.
+struct Pools {
+    tlsf: Tlsf,
+    regions: [Option<NonNull<[u8]>>; MAX_REGIONS],
+}
+
+// SAFETY: the regions are plain memory the allocator owns outright, and
+// every access to them and to the TLSF structure is inside the `Mutex`
+// that `Heap` wraps this in.
+unsafe impl Send for Pools {}
+
+/// The global allocator: [`Pools`] behind a critical section, so that every
+/// core, and an interrupt handler, can allocate.
+struct Heap(Mutex<RefCell<Pools>>);
+
 /// The heap itself.
 ///
-/// `empty()` is a `const` constructor, so this can be a `static` — but it
-/// hands out nothing until [`init`] gives it a region, and any allocation
-/// before that point panics.
+/// Built empty at compile time, so this can be a `static` — but it hands
+/// out nothing until [`init`] gives it its regions, and any allocation
+/// before that point fails, which `alloc` reports by panicking.
 #[global_allocator]
-static HEAP: TlsfHeap = TlsfHeap::empty();
+static HEAP: Heap = Heap(Mutex::new(RefCell::new(Pools {
+    tlsf: Tlsf::new(),
+    regions: [None; MAX_REGIONS],
+})));
+
+// SAFETY: allocation and deallocation are `rlsf`'s, each in one critical
+// section; `rlsf` returns blocks that satisfy the layout, and is given
+// back only blocks it returned with the alignment they were allocated at.
+unsafe impl GlobalAlloc for Heap {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        critical_section::with(|cs| self.0.borrow_ref_mut(cs).tlsf.allocate(layout))
+            .map_or(ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        critical_section::with(|cs| {
+            // SAFETY: `ptr` came from `alloc` with this `layout`, per
+            // `GlobalAlloc`'s contract, so it is non-null and `rlsf`'s.
+            unsafe {
+                self.0
+                    .borrow_ref_mut(cs)
+                    .tlsf
+                    .deallocate(NonNull::new_unchecked(ptr), layout.align());
+            }
+        });
+    }
+}
 
 /// Whether [`init`] has run, so that a second call reports rather than
 /// corrupts.
 ///
-/// A second `TlsfHeap::init` would hand the allocator a region it has
-/// already given parts of away, after which two live allocations could
-/// overlap. `embedded-alloc` 0.7 panics rather than let that happen — 0.6
-/// let it, silently — and guarding it here turns the panic into
+/// Giving the allocator a region it has already given parts of away would
+/// let two live allocations overlap. Guarding it here turns that into
 /// [`Error::AlreadyInitialized`], which a board can report and carry on
 /// from.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// The region [`init`] gave the allocator, in bytes; zero before then.
-/// What [`usage`] reckons `used` against.
+/// The bytes [`init`] gave the allocator, across its regions; zero before
+/// then. What [`usage`] reckons `used` against.
 static SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// Why [`init`] could not hand the allocator a region.
@@ -89,8 +152,10 @@ impl From<mem::Error> for Error {
     }
 }
 
-/// Gives the allocator every byte between the end of the image and the
-/// top of the ARM's share of RAM, returning the size of the region.
+/// Gives the allocator all of the board's free RAM, returning how many
+/// bytes that is: every byte between the end of the image and the top of
+/// the ARM's share of RAM, and on a Pi 5 (the `bcm2712` feature) the rest
+/// of the board's RAM above that.
 ///
 /// Call before anything allocates — an allocation before this point
 /// panics, and on a board with no console yet that is a silent stop.
@@ -104,33 +169,56 @@ impl From<mem::Error> for Error {
 /// [`Error::Region`] if the firmware does not answer or leaves no room,
 /// and [`Error::AlreadyInitialized`] on a second call.
 pub fn init(mailbox: &mut Mailbox) -> Result<usize, Error> {
-    // Claimed before the region is looked up, so that two callers racing
-    // cannot both get past here — and released again on the error paths
+    // Claimed before the regions are looked up, so that two callers racing
+    // cannot both get past here — and released again on the error path
     // below, since a caller that got no heap has not installed one and a
     // later attempt should be allowed to succeed.
     if INITIALIZED.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyInitialized);
     }
-
-    let region = match mem::heap_region(mailbox) {
-        Ok(region) => region,
+    let regions = match regions(mailbox) {
+        Ok(regions) => regions,
         Err(error) => {
             INITIALIZED.store(false, Ordering::Release);
             return Err(Error::Region(error));
         }
     };
-    let size = region.len();
 
-    // SAFETY: reached once, guarded above, and before anything has
-    // allocated — nothing can have been handed out of an empty heap. The
-    // region is `rpi-hal`'s: above the image and below the peripheral
-    // base, identity-mapped as cacheable Normal memory by the `mmu`
-    // feature's bring-up, and with this crate's stacks inside the image
-    // rather than growing down into it.
-    unsafe { HEAP.init(region.start, size) };
+    let mut size = 0;
+    critical_section::with(|cs| {
+        let mut pools = HEAP.0.borrow_ref_mut(cs);
+        let pools = &mut *pools;
+        for (slot, region) in pools.regions.iter_mut().zip(regions.into_iter().flatten()) {
+            let Some(start) = NonNull::new(region.start as *mut u8) else {
+                continue;
+            };
+            let block = NonNull::slice_from_raw_parts(start, region.len());
+            // SAFETY: reached once, guarded above, and before anything
+            // has allocated. Each region is `rpi-hal`'s: free RAM, mapped
+            // as cacheable Normal memory by the `mmu` feature's bring-up
+            // (or, above 4 GiB, by `high_ram_region` itself), owned by
+            // nothing else for the rest of the program, and with this
+            // crate's stacks inside the image rather than growing down
+            // into the first. The two don't overlap.
+            unsafe { pools.tlsf.insert_free_block_ptr(block) };
+            *slot = Some(block);
+            size += region.len();
+        }
+    });
     SIZE.store(size, Ordering::Relaxed);
 
     Ok(size)
+}
+
+/// The free regions [`init`] gives the allocator: the firmware's share, and
+/// on a Pi 5 the RAM above it when the board has any.
+fn regions(mailbox: &mut Mailbox) -> Result<[Option<Range<usize>>; MAX_REGIONS], mem::Error> {
+    let low = mem::heap_region(mailbox)?;
+    #[cfg(feature = "bcm2712")]
+    let high = Some(mem::high_ram_region(mailbox)?).filter(|high| !high.is_empty());
+    #[cfg(not(feature = "bcm2712"))]
+    let high = None;
+    Ok([Some(low), high])
 }
 
 /// How the heap's bytes are split, as [`usage`] found them.
@@ -153,10 +241,23 @@ pub struct Usage {
 /// with the heap's size. Cheap enough for a metrics scrape every few
 /// seconds; not something to call in a loop.
 pub fn usage() -> Usage {
-    // One walk rather than `used()` and `free()`, which would be two — and
-    // two that can disagree, if something allocates between them. `used` is
-    // the region less what is free, which is how the allocator reckons it.
-    let free = HEAP.free();
+    // One walk rather than two, which could disagree if something
+    // allocates between them. `used` is the regions less what is free.
+    let free = critical_section::with(|cs| {
+        let pools = HEAP.0.borrow_ref(cs);
+        pools
+            .regions
+            .iter()
+            .flatten()
+            .map(|&region| {
+                // SAFETY: each region is one `init` inserted, whole.
+                unsafe { pools.tlsf.iter_blocks(region) }
+                    .filter(|block| !block.is_occupied())
+                    .map(|block| block.max_payload_size())
+                    .sum::<usize>()
+            })
+            .sum::<usize>()
+    });
     Usage {
         used: SIZE.load(Ordering::Relaxed).saturating_sub(free),
         free,

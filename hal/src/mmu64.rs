@@ -29,8 +29,11 @@
 //! regions uniformly costs 16KB of `.bss` and removes the class of bug.
 //!
 //! Above 4GB, only the 1GB regions the parent module lists in
-//! `HIGH_DEVICE` are mapped, as level-1 Device blocks -- on the BCM2712,
-//! whose peripherals all live up there. Anything else above 4GB, and
+//! `HIGH_DEVICE` are mapped at boot, as level-1 Device blocks -- on the
+//! BCM2712, whose peripherals all live up there. On that chip a board with
+//! more than 4GB of RAM can also have the rest of it mapped afterwards,
+//! as level-1 RAM blocks (`crate::mmu::map_ram_above_4g`), once it has
+//! asked the firmware how much there is. Anything else above 4GB, and
 //! anything within it not covered by a rule above, is left as an invalid
 //! (zero) descriptor, so touching genuinely unbacked address space faults
 //! -- same intent as the AArch32 map.
@@ -292,6 +295,38 @@ pub unsafe extern "C" fn rpi_hal_mmu_init() {
 /// Bytes covered by one level-2 descriptor -- see
 /// [`crate::mmu::UNCACHED_GRANULE`].
 pub(super) const UNCACHED_GRANULE: usize = BLOCK_2MB as usize;
+
+/// Bytes covered by one level-1 descriptor -- the unit
+/// [`crate::mmu::map_ram_above_4g`] maps in.
+#[cfg(feature = "bcm2712")]
+pub(super) const RAM_BLOCK_ABOVE_4G: u64 = BLOCK_1GB;
+
+/// Maps the 1GB region at `base` as Normal, cacheable RAM: a level-1
+/// block descriptor, like `HIGH_DEVICE`'s but with RAM's attributes.
+///
+/// The entry is invalid before this (`rpi_hal_mmu_init` fills only the low
+/// four and `HIGH_DEVICE`'s), and an invalid entry is never held in a TLB,
+/// so there is nothing to invalidate: the store, a `dsb` to make it
+/// visible to the walker, and an `isb` so this core's next access walks
+/// again. Secondary cores walk the same table, so the `dsb`'s
+/// inner-shareable reach covers them too. And a secondary core started
+/// later keeps the entry: its `rpi_hal_mmu_init` writes only the entries it
+/// fills, never this one.
+///
+/// # Safety
+///
+/// `base` must be 1GB-aligned, above the low 4GB and below the device
+/// regions, and must be RAM on this board in its whole length.
+#[cfg(feature = "bcm2712")]
+pub(super) unsafe fn map_ram_block(base: u64) {
+    let l1 = L1.0.get() as *mut u64;
+    unsafe {
+        l1.add((base / BLOCK_1GB) as usize)
+            .write_volatile(base | RAM_BLOCK_FLAGS);
+        asm!("dsb ishst");
+        asm!("isb");
+    }
+}
 
 /// Rewrites the level-2 block descriptor covering `base` with
 /// [`UNCACHED_BLOCK_FLAGS`], then makes the change take effect everywhere.

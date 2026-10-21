@@ -68,13 +68,13 @@ getrandom = { version = "0.2", default-features = false, features = [
     "custom",
 ], optional = true }
 
-# The allocator behind `heap`. `default-features = false` with `tlsf`
-# named: the crate also ships a linked-list allocator, and which one is
-# in the binary should be a line someone wrote rather than a default --
-# see src/heap.rs for why this one. 0.7 for `used`/`free` on the TLSF
-# heap, which 0.6 had only on the linked-list one; `heap::usage` reads them.
-embedded-alloc = { version = "0.7", default-features = false, features = [
-    "tlsf",
+# The allocator behind `heap`: TLSF (see src/heap.rs for why), driven
+# directly rather than through `embedded-alloc`'s wrapper of it, because
+# the heap can be two separate regions and that wrapper takes one.
+# `unstable` for `iter_blocks`, which `heap::usage` counts free bytes with
+# -- the same feature `embedded-alloc` turns on for the same reason.
+rlsf = { version = "0.2.3", default-features = false, features = [
+    "unstable",
 ], optional = true }
 
 # The network stack and the time API behind `net`, `mdns`, `sntp` and
@@ -359,7 +359,7 @@ entropy = ["dep:rpi-hal", "dep:getrandom", "dep:critical-section"]
 # free memory starts. Any board linking against `rpi-link.x` already has
 # it; this makes the requirement resolve rather than surface as a missing
 # module.
-heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:embedded-alloc"]
+heap = ["dep:rpi-hal", "rpi-hal/rt", "dep:rlsf", "dep:critical-section"]
 
 # Reading a settings file: TOML into the application's own schema, located
 # errors, and the semantic checks TOML cannot make (src/config.rs).
@@ -685,6 +685,10 @@ wifi = ["net"]
 bcm2835 = ["rpi-hal?/bcm2835"]
 bcm2837 = ["rpi-hal?/bcm2837"]
 bcm2711 = ["rpi-hal?/bcm2711"]
+# The Pi 5. Besides naming the chip, it is what lets `heap` give the
+# allocator the board's RAM above the first gigabyte, which only this chip
+# has a second region of.
+bcm2712 = ["rpi-hal?/bcm2712"]
 
 # Auto-discovery covers `hello`, which needs no features. These need
 # entries so they can declare `required-features` -- without one a plain
