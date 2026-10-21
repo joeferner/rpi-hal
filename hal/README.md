@@ -389,14 +389,29 @@ implementations where applicable, and all verified on real hardware:
   staging buffer and no copy in between.
 
   How fast the bus runs is a `sd::BusMode`: one data line or four at
-  default speed (25MHz), or, on the Pi 5, four at high speed (50MHz,
-  switched to with `CMD6`). `Sd::init` negotiates the fastest the card
-  supports and `Sd::bus_mode` says which; `Sd::init_with` takes a cap.
-  `examples/sd_speed.rs` reads the same 32 MiB in each mode, hashing it to
-  check every mode reads the same bytes, then times commands of 4 KiB to
-  1 MiB. On a Pi 5 that is 3.0, 12.0 and 23.9 MB/s, each about 96% of its
-  bus, with about 300µs of card latency per command, so a 1 MiB command
-  reaches 24.0 MB/s and a 4 KiB one 8.9.
+  default speed (25MHz), and on the Pi 5 also high speed (50MHz, switched
+  to with `CMD6`) and the UHS-I modes SDR50 (100MHz) and SDR104 (200MHz),
+  at 1.8V signalling and with the sampling point tuned. `Sd::init`
+  negotiates the fastest the card supports and `Sd::bus_mode` says which;
+  `Sd::init_with` takes a cap. `examples/sd_speed.rs` reads the same 32
+  MiB in each mode, hashing it to check every mode reads the same bytes,
+  then times commands of 4 KiB to 1 MiB at the fastest. On a Pi 5 with a
+  UHS-I card:
+
+  | Mode | Read | Bus |
+  |---|---|---|
+  | `OneBit` | 3.0 MB/s | 3.1 |
+  | `FourBit` | 12.0 MB/s | 12.5 |
+  | `HighSpeed` | 23.9 MB/s | 25 |
+  | `Sdr50` | 47.4 MB/s | 50 |
+  | `Sdr104` | 72.8 MB/s | 100 |
+
+  Bringing a UHS mode up, tuning included, takes 284 ms, against 238
+  for the plain 1-bit bus. A command
+  costs about 300µs of card latency besides its data, so at SDR104 a 1
+  MiB command reaches 71.5 MB/s and a 4 KiB one 11.1. SDR104 stops at
+  73% of its bus, unlike the slower modes' 95%; whether the card or the
+  driver's word-at-a-time FIFO reads set that isn't measured yet.
 
   Card presence is discovered rather than sensed, because no Pi wires a
   card-detect line anywhere a driver could read it — GPIO47, the pin
