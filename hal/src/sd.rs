@@ -136,9 +136,14 @@
 //! - **No DMA or async**, as on the Pi 4: no DREQ route is known for this
 //!   controller, and no interrupt controller is supported on this chip.
 //!
-//! It also goes one step faster than the other chips: after the 4-bit bus,
-//! `init` switches the card to high speed (`CMD6`) and the clock to 50MHz,
-//! [`BusMode::HighSpeed`], still at 3.3V.
+//! It also goes faster than the other chips. A UHS-I card is switched to
+//! 1.8V signalling (`CMD11`, then the I/O rail's always-on GPIO line), then
+//! to SDR104 at 200MHz or SDR50 at 100MHz (`CMD6`), and the controller
+//! tunes its sampling point (`CMD19`): [`BusMode::Sdr104`] /
+//! [`BusMode::Sdr50`]. A card without UHS gets high speed, 50MHz at 3.3V
+//! ([`BusMode::HighSpeed`]). If any step of a faster mode fails, the card
+//! is powered off and brought up again capped one mode lower, so `init`
+//! never returns a card left between modes.
 
 #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 use crate::dma::Channel;
@@ -366,6 +371,53 @@ const SWITCH_CHECK_HIGH_SPEED: u32 = 0x00ff_fff1;
 /// the status block it sends back.
 #[cfg(feature = "bcm2712")]
 const SWITCH_SET_HIGH_SPEED: u32 = 0x80ff_fff1;
+/// `CMD6` in check mode changing nothing (`0xf` in every group): just the
+/// status block, whose group 1 bitmap says which access modes the card
+/// supports.
+#[cfg(feature = "bcm2712")]
+const SWITCH_CHECK_ONLY: u32 = 0x00ff_ffff;
+/// `CMD6` in switch mode with group 1 left for the caller to fill in: OR
+/// in the function number (2 for SDR50, 3 for SDR104).
+#[cfg(feature = "bcm2712")]
+const SWITCH_SET_ACCESS_MODE: u32 = 0x80ff_fff0;
+/// `CMDTM` value for CMD11 (`VOLTAGE_SWITCH`) — R1 (48-bit) response, no
+/// data.
+#[cfg(feature = "bcm2712")]
+const CMD_VOLTAGE_SWITCH: u32 = 0x0b02_0000;
+/// `CMDTM` value for CMD19 (`SEND_TUNING_BLOCK`) — R1 response, data
+/// present, card-to-host: a 64-byte known pattern on the 4-bit bus, which
+/// the controller compares itself while it searches for a sampling point.
+#[cfg(feature = "bcm2712")]
+const CMD_SEND_TUNING: u32 = 0x1322_0010;
+/// The most `CMD19`s one tuning may take: the SD spec's limit.
+#[cfg(feature = "bcm2712")]
+const TUNING_TRIES: usize = 40;
+/// `CONTROL2` bit 19, Host Control 2's "1.8V Signaling Enable" (bit 3 of
+/// the standard SDHCI register, which `CONTROL2` holds in its top half).
+/// Not modelled in this PAC's SVD, hence the raw bit.
+#[cfg(feature = "bcm2712")]
+const CONTROL2_SIGNALING_1V8: u32 = 1 << 19;
+/// `CONTROL2.UHSMODE` value for SDR50.
+#[cfg(feature = "bcm2712")]
+const UHS_MODE_SDR50: u8 = 2;
+/// `CONTROL2.UHSMODE` value for SDR104.
+#[cfg(feature = "bcm2712")]
+const UHS_MODE_SDR104: u8 = 3;
+/// SD clock in SDR50.
+#[cfg(feature = "bcm2712")]
+const SDR50_CLOCK_HZ: u32 = 100_000_000;
+/// SD clock in SDR104: the base clock undivided.
+#[cfg(feature = "bcm2712")]
+const SDR104_CLOCK_HZ: u32 = 200_000_000;
+
+/// The always-on GPIO line selecting the card's I/O voltage
+/// (`bcm2712-rpi-5-b.dts`'s `sd_io_1v8_reg`): high is 1.8V, low 3.3V.
+#[cfg(feature = "bcm2712")]
+const SD_IO_1V8: u8 = 3;
+/// The always-on GPIO line switching the card's supply (`sd_vcc_reg`),
+/// active high.
+#[cfg(feature = "bcm2712")]
+const SD_VCC: u8 = 4;
 
 /// Mask over the `INTERRUPT` register's error bits — any of these set
 /// means the just-issued command or data transfer failed.
@@ -397,8 +449,16 @@ const INT_WRITE_RDY: u32 = 0x0000_0010;
 const INT_READ_RDY: u32 = 0x0000_0020;
 
 /// ACMD41 argument requesting the standard voltage window plus host
-/// capacity support (HCS — "I can handle an SDHC/SDXC card").
+/// capacity support (HCS — "I can handle an SDHC/SDXC card"), maximum
+/// performance (XPC, bit 28) and, in bit 24, S18R: a request to switch to
+/// 1.8V signalling. A UHS card agrees to that in its answer, but stays at
+/// 3.3V until it is sent `CMD11`, so a driver that never sends one can
+/// leave the bit set; the BCM2712 path, which does, decides it per call.
 const ACMD41_ARG_HC: u32 = 0x51ff_8000;
+/// ACMD41 bit 24: S18R in the request ("switch to 1.8V signalling if you
+/// can") and S18A in the response ("I can; send `CMD11`").
+#[cfg(feature = "bcm2712")]
+const ACMD41_S18: u32 = 0x0100_0000;
 /// ACMD41 response bit: the card has finished its power-up sequence.
 const ACMD41_CMD_COMPLETE: u32 = 0x8000_0000;
 /// ACMD41 response bit: the card accepted the requested voltage
@@ -592,6 +652,13 @@ pub enum BusMode {
     /// Four data lines at high speed (50MHz): 25MB/s at most. Pi 5 only so
     /// far; other chips stop at [`Self::FourBit`].
     HighSpeed,
+    /// UHS-I SDR50: 1.8V signalling, 100MHz, tuned: 50MB/s at most. Pi 5
+    /// only.
+    Sdr50,
+    /// UHS-I SDR104: 1.8V signalling, tuned, at 200MHz here (the
+    /// controller's base clock; the spec allows 208): 100MB/s at most. Pi 5
+    /// only.
+    Sdr104,
 }
 
 impl Sd {
@@ -657,7 +724,7 @@ impl Sd {
         mailbox: &mut Mailbox,
         timer: &Timer,
     ) -> Result<Self, Error> {
-        Self::init_with(gpio, emmc, mailbox, timer, BusMode::HighSpeed)
+        Self::init_with(gpio, emmc, mailbox, timer, BusMode::Sdr104)
     }
 
     /// [`Self::init`], negotiating no faster a bus than `max`: a card
@@ -804,9 +871,22 @@ impl Sd {
         // ACMD41: poll until the card reports its power-up sequence
         // complete, budgeting a generous 1 second total -- the SD
         // spec allows a card up to ~1s here in the worst case.
+        // On the Pi 5, a UHS mode is asked for here, at the start: a card
+        // agrees to 1.8V signalling only in its answer to `ACMD41`.
+        #[cfg(feature = "bcm2712")]
+        // `ACMD41_ARG_HC` already carries S18R, which a driver that never
+        // sent `CMD11` could ignore the answer to; here the answer starts
+        // the switch, so it is asked only when the switch is wanted.
+        let acmd41_arg = if max >= BusMode::Sdr50 {
+            ACMD41_ARG_HC | ACMD41_S18
+        } else {
+            ACMD41_ARG_HC & !ACMD41_S18
+        };
+        #[cfg(not(feature = "bcm2712"))]
+        let acmd41_arg = ACMD41_ARG_HC;
         let start = timer.now_micros();
         let response = loop {
-            let response = sd.command(CMD_SEND_OP_COND, ACMD41_ARG_HC, timer)?;
+            let response = sd.command(CMD_SEND_OP_COND, acmd41_arg, timer)?;
             if response & ACMD41_CMD_COMPLETE != 0 {
                 break response;
             }
@@ -819,6 +899,18 @@ impl Sd {
             return Err(Error::UnusableCard);
         }
         let high_capacity = response & ACMD41_CMD_CCS != 0;
+
+        // The switch to 1.8V comes next, before the card is identified.
+        // A card that agreed but then fails it is in no state to go on:
+        // it is powered off and brought up again at 3.3V (`init_with`
+        // power-cycles it first), capped at high speed.
+        #[cfg(feature = "bcm2712")]
+        let signalling_1v8 = acmd41_arg & response & ACMD41_S18 != 0;
+        #[cfg(feature = "bcm2712")]
+        if signalling_1v8 && !sd.switch_to_1v8(timer) {
+            let Self { emmc, .. } = sd;
+            return Self::init_with(gpio, emmc, mailbox, timer, BusMode::HighSpeed);
+        }
 
         sd.command(CMD_ALL_SEND_CID, 0, timer)?;
 
@@ -837,6 +929,31 @@ impl Sd {
         // leaves the bus at 1-bit rather than failing `init` outright.
         let four_bit_bus =
             max >= BusMode::FourBit && sd.negotiate_four_bit_bus(timer).unwrap_or(false);
+        // At 1.8V, a UHS mode: SDR104 if the card has it and `max` allows
+        // it, else SDR50, then tuning. A failure anywhere in that leaves the
+        // card's bus half-switched, so rather than carry on in some mode
+        // in between, the card is brought up again from power-off, capped
+        // one mode lower.
+        #[cfg(feature = "bcm2712")]
+        if signalling_1v8 {
+            let uhs = if four_bit_bus {
+                sd.negotiate_uhs(base_clock_hz, max, timer)
+            } else {
+                Err(BusMode::HighSpeed)
+            };
+            return match uhs {
+                Ok(bus_mode) => Ok(Self {
+                    high_capacity,
+                    bus_mode,
+                    ..sd
+                }),
+                Err(cap) => {
+                    let Self { emmc, .. } = sd;
+                    Self::init_with(gpio, emmc, mailbox, timer, cap)
+                }
+            };
+        }
+
         // Then high speed, best-effort in the same way: a card that can't,
         // or a switch that fails, stays at default speed. Only on the Pi
         // 5 for now; the other chips' controllers stay at default speed
@@ -1275,6 +1392,174 @@ impl Sd {
         });
     }
 
+    /// Switches the card and the bus to 1.8V signalling, for a card whose
+    /// `ACMD41` answer agreed to it: the SD spec's sequence, with the I/O
+    /// rail being an always-on GPIO line on this board. Returns whether it
+    /// worked.
+    ///
+    /// `CMD11` tells the card, which answers and then holds `CMD` and
+    /// `DAT0-3` low. The host stops the clock, checks the lines really are
+    /// low (a card that didn't take the switch leaves them high), sets
+    /// Host Control 2's 1.8V bit and the rail, and gives the rail its 5ms
+    /// to settle and the card its 5ms after that. Then the clock comes
+    /// back, and a card that switched lets the data lines go high within
+    /// a millisecond.
+    #[cfg(feature = "bcm2712")]
+    fn switch_to_1v8(&self, timer: &Timer) -> bool {
+        if self.command(CMD_VOLTAGE_SWITCH, 0, timer).is_err() {
+            return false;
+        }
+        self.emmc.control1().modify(|_, w| w.clk_en().clear_bit());
+        if self.emmc.status().read().dat_level0().bits() != 0 {
+            return false;
+        }
+
+        self.emmc
+            .control2()
+            .modify(|r, w| unsafe { w.bits(r.bits() | CONTROL2_SIGNALING_1V8) });
+        crate::gio_aon::drive(SD_IO_1V8, true);
+        timer.delay_ms(10);
+        if self.emmc.control2().read().bits() & CONTROL2_SIGNALING_1V8 == 0 {
+            return false;
+        }
+
+        self.emmc.control1().modify(|_, w| w.clk_en().set_bit());
+        timer.delay_ms(1);
+        self.emmc.status().read().dat_level0().bits() == 0b1111
+    }
+
+    /// Switches a card already at 1.8V signalling to the fastest UHS-I
+    /// mode it supports up to `max` — SDR104, else SDR50 — and tunes the
+    /// sampling point for it. Returns the mode, or on failure the mode to
+    /// cap a fresh [`Self::init_with`] at: one lower than the one that
+    /// failed.
+    ///
+    /// The host side follows the card's `CMD6`: the clock stopped, Host
+    /// Control 2's UHS mode and Host Control 1's high-speed bit set (Linux
+    /// sets the latter for every UHS mode too), the new clock started.
+    /// Then tuning, which both modes get: the SD spec makes it optional
+    /// for SDR50 but every card answers `CMD19` there, and at 100MHz a
+    /// fixed sampling point is already a guess.
+    #[cfg(feature = "bcm2712")]
+    fn negotiate_uhs(
+        &self,
+        base_clock_hz: u32,
+        max: BusMode,
+        timer: &Timer,
+    ) -> Result<BusMode, BusMode> {
+        let fail = |below: BusMode| {
+            self.reset_command_and_data(timer);
+            below
+        };
+        // Group 1's support bitmap, bits 415:400 of the status block:
+        // SDR50 is function 2 (bit 402), SDR104 function 3 (bit 403), both
+        // in byte 13. The selected function is byte 16's low nibble.
+        let supported = match self.switch_function(SWITCH_CHECK_ONLY, timer) {
+            Ok(status) => status[13],
+            Err(_) => return Err(fail(BusMode::HighSpeed)),
+        };
+        let (mode, function, uhs_mode, clock_hz) =
+            if max >= BusMode::Sdr104 && supported & 0x08 != 0 {
+                (BusMode::Sdr104, 3, UHS_MODE_SDR104, SDR104_CLOCK_HZ)
+            } else if supported & 0x04 != 0 {
+                (BusMode::Sdr50, 2, UHS_MODE_SDR50, SDR50_CLOCK_HZ)
+            } else {
+                return Err(fail(BusMode::HighSpeed));
+            };
+        let below = if mode == BusMode::Sdr104 {
+            BusMode::Sdr50
+        } else {
+            BusMode::HighSpeed
+        };
+
+        match self.switch_function(SWITCH_SET_ACCESS_MODE | function, timer) {
+            Ok(status) if u32::from(status[16] & 0x0f) == function => {}
+            _ => return Err(fail(below)),
+        }
+
+        self.emmc.control1().modify(|_, w| w.clk_en().clear_bit());
+        self.emmc
+            .control2()
+            .modify(|_, w| unsafe { w.uhsmode().bits(uhs_mode) });
+        self.emmc.control0().modify(|_, w| w.hctl_hs_en().set_bit());
+        if set_clock(&self.emmc, base_clock_hz, clock_hz, timer).is_err() {
+            return Err(fail(below));
+        }
+        if !self.tune(timer) {
+            return Err(fail(below));
+        }
+        Ok(mode)
+    }
+
+    /// The SDHCI tuning procedure: set Execute Tuning, send `CMD19` until
+    /// the controller clears it (at most [`TUNING_TRIES`]), and succeed if
+    /// it left Sampling Clock Select set — a sampling point found. The
+    /// controller reads and checks each tuning block itself; the driver
+    /// only sends the commands and waits for each block's `READ_RDY`.
+    ///
+    /// Three things here differ from an ordinary data read, and each one
+    /// done the ordinary way stopped tuning on the Pi 5. No Command
+    /// Complete arrives for a `CMD19`, so waiting for one waited out a
+    /// second on every block. The data lines read busy from the first block
+    /// to the end of tuning, because the controller keeps each block in its
+    /// buffer, so waiting for them failed every other block. And resetting
+    /// the command and data circuits after a block with a CRC error, the
+    /// ordinary recovery, interrupts the search those errors are part of.
+    #[cfg(feature = "bcm2712")]
+    fn tune(&self, timer: &Timer) -> bool {
+        self.emmc.control2().modify(|_, w| w.tuneon().set_bit());
+        for _ in 0..TUNING_TRIES {
+            let sent = (|| {
+                self.emmc
+                    .blksizecnt()
+                    .write(|w| unsafe { w.blksize().bits(64).blkcnt().bits(1) });
+                // Not through `command`, which waits for Command Complete:
+                // while Execute Tuning is set, the controller's only signal
+                // for a `CMD19` is Buffer Read Ready (Linux masks every
+                // other interrupt for tuning). And only the command line is
+                // waited for, as Linux does, sending it as a command with
+                // no data.
+                wait_for(timer, 100_000, || {
+                    self.emmc.status().read().cmd_inhibit().bit_is_clear()
+                })?;
+                let stale = self.emmc.interrupt().read().bits();
+                self.emmc.interrupt().write(|w| unsafe { w.bits(stale) });
+                self.emmc.arg1().write(|w| unsafe { w.bits(0) });
+                self.emmc
+                    .cmdtm()
+                    .write(|w| unsafe { w.bits(CMD_SEND_TUNING) });
+                // Linux gives each tuning block 50ms; one that hasn't come
+                // by then isn't coming, and no later one will either.
+                self.wait_interrupt_within(INT_READ_RDY, CMD_SEND_TUNING, 50_000, timer)
+            })();
+            // A block with a CRC error is part of the search: its error bits
+            // are already cleared, and the next one goes out. Only a block
+            // that never comes ends it.
+            match sent {
+                Ok(_) | Err(Error::CardError { .. }) => {}
+                Err(_) => break,
+            }
+            if self.emmc.control2().read().tuneon().bit_is_clear() {
+                break;
+            }
+        }
+        // Whatever the outcome, the last tuning block may still be in the
+        // buffer with the data lines reading busy; a data reset clears
+        // that without touching the sampling point tuning chose (Host
+        // Control 2 is outside what it resets).
+        if self.emmc.status().read().dat_inhibit().bit_is_set() {
+            self.reset_command_and_data(timer);
+        }
+        let control2 = self.emmc.control2().read();
+        if control2.tuneon().bit_is_set() || control2.tuned().bit_is_clear() {
+            self.emmc
+                .control2()
+                .modify(|_, w| w.tuneon().clear_bit().tuned().clear_bit());
+            return false;
+        }
+        true
+    }
+
     /// Waits for the data lines to be free — the prerequisite every
     /// data-bearing command ([`Self::read_block`],
     /// [`Self::negotiate_four_bit_bus`]'s SCR read) needs before
@@ -1391,12 +1676,24 @@ impl Sd {
     /// spinning form; `command` is passed through only to
     /// [`Error::CardError`]/[`Error::WaitTimeout`]'s diagnostic fields.
     fn wait_interrupt(&self, mask: u32, command: u32, timer: &Timer) -> Result<u32, Error> {
+        self.wait_interrupt_within(mask, command, 1_000_000, timer)
+    }
+
+    /// [`Self::wait_interrupt`] with a budget of `timeout_us` rather than a
+    /// second.
+    fn wait_interrupt_within(
+        &self,
+        mask: u32,
+        command: u32,
+        timeout_us: u64,
+        timer: &Timer,
+    ) -> Result<u32, Error> {
         let start = timer.now_micros();
         loop {
             if let Some(result) = self.poll_interrupt(mask, command) {
                 return result;
             }
-            if timer.now_micros() - start > 1_000_000 {
+            if timer.now_micros() - start > timeout_us {
                 return Err(Error::WaitTimeout {
                     waiting_for: mask,
                     interrupt: self.emmc.interrupt().read().bits(),
@@ -1545,13 +1842,13 @@ fn set_emmc_pull_up(gpio: &GPIO) {
 ///
 /// The card's supply and its I/O voltage are both switched by always-on
 /// GPIO lines (`bcm2712-rpi-5-b.dts`: `sd_vcc_reg` on line 4, active high;
-/// `sd_io_1v8_reg` on line 3, high selecting 1.8V). This driver runs the
-/// bus at 3.3V default speed, but the bootloader that read this image off
-/// the card may have switched it to 1.8V UHS signalling, and a card leaves
-/// 1.8V only by losing power — `CMD0` doesn't do it. So the card is
-/// switched off, the I/O rail set to 3.3V while it is off, and the card
-/// switched back on, leaving it in the state a freshly inserted card is
-/// in whatever happened before.
+/// `sd_io_1v8_reg` on line 3, high selecting 1.8V). Every card starts at
+/// 3.3V, and `Sd::init_with` switches it to 1.8V itself when it can, but
+/// the bootloader that read this image off the card may already have, and
+/// so may an earlier `init` — and a card leaves 1.8V only by losing power;
+/// `CMD0` doesn't do it. So the card is switched off, the I/O rail set to
+/// 3.3V while it is off, and the card switched back on, leaving it in the
+/// state a freshly inserted card is in whatever happened before.
 ///
 /// The SD spec wants the supply below 0.5V for at least 1ms; 50ms off
 /// leaves a generous margin for the slot's decoupling to discharge. 10ms
@@ -1560,9 +1857,6 @@ fn set_emmc_pull_up(gpio: &GPIO) {
 /// starts clocking the card.
 #[cfg(feature = "bcm2712")]
 fn bcm2712_power_cycle_card(timer: &Timer) {
-    const SD_IO_1V8: u8 = 3;
-    const SD_VCC: u8 = 4;
-
     crate::gio_aon::drive(SD_VCC, false);
     crate::gio_aon::drive(SD_IO_1V8, false);
     timer.delay_ms(50);
@@ -1570,13 +1864,18 @@ fn bcm2712_power_cycle_card(timer: &Timer) {
     timer.delay_ms(10);
 }
 
-/// Programs the two Broadcom-specific settings the BCM2712's controller
+/// Programs the three Broadcom-specific settings the BCM2712's controller
 /// keeps outside the SDHCI register map, in its `cfg` block — what Linux's
-/// `sdhci-brcmstb.c` does for this chip, minus what only the UHS and eMMC
-/// speed modes need:
+/// `sdhci-brcmstb.c` does for this chip, minus what only the eMMC speed
+/// modes and command queueing need:
 ///
 /// - `SD_PIN_SEL` (`+0x44`) to SD rather than eMMC timing (bit 1, of the
 ///   low two), which Linux re-selects on every clock change.
+/// - `SDIO_CFG_MAX_50MHZ_MODE` (`+0x1ac`) to the delay-line PHY: the
+///   strap override (bit 31) set and the 50MHz-maximum mode (bit 0)
+///   cleared, which SDR50 and SDR104 need to tune. Linux does this for
+///   any slot whose device tree allows a mode that tunes, which the Pi 5's
+///   does.
 /// - `SDIO_CFG_CTRL` (`+0x00`) to report a card present regardless of
 ///   the card-detect pin: test-enable (bit 31) set, the active-low test
 ///   level (bit 30) clear. Linux does this for slots it doesn't poll. Here
@@ -1586,18 +1885,35 @@ fn bcm2712_power_cycle_card(timer: &Timer) {
 #[cfg(feature = "bcm2712")]
 fn bcm2712_configure_host() {
     const SDIO_CFG_CTRL: *mut u32 = crate::pac::SDIO1::CFG as *mut u32;
-    const SD_PIN_SEL: *mut u32 = (crate::pac::SDIO1::CFG + 0x44) as *mut u32;
     const SDCD_N_TEST_EN: u32 = 1 << 31;
     const SDCD_N_TEST_LEV: u32 = 1 << 30;
-    const PIN_SEL_MASK: u32 = 0b11;
-    const PIN_SEL_SD: u32 = 1 << 1;
+    const MAX_50MHZ_MODE: *mut u32 = (crate::pac::SDIO1::CFG + 0x1ac) as *mut u32;
+    const MAX_50MHZ_STRAP_OVERRIDE: u32 = 1 << 31;
+    const MAX_50MHZ_ENABLE: u32 = 1 << 0;
 
     unsafe {
-        let pin_sel = SD_PIN_SEL.read_volatile() & !PIN_SEL_MASK;
-        SD_PIN_SEL.write_volatile(pin_sel | PIN_SEL_SD);
+        let mode = MAX_50MHZ_MODE.read_volatile() & !MAX_50MHZ_ENABLE;
+        MAX_50MHZ_MODE.write_volatile(mode | MAX_50MHZ_STRAP_OVERRIDE);
 
         let ctrl = SDIO_CFG_CTRL.read_volatile() & !SDCD_N_TEST_LEV;
         SDIO_CFG_CTRL.write_volatile(ctrl | SDCD_N_TEST_EN);
+    }
+    bcm2712_select_sd_timing();
+}
+
+/// Writes `SD_PIN_SEL` (`cfg + 0x44`) to SD rather than eMMC timing (bit
+/// 1 of the low two). Linux's `sdhci_bcm2712_set_clock` rewrites it on
+/// every clock change, with the clock off, and [`set_clock`] does the
+/// same: the PHY takes its configuration from the controller around that
+/// write.
+#[cfg(feature = "bcm2712")]
+fn bcm2712_select_sd_timing() {
+    const SD_PIN_SEL: *mut u32 = (crate::pac::SDIO1::CFG + 0x44) as *mut u32;
+    const PIN_SEL_MASK: u32 = 0b11;
+    const PIN_SEL_SD: u32 = 1 << 1;
+    unsafe {
+        let pin_sel = SD_PIN_SEL.read_volatile() & !PIN_SEL_MASK;
+        SD_PIN_SEL.write_volatile(pin_sel | PIN_SEL_SD);
     }
 }
 
@@ -1619,12 +1935,31 @@ fn set_clock(emmc: &SdEmmc, base_hz: u32, target_hz: u32, timer: &Timer) -> Resu
     })?;
 
     emmc.control1().modify(|_, w| w.clk_en().clear_bit());
+    // The BCM2712 takes the internal clock down too, as Linux's
+    // `sdhci_bcm2712_set_clock` does on every change: the PHY behind the
+    // controller takes its configuration (UHS mode, divisor, sampling
+    // clock) from the controller and, per that driver, refuses some
+    // changes while running. Then the standard SDHCI order back up:
+    // internal clock, stable, card clock.
+    #[cfg(feature = "bcm2712")]
+    {
+        emmc.control1().modify(|_, w| w.clk_intlen().clear_bit());
+        bcm2712_select_sd_timing();
+    }
     timer.delay_ms(10);
 
     let (freq8, freq_ms2) = clock_divider(base_hz, target_hz);
     emmc.control1()
         .modify(|_, w| unsafe { w.clk_freq8().bits(freq8).clk_freq_ms2().bits(freq_ms2) });
     timer.delay_ms(10);
+
+    #[cfg(feature = "bcm2712")]
+    {
+        emmc.control1().modify(|_, w| w.clk_intlen().set_bit());
+        wait_for(timer, 100_000, || {
+            emmc.control1().read().clk_stable().bit_is_set()
+        })?;
+    }
 
     emmc.control1().modify(|_, w| w.clk_en().set_bit());
     timer.delay_ms(10);

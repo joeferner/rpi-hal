@@ -1,8 +1,10 @@
 //! SD card read throughput, in every bus mode the driver can negotiate.
 //!
-//! For each [`BusMode`] from slowest to fastest, the card is brought up
-//! with [`Sd::init_with`] capped at that mode, and the same 32 MiB from the
-//! start of the card is read in 1 MiB multi-block commands. Only the reads
+//! For each [`BusMode`] from slowest to fastest — on a Pi 5 up to UHS-I
+//! SDR104 — the card is brought up with [`Sd::init_with`] capped at that
+//! mode (a mode the card or chip doesn't have is reported and skipped),
+//! and the same 32 MiB from the start of the card is read in 1 MiB
+//! multi-block commands. Only the reads
 //! are timed. Each pass also hashes what it read, and every pass must hash
 //! the same: a mode that reads fast but corrupts data shows up as a
 //! mismatch rather than a good number.
@@ -98,10 +100,19 @@ pub extern "C" fn kmain() -> ! {
 
     let mut reference = None;
     let mut fastest = BusMode::OneBit;
-    for mode in [BusMode::OneBit, BusMode::FourBit, BusMode::HighSpeed] {
+    for mode in [
+        BusMode::OneBit,
+        BusMode::FourBit,
+        BusMode::HighSpeed,
+        BusMode::Sdr50,
+        BusMode::Sdr104,
+    ] {
         // SAFETY: the previous `Sd`, if any, was dropped at the end of the
         // last iteration, so nothing else holds the controller.
         let emmc = unsafe { Sd::steal_emmc() };
+        // Printed first, so that a mode which hangs the card says which.
+        let _ = writeln!(uart, "{mode:?}: bringing the card up");
+        let started = timer.now_micros();
         let sd = match Sd::init_with(&peripherals.GPIO, emmc, &mut mailbox, &timer, mode) {
             Ok(sd) => sd,
             Err(e) => {
@@ -109,12 +120,14 @@ pub extern "C" fn kmain() -> ! {
                 continue;
             }
         };
+        let _ = writeln!(
+            uart,
+            "{mode:?}: up as {:?} in {} ms",
+            sd.bus_mode(),
+            (timer.now_micros() - started) / 1000
+        );
         if sd.bus_mode() != mode {
-            let _ = writeln!(
-                uart,
-                "{mode:?}: not available, got {:?}; skipped",
-                sd.bus_mode()
-            );
+            let _ = writeln!(uart, "{mode:?}: not available; skipped");
             continue;
         }
         match read_run(&sd, buffer, COMMAND_BLOCKS, MODE_BYTES, &timer) {

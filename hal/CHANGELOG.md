@@ -42,6 +42,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sd::BusMode`, `Sd::bus_mode`, and `Sd::init_with` to cap the mode, and
   the `sd_speed` example, which reads the same data in every mode and
   reports each one's throughput and the cost of a command.
+- **UHS-I SD on the Pi 5: SDR50 and SDR104.** `Sd::init` now asks a
+  card for 1.8V signalling, switches it (`CMD11`, Host Control 2's 1.8V
+  bit and the I/O rail's always-on GPIO line), then switches it to
+  SDR104 at 200MHz or SDR50 at 100MHz (`CMD6`) and tunes the sampling
+  point (`CMD19`). A multi-block read goes from 23.9 MB/s at high speed to
+  47.4 (SDR50) and 72.8 (SDR104), every mode reading the same data. A
+  failed step powers the card off and starts again one mode lower, down
+  to high speed. New `BusMode::Sdr50` and `BusMode::Sdr104`; `init` asks
+  for `Sdr104`. Taking the clock down fully and rewriting `SD_PIN_SEL` on
+  every clock change, and selecting the delay-line PHY, follow Linux's
+  `sdhci-brcmstb` for this chip.
 
 ### Fixed
 
