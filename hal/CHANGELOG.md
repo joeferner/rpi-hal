@@ -33,6 +33,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the not-yet-ported modules though nothing in them is chip-specific.
   `rpi-kickstart`'s `heap` needs them, so a Pi 5 board can have a heap
   through it. `heap_alloc` builds for the Pi 5.
+- **High-speed SD on the Pi 5.** After the 4-bit bus, `Sd::init` asks
+  the card for high speed with `CMD6` and, if it has it, switches the
+  card, the host's high-speed bit and the clock from 25 to 50MHz, so a
+  multi-block read goes from 12.0 to 23.9 MB/s. Best-effort like the
+  4-bit bus: a card without it, or a failed switch, stays at default
+  speed. The other chips stay at default speed for now. New
+  `sd::BusMode`, `Sd::bus_mode`, and `Sd::init_with` to cap the mode, and
+  the `sd_speed` example, which reads the same data in every mode and
+  reports each one's throughput and the cost of a command.
 
 ### Fixed
 
