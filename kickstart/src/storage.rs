@@ -192,9 +192,18 @@ pub fn mount<D: BlockDevice>(device: D) -> Result<Volume<D>, Error<D::Error>> {
     };
 
     let clusters = volume.fat().cluster_count();
+    // A cluster is a power of two from 512 bytes to 64 KiB, so everything
+    // from 1 KiB up is a whole number of KiB; the 512-byte clusters a
+    // small FAT32 partition (Raspberry Pi OS's boot partition) uses are
+    // the one size that isn't, and printed in KiB read as 0.
+    let cluster_bytes = volume.boot_sector().cluster_bytes();
+    let (cluster_size, cluster_unit) = if cluster_bytes >= 1024 {
+        (cluster_bytes / 1024, "KiB")
+    } else {
+        (cluster_bytes, "bytes")
+    };
     logln!(
-        "storage: {clusters} clusters of {} KiB, {} KiB of allocation table in RAM{}",
-        volume.boot_sector().cluster_bytes() / 1024,
+        "storage: {clusters} clusters of {cluster_size} {cluster_unit}, {} KiB of allocation table in RAM{}",
         // In `u64`: the sum is four bytes a cluster, and a large card's
         // count times four is close enough to `u32::MAX` not to trust it.
         (u64::from(clusters) + 2) * 4 / 1024,

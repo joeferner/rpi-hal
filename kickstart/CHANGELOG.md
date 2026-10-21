@@ -4,6 +4,15 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`storage::mount` printed 512-byte clusters as "0 KiB".** The mount
+  line gave the cluster size in whole KiB, and 512 bytes, which the small
+  FAT32 boot partition of a Raspberry Pi OS card uses, rounded down to 0.
+  Sizes under 1 KiB are now printed in bytes.
+
 ## [0.4.0] - 2026-10-17
 
 ### Changed
