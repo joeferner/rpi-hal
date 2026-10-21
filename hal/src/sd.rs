@@ -145,6 +145,8 @@
 //! is powered off and brought up again capped one mode lower, so `init`
 //! never returns a card left between modes.
 
+#[cfg(feature = "bcm2712")]
+use crate::cache;
 #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 use crate::dma::Channel;
 use crate::emmc::clock_divider;
@@ -410,6 +412,56 @@ const SDR50_CLOCK_HZ: u32 = 100_000_000;
 #[cfg(feature = "bcm2712")]
 const SDR104_CLOCK_HZ: u32 = 200_000_000;
 
+// ADMA2, the SDHCI controller's own DMA, from the SD Host Controller
+// Simplified Specification 3.00 and Linux's `sdhci`. The Pi 5's
+// controller sees RAM at its CPU physical addresses (`bcm2712.dtsi`: the
+// `axi` bus's `dma-ranges` are one-to-one over all 64 GiB), so a
+// descriptor carries a buffer's address unchanged.
+
+/// Capabilities register offset.
+#[cfg(feature = "bcm2712")]
+const CAPABILITIES: usize = 0x40;
+/// Capabilities: ADMA2 supported.
+#[cfg(feature = "bcm2712")]
+const CAP_ADMA2: u32 = 1 << 19;
+/// Capabilities: 64-bit system addresses supported.
+#[cfg(feature = "bcm2712")]
+const CAP_64BIT: u32 = 1 << 28;
+/// ADMA System Address register offset, low word.
+#[cfg(feature = "bcm2712")]
+const ADMA_ADDRESS: usize = 0x58;
+/// The same, high word.
+#[cfg(feature = "bcm2712")]
+const ADMA_ADDRESS_HIGH: usize = 0x5c;
+/// Host Control 1's DMA Select field, bits 4:3 of `CONTROL0`.
+#[cfg(feature = "bcm2712")]
+const HOST_CONTROL_DMA_SELECT: u32 = 0b11 << 3;
+/// DMA Select: 64-bit ADMA2.
+#[cfg(feature = "bcm2712")]
+const HOST_CONTROL_ADMA64: u32 = 0b11 << 3;
+/// Transfer Mode's DMA Enable, bit 0 of a `CMDTM` value.
+#[cfg(feature = "bcm2712")]
+const TM_DMA_ENABLE: u32 = 1;
+/// `INTERRUPT`'s ADMA Error.
+#[cfg(feature = "bcm2712")]
+const INT_ADMA_ERROR: u32 = 1 << 25;
+/// Descriptor attribute: valid.
+#[cfg(feature = "bcm2712")]
+const ADMA_VALID: u16 = 1 << 0;
+/// Descriptor attribute: the last one.
+#[cfg(feature = "bcm2712")]
+const ADMA_END: u16 = 1 << 1;
+/// Descriptor action: transfer data (`Act` = `0b10`, bits 5:4).
+#[cfg(feature = "bcm2712")]
+const ADMA_TRANSFER: u16 = 0b10 << 4;
+/// Bytes one descriptor moves at most. The field holds up to 65535, with
+/// 0 meaning 65536; 32 KiB, as Linux splits, stays clear of that rule.
+#[cfg(feature = "bcm2712")]
+const ADMA_CHUNK: usize = 32 * 1024;
+/// The alignment a descriptor's data address needs.
+#[cfg(feature = "bcm2712")]
+const ADMA_ALIGN: usize = 4;
+
 /// The always-on GPIO line selecting the card's I/O voltage
 /// (`bcm2712-rpi-5-b.dts`'s `sd_io_1v8_reg`): high is 1.8V, low 3.3V.
 #[cfg(feature = "bcm2712")]
@@ -631,6 +683,10 @@ pub struct Sd {
     /// The bus mode the card and controller negotiated — see
     /// [`Self::bus_mode`].
     bus_mode: BusMode,
+    /// Whether multi-block transfers go over the controller's own DMA —
+    /// see [`Self::set_adma`].
+    #[cfg(feature = "bcm2712")]
+    adma: bool,
 }
 
 /// How the card's bus runs: its width and its clock. [`Sd::init`]
@@ -857,6 +913,9 @@ impl Sd {
             high_capacity: false,
             rca: 0,
             bus_mode: BusMode::OneBit,
+            // Off until asked for: see `set_adma` on why.
+            #[cfg(feature = "bcm2712")]
+            adma: false,
         };
 
         sd.command(CMD_GO_IDLE, 0, timer)?;
@@ -987,6 +1046,141 @@ impl Sd {
         self.bus_mode
     }
 
+    /// Turns the controller's own DMA (ADMA2) on or off for
+    /// [`Self::read_blocks`] and [`Self::write_blocks`], returning whether
+    /// it is now in use: `false` when it was asked off, or when the
+    /// controller doesn't offer 64-bit ADMA2. Off by default. Pi 5 only.
+    ///
+    /// With it on, the controller walks a table of descriptors to read or
+    /// write the buffer in RAM itself, instead of the CPU moving each word
+    /// through the `DATA` FIFO. A buffer that doesn't start 4-byte aligned
+    /// (the descriptors' address requirement, which `[u8; 512]` doesn't
+    /// guarantee) still goes through the FIFO. The data is the same either
+    /// way.
+    ///
+    /// Off by default because, with transfers that block, it buys nothing
+    /// yet: the FIFO already keeps up with the bus (95% of SDR104's), the
+    /// core waits for the transfer either way, and the cache maintenance
+    /// ADMA2 needs costs about 1% at 1 MiB a command (70.1 MB/s against
+    /// 71.0 on a Pi 5). What it frees is the CPU, which pays off once a
+    /// transfer can be started and waited for separately.
+    ///
+    /// A buffer the controller writes into shares its first and last cache
+    /// lines with whatever lies next to it, if it doesn't start and end on
+    /// a 64-byte boundary. Those neighbours are written back to RAM before
+    /// the transfer and read from it after, so nothing may write to them
+    /// in between, from another core either.
+    #[cfg(feature = "bcm2712")]
+    pub fn set_adma(&mut self, enabled: bool) -> bool {
+        self.adma = enabled && adma_supported(&self.emmc);
+        self.adma
+    }
+
+    /// Whether [`Self::read_blocks`] and [`Self::write_blocks`] use the
+    /// controller's own DMA — see [`Self::set_adma`]. Pi 5 only.
+    #[cfg(feature = "bcm2712")]
+    pub fn adma(&self) -> bool {
+        self.adma
+    }
+
+    /// Moves `count` blocks between the card at `block_index` and the
+    /// buffer at `address` over ADMA2: a multi-block command (single for
+    /// one block), the data described to the controller by
+    /// [`ADMA_TABLE`], and one wait for the end of the whole transfer.
+    ///
+    /// The wait's budget grows with the transfer, at a floor of 1 MB/s,
+    /// since a 1-bit bus moves a long one in many seconds.
+    #[cfg(feature = "bcm2712")]
+    fn transfer_adma(
+        &self,
+        block_index: u32,
+        count: u16,
+        address: usize,
+        write: bool,
+        timer: &Timer,
+    ) -> Result<(), Error> {
+        let cmd = match (write, count) {
+            (false, 1) => CMD_READ_SINGLE,
+            (false, _) => CMD_READ_MULTI,
+            (true, 1) => CMD_WRITE_SINGLE,
+            (true, _) => CMD_WRITE_MULTI,
+        };
+        let len = usize::from(count) * size_of::<Block>();
+
+        // SAFETY: `Sd` isn't `Sync`, and there is one controller and so one
+        // `Sd`, so nothing else is using the table; see `ADMA_TABLE`.
+        let table = unsafe { &mut *ADMA_TABLE.0.get() };
+        let mut used = 0;
+        for (descriptor, start) in table
+            .iter_mut()
+            .zip((address..address + len).step_by(ADMA_CHUNK))
+        {
+            let bytes = ADMA_CHUNK.min(address + len - start);
+            *descriptor = AdmaDescriptor {
+                attributes: ADMA_VALID | ADMA_TRANSFER,
+                // At most `ADMA_CHUNK`, which fits.
+                length: bytes as u16,
+                address_low: start as u32,
+                address_high: (start as u64 >> 32) as u32,
+            };
+            used += 1;
+        }
+        table[used - 1].attributes |= ADMA_END;
+
+        // The controller reads the table and the data from RAM, not from
+        // this core's cache. Before a read, the buffer's lines are cleaned
+        // as well as invalidated, so a dirty neighbour sharing an end line
+        // reaches RAM before the controller's write and the invalidate
+        // after it can't discard it.
+        cache::clean_bytes(table.as_ptr() as usize, used * size_of::<AdmaDescriptor>());
+        if write {
+            cache::clean_bytes(address, len);
+        } else {
+            cache::clean_invalidate_bytes(address, len);
+        }
+
+        let table_address = table.as_ptr() as u64;
+        // SAFETY: the controller's own ADMA address registers.
+        unsafe {
+            self.register(ADMA_ADDRESS)
+                .write_volatile(table_address as u32);
+            self.register(ADMA_ADDRESS_HIGH)
+                .write_volatile((table_address >> 32) as u32);
+        }
+        self.emmc.control0().modify(|r, w| unsafe {
+            w.bits(r.bits() & !HOST_CONTROL_DMA_SELECT | HOST_CONTROL_ADMA64)
+        });
+
+        self.start_transfer(cmd | TM_DMA_ENABLE, block_index, count, timer)?;
+        let budget_us = 1_000_000 + len as u64;
+        let result =
+            match self.wait_interrupt_within(INT_DATA_DONE | INT_ADMA_ERROR, cmd, budget_us, timer)
+            {
+                Ok(interrupt) if interrupt & INT_ADMA_ERROR != 0 => Err(Error::CardError {
+                    interrupt,
+                    command: cmd,
+                }),
+                other => other.map(|_| ()),
+            };
+        if result.is_err() {
+            // A transfer that stopped part-way leaves the DMA engine and
+            // the data circuit mid-flight; the next command needs both
+            // reset.
+            self.reset_command_and_data(timer);
+        }
+        if !write {
+            cache::invalidate_bytes(address, len);
+        }
+        result
+    }
+
+    /// The controller register at byte `offset`, for the SDHCI registers
+    /// the PAC's EMMC layout doesn't model (capabilities, ADMA).
+    #[cfg(feature = "bcm2712")]
+    fn register(&self, offset: usize) -> *mut u32 {
+        (crate::pac::SDIO1::PTR as usize + offset) as *mut u32
+    }
+
     /// Whether the card uses block addressing (SDHC/SDXC, one unit per
     /// 512-byte block) rather than byte addressing (SDSC) — determines
     /// how [`Self::read_block`] forms its argument, but otherwise
@@ -1028,6 +1222,10 @@ impl Sd {
     /// than the controller's 16-bit block count (65535). See
     /// `Self::read_blocks_dma` to move the data over DMA instead of the
     /// CPU.
+    ///
+    /// On the Pi 5, with `Self::set_adma` on, the controller moves the
+    /// data itself instead, over its own DMA (ADMA2), whenever `blocks`
+    /// starts 4-byte aligned.
     pub fn read_blocks(
         &self,
         block_index: u32,
@@ -1038,6 +1236,16 @@ impl Sd {
             return Ok(());
         }
         let count = checked_block_count(blocks.len())?;
+        #[cfg(feature = "bcm2712")]
+        if self.adma && (blocks.as_ptr() as usize).is_multiple_of(ADMA_ALIGN) {
+            return self.transfer_adma(
+                block_index,
+                count,
+                blocks.as_mut_ptr() as usize,
+                false,
+                timer,
+            );
+        }
         self.read_blocks_pio(block_index, count, blocks.iter_mut(), timer)
     }
 
@@ -1124,6 +1332,10 @@ impl Sd {
     /// controller's 16-bit block count (65535). See
     /// `Self::write_blocks_dma` to move the data over DMA instead of the
     /// CPU.
+    ///
+    /// On the Pi 5, with `Self::set_adma` on, the controller moves the
+    /// data itself instead, over its own DMA (ADMA2), whenever `blocks`
+    /// starts 4-byte aligned.
     pub fn write_blocks(
         &self,
         block_index: u32,
@@ -1134,6 +1346,10 @@ impl Sd {
             return Ok(());
         }
         let count = checked_block_count(blocks.len())?;
+        #[cfg(feature = "bcm2712")]
+        if self.adma && (blocks.as_ptr() as usize).is_multiple_of(ADMA_ALIGN) {
+            return self.transfer_adma(block_index, count, blocks.as_ptr() as usize, true, timer);
+        }
         self.write_blocks_pio(block_index, count, blocks.iter(), timer)
     }
 
@@ -1968,6 +2184,60 @@ fn set_clock(emmc: &SdEmmc, base_hz: u32, target_hz: u32, timer: &Timer) -> Resu
         emmc.control1().read().clk_stable().bit_is_set()
     })
 }
+
+/// Whether the controller offers 64-bit ADMA2, from its capabilities
+/// register: ADMA2 (bit 19) and 64-bit system addresses (bit 28), the
+/// latter because the heap can hand out a buffer above 4 GiB.
+#[cfg(feature = "bcm2712")]
+fn adma_supported(_emmc: &SdEmmc) -> bool {
+    // SAFETY: a read of the controller's read-only capabilities register.
+    let caps =
+        unsafe { ((crate::pac::SDIO1::PTR as usize + CAPABILITIES) as *const u32).read_volatile() };
+    caps & CAP_ADMA2 != 0 && caps & CAP_64BIT != 0
+}
+
+/// One ADMA2 descriptor in the SDHCI 3.00 64-bit form, 12 bytes: the
+/// attributes, the length in bytes, and the address split in two words
+/// (so the struct stays 12 bytes rather than padding a `u64` to 16).
+#[cfg(feature = "bcm2712")]
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct AdmaDescriptor {
+    attributes: u16,
+    length: u16,
+    address_low: u32,
+    address_high: u32,
+}
+
+/// Descriptors in [`ADMA_TABLE`]: enough for the longest command, 65535
+/// blocks, at [`ADMA_CHUNK`] each.
+#[cfg(feature = "bcm2712")]
+const ADMA_DESCRIPTORS: usize = (u16::MAX as usize * 512).div_ceil(ADMA_CHUNK);
+
+/// The descriptor table a transfer is described in, 12 KiB, cache-line
+/// aligned so cleaning it touches nothing else.
+///
+/// A static rather than part of `Sd`, which would carry it on every move.
+/// Safe to share because there is one card controller, and so one `Sd`
+/// (it is built from a stolen peripheral), and `Sd` isn't `Sync`: one
+/// transfer at a time, on one core.
+#[cfg(feature = "bcm2712")]
+#[repr(C, align(64))]
+struct AdmaTable(core::cell::UnsafeCell<[AdmaDescriptor; ADMA_DESCRIPTORS]>);
+
+// SAFETY: see `AdmaTable`.
+#[cfg(feature = "bcm2712")]
+unsafe impl Sync for AdmaTable {}
+
+#[cfg(feature = "bcm2712")]
+static ADMA_TABLE: AdmaTable = AdmaTable(core::cell::UnsafeCell::new(
+    [AdmaDescriptor {
+        attributes: 0,
+        length: 0,
+        address_low: 0,
+        address_high: 0,
+    }; ADMA_DESCRIPTORS],
+));
 
 /// Narrows a block-slice length to the `BLKSIZECNT.blkcnt` field's 16
 /// bits, the largest run a single (multi-block) command can express —

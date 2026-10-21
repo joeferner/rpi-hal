@@ -413,8 +413,18 @@ implementations where applicable, and all verified on real hardware:
   for the plain 1-bit bus. A command
   costs about 300µs of card latency besides its data, so at SDR104 a 1
   MiB command reaches 71.5 MB/s and a 4 KiB one 11.1. SDR104 stops at
-  73% of its bus, unlike the slower modes' 95%; whether the card or the
-  driver's word-at-a-time FIFO reads set that isn't measured yet.
+  73% of its bus on that card, unlike the slower modes' 95%; that is the
+  card, since a faster one reads at 95.1 MB/s, 95% of SDR104's bus.
+
+  On the Pi 5 the controller can also move the data itself, over its own
+  DMA (ADMA2, 64-bit descriptors, buffers anywhere in RAM including above
+  4 GiB): `Sd::set_adma(true)`, after which `read_blocks` and
+  `write_blocks` use it for any 4-byte-aligned buffer. It is off by
+  default because blocking transfers gain nothing from it: the FIFO
+  already keeps up with the bus, and its cache maintenance costs about 1%
+  (70.1 against 71.0 MB/s at SDR104). `sd_speed` reads the same data both
+  ways, and writes and restores 1 MiB checking each direction with the
+  other.
 
   Card presence is discovered rather than sensed, because no Pi wires a
   card-detect line anywhere a driver could read it — GPIO47, the pin

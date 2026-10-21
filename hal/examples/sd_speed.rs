@@ -34,8 +34,24 @@ const MODE_BYTES: usize = 32 * 1024 * 1024;
 /// Bytes each command size reads.
 const SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-/// The read buffer: one command's worth.
-static mut BUFFER: [Block; COMMAND_BLOCKS] = [[0; 512]; COMMAND_BLOCKS];
+/// One command's worth of blocks, cache-line aligned: the Pi 5's ADMA2
+/// needs a 4-byte-aligned buffer, and whole cache lines keep its cache
+/// maintenance off anything else.
+#[repr(C, align(64))]
+struct Blocks([Block; COMMAND_BLOCKS]);
+
+/// The read buffer.
+static mut BUFFER: Blocks = Blocks([[0; 512]; COMMAND_BLOCKS]);
+
+/// The original contents of the write round trip's blocks.
+#[cfg(feature = "bcm2712")]
+static mut SAVED: Blocks = Blocks([[0; 512]; COMMAND_BLOCKS]);
+
+/// First block of the write round trip: 512 MiB in, clear of a partition
+/// table, the same place `sd_multi_block` writes. The round trip restores
+/// what it found.
+#[cfg(feature = "bcm2712")]
+const WRITE_TEST_BLOCK: u32 = 0x0010_0000;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -89,7 +105,7 @@ pub extern "C" fn kmain() -> ! {
     let timer = Timer::new(peripherals.SYSTMR);
     let mut mailbox = Mailbox::new(peripherals.VCMAILBOX);
     // SAFETY: single-threaded `kmain`; the buffer is touched only here.
-    let buffer = unsafe { &mut *core::ptr::addr_of_mut!(BUFFER) };
+    let buffer = unsafe { &mut (*core::ptr::addr_of_mut!(BUFFER)).0 };
 
     let _ = writeln!(
         uart,
@@ -136,8 +152,9 @@ pub extern "C" fn kmain() -> ! {
                 let same = *reference.get_or_insert(hash) == hash;
                 let _ = writeln!(
                     uart,
-                    "{mode:?}: {whole}.{tenth} MB/s ({} ms), data {}",
+                    "{mode:?}: {whole}.{tenth} MB/s ({} ms){}, data {}",
                     us / 1000,
+                    path(&sd),
                     if same {
                         "matches"
                     } else {
@@ -155,30 +172,69 @@ pub extern "C" fn kmain() -> ! {
     // Command size at the fastest mode that worked.
     // SAFETY: as above.
     let emmc = unsafe { Sd::steal_emmc() };
+    #[allow(unused_mut, reason = "only the Pi 5 switches paths")]
     match Sd::init_with(&peripherals.GPIO, emmc, &mut mailbox, &timer, fastest) {
-        Ok(sd) => {
-            let _ = writeln!(
-                uart,
-                "{fastest:?}, {} MiB per command size:",
-                SIZE_BYTES >> 20
-            );
-            for blocks in [8, 128, COMMAND_BLOCKS] {
-                match read_run(&sd, buffer, blocks, SIZE_BYTES, &timer) {
-                    Ok((us, _)) => {
-                        let (whole, tenth) = rate(SIZE_BYTES, us);
-                        let commands = SIZE_BYTES / (blocks * 512);
+        Ok(mut sd) => {
+            // On a Pi 5, both ways the data can move: through the FIFO,
+            // then over the controller's own DMA.
+            #[cfg(feature = "bcm2712")]
+            let paths = [false, true];
+            #[cfg(not(feature = "bcm2712"))]
+            let paths = [false];
+            for adma in paths {
+                #[cfg(feature = "bcm2712")]
+                sd.set_adma(adma);
+                let _ = adma;
+                let _ = writeln!(
+                    uart,
+                    "{fastest:?}{}, {} MiB per command size:",
+                    path(&sd),
+                    SIZE_BYTES >> 20
+                );
+                for blocks in [8, 128, COMMAND_BLOCKS] {
+                    match read_run(&sd, buffer, blocks, SIZE_BYTES, &timer) {
+                        Ok((us, _)) => {
+                            let (whole, tenth) = rate(SIZE_BYTES, us);
+                            let commands = SIZE_BYTES / (blocks * 512);
+                            let _ = writeln!(
+                                uart,
+                                "  {:>4} KiB commands: {whole}.{tenth} MB/s, {} us a command",
+                                blocks / 2,
+                                us / commands as u64
+                            );
+                        }
+                        Err(e) => {
+                            let _ = writeln!(uart, "  {} KiB commands: failed: {e:?}", blocks / 2);
+                        }
+                    }
+                }
+                // The same data as every mode read, whichever path.
+                match read_run(&sd, buffer, COMMAND_BLOCKS, MODE_BYTES, &timer) {
+                    Ok((_, hash)) if Some(hash) == reference => {
                         let _ = writeln!(
                             uart,
-                            "  {:>4} KiB commands: {whole}.{tenth} MB/s, {} us a command",
-                            blocks / 2,
-                            us / commands as u64
+                            "  the {} MiB read again: data matches",
+                            MODE_BYTES >> 20
+                        );
+                    }
+                    Ok(_) => {
+                        let _ = writeln!(
+                            uart,
+                            "  the {} MiB read again: DATA DIFFERS",
+                            MODE_BYTES >> 20
                         );
                     }
                     Err(e) => {
-                        let _ = writeln!(uart, "  {} KiB commands: failed: {e:?}", blocks / 2);
+                        let _ = writeln!(
+                            uart,
+                            "  the {} MiB read again: failed: {e:?}",
+                            MODE_BYTES >> 20
+                        );
                     }
                 }
             }
+            #[cfg(feature = "bcm2712")]
+            write_round_trip(&mut sd, buffer, &timer, &mut uart);
         }
         Err(e) => {
             let _ = writeln!(uart, "{fastest:?}: init failed: {e:?}");
@@ -187,4 +243,97 @@ pub extern "C" fn kmain() -> ! {
 
     let _ = writeln!(uart, "sd_speed: done");
     halt();
+}
+
+/// How `sd` moves data, for the output.
+fn path(_sd: &Sd) -> &'static str {
+    #[cfg(feature = "bcm2712")]
+    if _sd.adma() {
+        return " over ADMA2";
+    }
+    " through the FIFO"
+}
+
+/// Writes 1 MiB at [`WRITE_TEST_BLOCK`] over ADMA2 and puts it back,
+/// checking each direction with the other path: the original saved, an
+/// inverted copy written over ADMA2 and read back through the FIFO, then
+/// the original written back through the FIFO and read back over ADMA2.
+/// A write that did nothing fails the first check, since what it would
+/// read back is the original rather than the inverted copy.
+#[cfg(feature = "bcm2712")]
+fn write_round_trip(
+    sd: &mut Sd,
+    buffer: &mut [Block; COMMAND_BLOCKS],
+    timer: &Timer,
+    uart: &mut Uart,
+) {
+    // SAFETY: single-threaded; touched only here.
+    let saved = unsafe { &mut (*core::ptr::addr_of_mut!(SAVED)).0 };
+    let at = WRITE_TEST_BLOCK;
+
+    sd.set_adma(false);
+    if let Err(e) = sd.read_blocks(at, saved, timer) {
+        let _ = writeln!(
+            uart,
+            "write: reading the original failed: {e:?}; card untouched"
+        );
+        return;
+    }
+    for (b, s) in buffer
+        .as_flattened_mut()
+        .iter_mut()
+        .zip(saved.as_flattened())
+    {
+        *b = !*s;
+    }
+
+    sd.set_adma(true);
+    let started = timer.now_micros();
+    let written = sd.write_blocks(at, buffer, timer);
+    let write_us = timer.now_micros() - started;
+    sd.set_adma(false);
+    let inverted = written
+        .and_then(|()| sd.read_blocks(at, buffer, timer))
+        .map(|()| {
+            buffer
+                .as_flattened()
+                .iter()
+                .zip(saved.as_flattened())
+                .all(|(b, s)| *b == !*s)
+        });
+    match inverted {
+        Ok(true) => {
+            let (whole, tenth) = rate(COMMAND_BLOCKS * 512, write_us);
+            let _ = writeln!(
+                uart,
+                "write: 1 MiB over ADMA2 in {} us ({whole}.{tenth} MB/s), read back through the FIFO: matches",
+                write_us
+            );
+        }
+        Ok(false) => {
+            let _ = writeln!(
+                uart,
+                "write: over ADMA2, read back through the FIFO: DIFFERS"
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(uart, "write: over ADMA2: failed: {e:?}");
+        }
+    }
+
+    // Put it back, whatever happened above.
+    let restored = sd.write_blocks(at, saved, timer);
+    sd.set_adma(true);
+    let restored = restored
+        .and_then(|()| sd.read_blocks(at, buffer, timer))
+        .map(|()| buffer.as_flattened() == saved.as_flattened());
+    let _ = writeln!(
+        uart,
+        "write: original restored through the FIFO, read back over ADMA2: {}",
+        match restored {
+            Ok(true) => "matches",
+            Ok(false) => "DIFFERS",
+            Err(_) => "failed",
+        }
+    );
 }
