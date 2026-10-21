@@ -13,11 +13,11 @@
 //! architecture-specific piece — the cache-maintenance instructions —
 //! lives in a single place.
 
-// The BCM2712 build has none of those DMA-driven drivers yet, so only
-// `clean_invalidate_range` (for `mmu::set_uncached`) has a caller there.
-// The rest stays compiled rather than `cfg`'d out, ready for the first
-// one that arrives.
-#![cfg_attr(feature = "bcm2712", allow(dead_code))]
+// Each build calls only the helpers its chip's drivers need -- the BCM2712
+// has few DMA-driven drivers, the others don't touch RAM above 4 GiB --
+// and the rest stay compiled rather than `cfg`'d out, ready for the first
+// caller that arrives.
+#![allow(dead_code)]
 
 use crate::barrier::dsb;
 use core::arch::asm;
@@ -33,17 +33,26 @@ use core::arch::asm;
 /// than the true line size could skip one.
 pub(crate) const MIN_CACHE_LINE: u32 = 32;
 
+/// Runs `op` on every cache line covering `len` bytes from `address`, then
+/// barriers.
+fn each_line(address: usize, len: usize, op: unsafe fn(usize)) {
+    let end = address + len;
+    let mut line = address & !(MIN_CACHE_LINE as usize - 1);
+    while line < end {
+        // SAFETY: a cache maintenance operation by address on memory the
+        // caller has named; it changes no data a correct program relies
+        // on, only where it is held.
+        unsafe { op(line) };
+        line += MIN_CACHE_LINE as usize;
+    }
+    dsb();
+}
+
 /// Cleans (writes back, without invalidating) every cache line covering
 /// `len` bytes from `address`, then barriers — makes an ARM-side write
 /// actually visible in RAM before a bus master is told to read it.
 pub(crate) fn clean_range(address: u32, len: usize) {
-    let end = address + len as u32;
-    let mut line = address & !(MIN_CACHE_LINE - 1);
-    while line < end {
-        unsafe { clean_line(line) };
-        line += MIN_CACHE_LINE;
-    }
-    dsb();
+    clean_bytes(address as usize, len);
 }
 
 /// Invalidates every cache line covering `len` bytes from `address`, then
@@ -51,13 +60,23 @@ pub(crate) fn clean_range(address: u32, len: usize) {
 /// whatever this core cached before a bus master wrote its response
 /// there.
 pub(crate) fn invalidate_range(address: u32, len: usize) {
-    let end = address + len as u32;
-    let mut line = address & !(MIN_CACHE_LINE - 1);
-    while line < end {
-        unsafe { invalidate_line(line) };
-        line += MIN_CACHE_LINE;
-    }
-    dsb();
+    invalidate_bytes(address as usize, len);
+}
+
+/// [`clean_range`] at any address, including the BCM2712's RAM above
+/// 4 GiB, which a `u32` can't name.
+pub(crate) fn clean_bytes(address: usize, len: usize) {
+    each_line(address, len, clean_line);
+}
+
+/// [`invalidate_range`] at any address.
+pub(crate) fn invalidate_bytes(address: usize, len: usize) {
+    each_line(address, len, invalidate_line);
+}
+
+/// [`clean_invalidate_range`] at any address.
+pub(crate) fn clean_invalidate_bytes(address: usize, len: usize) {
+    each_line(address, len, clean_invalidate_line);
 }
 
 /// Cleans *and* invalidates every cache line covering `len` bytes from
@@ -71,15 +90,13 @@ pub(crate) fn invalidate_range(address: u32, len: usize) {
 /// never reached RAM; a plain clean would leave clean lines that the new,
 /// non-cacheable accesses bypass, so a later eviction could still hand back
 /// pre-remap data.
-#[cfg(feature = "mmu")]
+///
+/// It is also what a buffer a bus master is about to *write* needs first,
+/// when its ends may share cache lines with other data: cleaning writes
+/// those neighbours back, so the invalidate that follows the transfer
+/// can't discard them.
 pub(crate) fn clean_invalidate_range(address: u32, len: usize) {
-    let end = address + len as u32;
-    let mut line = address & !(MIN_CACHE_LINE - 1);
-    while line < end {
-        unsafe { clean_invalidate_line(line) };
-        line += MIN_CACHE_LINE;
-    }
-    dsb();
+    clean_invalidate_bytes(address as usize, len);
 }
 
 // The per-line ops are the only architecture-specific part left here;
@@ -89,16 +106,15 @@ pub(crate) fn clean_invalidate_range(address: u32, len: usize) {
 // with the same encodings on ARMv6 and ARMv7 — maintenance *by MVA* did
 // not change, unlike the barriers; AArch64 uses the `dc cvac` /
 // `dc ivac` / `dc civac` cache-maintenance instructions. All operate to
-// the point of coherency — the level shared with the bus masters. On
-// AArch64 the `{0:x}` operand selects the 64-bit view of the
-// (zero-extended, always < 4 GB on this SoC) address, since `dc` takes an
-// X register.
+// the point of coherency — the level shared with the bus masters. The
+// address is a `usize`: a 32-bit register on AArch32, and on AArch64 the
+// X register `dc` takes, which reaches the BCM2712's RAM above 4 GiB.
 
 /// Cleans the single cache line containing `line` to the point of
 /// coherency.
 #[cfg(target_arch = "arm")]
 #[inline(always)]
-unsafe fn clean_line(line: u32) {
+unsafe fn clean_line(line: usize) {
     asm!("mcr p15, 0, {0}, c7, c10, 1", in(reg) line);
 }
 
@@ -106,15 +122,15 @@ unsafe fn clean_line(line: u32) {
 /// coherency.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn clean_line(line: u32) {
-    asm!("dc cvac, {0:x}", in(reg) line);
+unsafe fn clean_line(line: usize) {
+    asm!("dc cvac, {0}", in(reg) line);
 }
 
 /// Invalidates the single cache line containing `line` to the point of
 /// coherency.
 #[cfg(target_arch = "arm")]
 #[inline(always)]
-unsafe fn invalidate_line(line: u32) {
+unsafe fn invalidate_line(line: usize) {
     asm!("mcr p15, 0, {0}, c7, c6, 1", in(reg) line);
 }
 
@@ -122,24 +138,24 @@ unsafe fn invalidate_line(line: u32) {
 /// coherency.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn invalidate_line(line: u32) {
-    asm!("dc ivac, {0:x}", in(reg) line);
+unsafe fn invalidate_line(line: usize) {
+    asm!("dc ivac, {0}", in(reg) line);
 }
 
 /// Cleans and invalidates the single cache line containing `line` to the
 /// point of coherency.
-#[cfg(all(feature = "mmu", target_arch = "arm"))]
+#[cfg(target_arch = "arm")]
 #[inline(always)]
-unsafe fn clean_invalidate_line(line: u32) {
+unsafe fn clean_invalidate_line(line: usize) {
     asm!("mcr p15, 0, {0}, c7, c14, 1", in(reg) line);
 }
 
 /// Cleans and invalidates the single cache line containing `line` to the
 /// point of coherency.
-#[cfg(all(feature = "mmu", target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn clean_invalidate_line(line: u32) {
-    asm!("dc civac, {0:x}", in(reg) line);
+unsafe fn clean_invalidate_line(line: usize) {
+    asm!("dc civac, {0}", in(reg) line);
 }
 
 #[cfg(not(any(target_arch = "arm", target_arch = "aarch64")))]

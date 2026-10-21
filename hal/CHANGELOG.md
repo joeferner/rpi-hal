@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ADMA2 for the Pi 5's SD card, off by default.** `Sd::set_adma(true)`
+  has the controller move `read_blocks`' and `write_blocks`' data over its
+  own DMA, from a table of 64-bit descriptors, for any 4-byte-aligned
+  buffer anywhere in RAM (the controller sees RAM at its physical
+  addresses). Same data both ways in `sd_speed`, reads in every mode and
+  a 1 MiB write; no faster, since the FIFO already keeps up with the bus,
+  and about 1% slower at 1 MiB a command for the cache maintenance, hence
+  off. What it frees is the CPU, for a transfer that doesn't block, which
+  isn't here yet. New `Sd::adma`. Internally, the cache-maintenance
+  helpers now take any address, including above 4 GiB.
+
 - **`multicore` on the Pi 5.** `Core1::spawn` and its siblings start
   cores 1-3 on the BCM2712 through the firmware's PSCI `CPU_ON` call
   (`smc`), which is how the Pi 5's ARM Trusted Firmware holds them; the
