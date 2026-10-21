@@ -135,6 +135,10 @@
 //!   same on every chip.
 //! - **No DMA or async**, as on the Pi 4: no DREQ route is known for this
 //!   controller, and no interrupt controller is supported on this chip.
+//!
+//! It also goes one step faster than the other chips: after the 4-bit bus,
+//! `init` switches the card to high speed (`CMD6`) and the clock to 50MHz,
+//! [`BusMode::HighSpeed`], still at 3.3V.
 
 #[cfg(not(any(feature = "bcm2711", feature = "bcm2712")))]
 use crate::dma::Channel;
@@ -265,6 +269,10 @@ const SETUP_CLOCK_HZ: u32 = 400_000;
 /// conservative "default speed" rate every SD card supports, well
 /// under the 25MHz ceiling that mode allows.
 const TRANSFER_CLOCK_HZ: u32 = 25_000_000;
+/// SD clock in high-speed mode ([`Sd::high_speed`]), the most that mode
+/// allows: 25MB/s on the 4-bit bus, twice default speed.
+#[cfg(feature = "bcm2712")]
+const HIGH_SPEED_CLOCK_HZ: u32 = 50_000_000;
 
 /// `CONTROL1.DATA_TOUNIT` value selecting the second-longest data
 /// timeout the field supports (`0b1111` disables the timeout
@@ -343,6 +351,21 @@ const CMD_SET_BUS_WIDTH: u32 = 0x0602_0000 | CMD_NEED_APP;
 const CMD_NEED_APP: u32 = 0x8000_0000;
 /// `SET_BUS_WIDTH` (ACMD6) argument selecting the 4-bit bus.
 const BUS_WIDTH_4BIT: u32 = 2;
+/// `CMDTM` value for CMD6 (`SWITCH_FUNC`) — R1 (48-bit) response, data
+/// present, card-to-host: the card answers with a 64-byte status block,
+/// the same data-transfer shape as [`CMD_SEND_SCR`]. Not an application
+/// command, unlike `ACMD6` above, which shares its index.
+#[cfg(feature = "bcm2712")]
+const CMD_SWITCH_FUNC: u32 = 0x0622_0010;
+/// `CMD6` argument asking (mode 0, "check") whether the card can switch
+/// function group 1, the access mode, to function 1, high speed, leaving
+/// every other group as it is (`0xf`, "no change").
+#[cfg(feature = "bcm2712")]
+const SWITCH_CHECK_HIGH_SPEED: u32 = 0x00ff_fff1;
+/// The same with mode 1, "switch": the card changes over at the end of
+/// the status block it sends back.
+#[cfg(feature = "bcm2712")]
+const SWITCH_SET_HIGH_SPEED: u32 = 0x80ff_fff1;
 
 /// Mask over the `INTERRUPT` register's error bits — any of these set
 /// means the just-issued command or data transfer failed.
@@ -545,9 +568,30 @@ pub struct Sd {
     /// assigned an RCA, so `0` is the spec-correct argument there too),
     /// the real RCA for any application command sent after.
     rca: u32,
-    /// Whether the card and controller negotiated the 4-bit bus (versus
-    /// the SD default 1-bit) — see [`Self::four_bit_bus`].
-    four_bit_bus: bool,
+    /// The bus mode the card and controller negotiated — see
+    /// [`Self::bus_mode`].
+    bus_mode: BusMode,
+}
+
+/// How the card's bus runs: its width and its clock. [`Sd::init`]
+/// negotiates the fastest the card and this driver support;
+/// [`Sd::init_with`] can be told to stop short of that, which is what a
+/// benchmark comparing them, or a card misbehaving at speed, wants.
+///
+/// Ordered slowest to fastest, so `mode <= BusMode::FourBit` reads as
+/// "no faster than default speed on four lines". `#[non_exhaustive]`
+/// because the UHS modes will join it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum BusMode {
+    /// One data line at default speed (25MHz): 3.1MB/s at most. Where
+    /// every card starts.
+    OneBit,
+    /// Four data lines at default speed: 12.5MB/s at most.
+    FourBit,
+    /// Four data lines at high speed (50MHz): 25MB/s at most. Pi 5 only so
+    /// far; other chips stop at [`Self::FourBit`].
+    HighSpeed,
 }
 
 impl Sd {
@@ -603,11 +647,28 @@ impl Sd {
     /// for an answer, which times out fast. There is no cheaper check to
     /// do first, and nowhere to look that doesn't involve asking; see
     /// [`Error::NoCard`].
+    ///
+    /// It goes as fast as the card and this driver allow; see
+    /// [`Self::bus_mode`] for what it got, and [`Self::init_with`] to
+    /// stop short.
     pub fn init(
         gpio: &GPIO,
         emmc: SdEmmc,
         mailbox: &mut Mailbox,
         timer: &Timer,
+    ) -> Result<Self, Error> {
+        Self::init_with(gpio, emmc, mailbox, timer, BusMode::HighSpeed)
+    }
+
+    /// [`Self::init`], negotiating no faster a bus than `max`: a card
+    /// that supports more still runs at `max`, and one that supports less
+    /// runs at what it supports.
+    pub fn init_with(
+        gpio: &GPIO,
+        emmc: SdEmmc,
+        mailbox: &mut Mailbox,
+        timer: &Timer,
+        max: BusMode,
     ) -> Result<Self, Error> {
         // The SD card controller comes up unpowered from firmware (the
         // same situation `usb::power_on` handles for the DWC2
@@ -728,7 +789,7 @@ impl Sd {
             emmc,
             high_capacity: false,
             rca: 0,
-            four_bit_bus: false,
+            bus_mode: BusMode::OneBit,
         };
 
         sd.command(CMD_GO_IDLE, 0, timer)?;
@@ -774,13 +835,39 @@ impl Sd {
         // bus), so any failure here (an old card that genuinely
         // doesn't support it, or a transient command error) just
         // leaves the bus at 1-bit rather than failing `init` outright.
-        let four_bit_bus = sd.negotiate_four_bit_bus(timer).unwrap_or(false);
+        let four_bit_bus =
+            max >= BusMode::FourBit && sd.negotiate_four_bit_bus(timer).unwrap_or(false);
+        // Then high speed, best-effort in the same way: a card that can't,
+        // or a switch that fails, stays at default speed. Only on the Pi
+        // 5 for now; the other chips' controllers stay at default speed
+        // until this path has been run on them.
+        #[cfg(feature = "bcm2712")]
+        let high_speed = four_bit_bus
+            && max >= BusMode::HighSpeed
+            && sd.negotiate_high_speed(base_clock_hz, timer);
+        #[cfg(not(feature = "bcm2712"))]
+        let high_speed = false;
+
+        let bus_mode = if high_speed {
+            BusMode::HighSpeed
+        } else if four_bit_bus {
+            BusMode::FourBit
+        } else {
+            BusMode::OneBit
+        };
 
         Ok(Self {
             high_capacity,
-            four_bit_bus,
+            bus_mode,
             ..sd
         })
+    }
+
+    /// The bus mode [`Self::init`] negotiated: its width and clock, which
+    /// set how fast a multi-block transfer can go. A performance fact
+    /// only; every transfer method works the same in each.
+    pub fn bus_mode(&self) -> BusMode {
+        self.bus_mode
     }
 
     /// Whether the card uses block addressing (SDHC/SDXC, one unit per
@@ -797,7 +884,7 @@ impl Sd {
     /// either way, since the bus width only affects the physical
     /// electrical transfer, not how words are pulled from `DATA`.
     pub fn four_bit_bus(&self) -> bool {
-        self.four_bit_bus
+        self.bus_mode >= BusMode::FourBit
     }
 
     /// Reads the 512-byte block at `block_index` (a logical block
@@ -1108,6 +1195,84 @@ impl Sd {
             .control0()
             .modify(|_, w| w.hctl_dwidth().set_bit());
         Ok(true)
+    }
+
+    /// Switches the card and this controller to high-speed mode if the
+    /// card supports it: `CMD6` in check mode to ask, `CMD6` in switch mode
+    /// to change over, then the host's own high-speed bit
+    /// (`CONTROL0.HCTL_HS_EN`) and the 50MHz clock, in the order the SD
+    /// spec gives. Returns whether it switched.
+    ///
+    /// A failed command leaves the controller's command and data circuits
+    /// wanting a reset before they start anything else (see
+    /// [`Self::diagnose_empty_slot`]), so a failure resets both and leaves
+    /// the card at default speed, where it still works.
+    #[cfg(feature = "bcm2712")]
+    fn negotiate_high_speed(&self, base_clock_hz: u32, timer: &Timer) -> bool {
+        // The status block's bits are numbered from 511 down, so byte `i`
+        // holds bits `511 - 8i` to `504 - 8i`. Group 1's support bitmap is
+        // bits 415:400 (function 1 is bit 401, in byte 13); the function
+        // the card selected for group 1 is bits 379:376 (byte 16's low
+        // nibble).
+        let switched = (|| {
+            let status = self.switch_function(SWITCH_CHECK_HIGH_SPEED, timer)?;
+            if status[13] & 0x02 == 0 {
+                return Ok(false);
+            }
+            let status = self.switch_function(SWITCH_SET_HIGH_SPEED, timer)?;
+            Ok::<_, Error>(status[16] & 0x0f == 1)
+        })();
+        match switched {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(_) => {
+                self.reset_command_and_data(timer);
+                return false;
+            }
+        }
+
+        self.emmc.control0().modify(|_, w| w.hctl_hs_en().set_bit());
+        if set_clock(&self.emmc, base_clock_hz, HIGH_SPEED_CLOCK_HZ, timer).is_err() {
+            // The card is already in high speed, which still works at
+            // a slower clock; leave the host's bit set to match it.
+            return false;
+        }
+        true
+    }
+
+    /// Sends `CMD6` (`SWITCH_FUNC`) with `arg` and returns the 64-byte
+    /// status block the card answers with, in the order it was sent.
+    #[cfg(feature = "bcm2712")]
+    fn switch_function(&self, arg: u32, timer: &Timer) -> Result<[u8; 64], Error> {
+        self.wait_data_ready(timer)?;
+        self.emmc
+            .blksizecnt()
+            .write(|w| unsafe { w.blksize().bits(64).blkcnt().bits(1) });
+        self.command(CMD_SWITCH_FUNC, arg, timer)?;
+        self.wait_interrupt(INT_READ_RDY, CMD_SWITCH_FUNC, timer)?;
+        let mut status = [0u8; 64];
+        for chunk in status.as_chunks_mut::<4>().0 {
+            *chunk = self.emmc.data().read().bits().to_le_bytes();
+        }
+        // In switch mode the card changes over at the end of this block;
+        // waiting for it to finish means nothing is sent at the new
+        // timing before the card has it.
+        self.wait_interrupt(INT_DATA_DONE, CMD_SWITCH_FUNC, timer)?;
+        Ok(status)
+    }
+
+    /// Resets the controller's command and data circuits, which the SD
+    /// host controller specification requires after a command or data
+    /// error before the next command can start.
+    #[cfg(feature = "bcm2712")]
+    fn reset_command_and_data(&self, timer: &Timer) {
+        self.emmc
+            .control1()
+            .modify(|_, w| w.srst_cmd().set_bit().srst_data().set_bit());
+        let _ = wait_for(timer, 10_000, || {
+            let c = self.emmc.control1().read();
+            c.srst_cmd().bit_is_clear() && c.srst_data().bit_is_clear()
+        });
     }
 
     /// Waits for the data lines to be free — the prerequisite every

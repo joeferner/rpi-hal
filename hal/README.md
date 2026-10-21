@@ -388,6 +388,16 @@ implementations where applicable, and all verified on real hardware:
   transfers byte slices spanning a whole run, which reach the driver with no
   staging buffer and no copy in between.
 
+  How fast the bus runs is a `sd::BusMode`: one data line or four at
+  default speed (25MHz), or, on the Pi 5, four at high speed (50MHz,
+  switched to with `CMD6`). `Sd::init` negotiates the fastest the card
+  supports and `Sd::bus_mode` says which; `Sd::init_with` takes a cap.
+  `examples/sd_speed.rs` reads the same 32 MiB in each mode, hashing it to
+  check every mode reads the same bytes, then times commands of 4 KiB to
+  1 MiB. On a Pi 5 that is 3.0, 12.0 and 23.9 MB/s, each about 96% of its
+  bus, with about 300µs of card latency per command, so a 1 MiB command
+  reaches 24.0 MB/s and a 4 KiB one 8.9.
+
   Card presence is discovered rather than sensed, because no Pi wires a
   card-detect line anywhere a driver could read it — GPIO47, the pin
   usually named for the job, is the ACT LED on a Pi 1/2, the PMIC's I²C
