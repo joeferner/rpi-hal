@@ -104,6 +104,10 @@ pub const BASE_BAUD: u32 = 115_200;
 pub const DEFAULT_BAUD: u32 = 1_500_000;
 /// How long a single read waits before it counts as a timeout.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long one read of the port blocks. Much shorter than
+/// [`RESPONSE_TIMEOUT`] so a read waiting out a response still notices
+/// Ctrl-C promptly; the response timeout is counted across these.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// How many times a single chunk is resent before the transfer gives up.
 const MAX_CHUNK_RETRIES: u32 = 5;
 /// Bringing the SD card up can take up to ~1s (the card's ACMD41
@@ -180,7 +184,7 @@ impl Link {
     /// Opens `device` at [`BASE_BAUD`] without handshaking.
     pub fn open(device: &str, interrupted: Arc<AtomicBool>) -> Result<Self> {
         let port = serialport::new(device, BASE_BAUD)
-            .timeout(RESPONSE_TIMEOUT)
+            .timeout(POLL_INTERVAL)
             .open()
             .with_context(|| format!("opening {device}"))?;
         Ok(Self { port, interrupted })
@@ -202,16 +206,30 @@ impl Link {
     /// Reads exactly `n` bytes, or `None` if the port times out mid-read.
     ///
     /// Loops over the port so a large chunk that arrives in pieces still
-    /// comes back whole; only a real stall (a full timeout with no
-    /// further bytes) returns `None`.
+    /// comes back whole; only a real stall (a full [`RESPONSE_TIMEOUT`]
+    /// with no further bytes) returns `None`.
+    ///
+    /// Fails as soon as Ctrl-C is pressed. Checking only between whole
+    /// reads isn't enough: a device that keeps printing (a kernel still
+    /// running, not the loader) never lets the handshake's ACK scan time
+    /// out, so Ctrl-C would go unnoticed for as long as it talks.
     fn read_exact_or_timeout(&mut self, n: usize) -> Result<Option<Vec<u8>>> {
         let mut buf = vec![0u8; n];
         let mut filled = 0;
+        let mut deadline = Instant::now() + RESPONSE_TIMEOUT;
         while filled < n {
+            self.check_interrupt()?;
             match self.port.read(&mut buf[filled..]) {
                 Ok(0) => return Ok(None),
-                Ok(got) => filled += got,
-                Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(None),
+                Ok(got) => {
+                    filled += got;
+                    deadline = Instant::now() + RESPONSE_TIMEOUT;
+                }
+                Err(e) if e.kind() == ErrorKind::TimedOut => {
+                    if Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                }
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e).context("reading from the serial port"),
             }
@@ -281,7 +299,7 @@ impl Link {
     pub fn handshake(&mut self) -> Result<u8> {
         self.port.clear(ClearBuffer::All).ok();
 
-        eprintln!("Connecting to rpi-loader (sending HELLO)...");
+        eprintln!("Connecting to rpi-loader (sending HELLO, Ctrl-C aborts)...");
         let version = loop {
             self.check_interrupt()?;
             self.write_all(HELLO)?;
@@ -603,11 +621,10 @@ impl Link {
             .port
             .try_clone()
             .context("cloning the serial port for the terminal")?;
-        // A shorter timeout than the protocol's: nothing here waits on a
-        // reply, and this is how quickly the reader notices it should
-        // stop once the terminal is being left.
+        // Each read blocks for at most this long, which is how quickly the
+        // reader notices it should stop once the terminal is being left.
         from_device
-            .set_timeout(Duration::from_millis(100))
+            .set_timeout(POLL_INTERVAL)
             .context("setting the terminal read timeout")?;
 
         let raw = RawMode::enable();

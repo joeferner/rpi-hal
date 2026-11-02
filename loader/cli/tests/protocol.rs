@@ -301,6 +301,12 @@ impl Fixture {
         stdin.flush().expect("flushing the CLI's stdin");
     }
 
+    /// Sends the CLI a SIGINT, as Ctrl-C at its terminal would.
+    fn interrupt(&self) {
+        let child = self.child.as_ref().expect("child already taken");
+        kill(Pid::from_raw(child.id() as i32), Signal::SIGINT).expect("sending SIGINT");
+    }
+
     /// Waits for the CLI to exit and collects its output.
     ///
     /// A watchdog kills the child if it outlives [`CHILD_TIMEOUT`], so a
@@ -451,6 +457,65 @@ fn an_older_loader_warns_but_still_works() {
     assert!(
         stderr.contains("protocol version"),
         "the mismatch should be named, not swallowed: {stderr:?}"
+    );
+}
+
+/// Exit status the CLI uses when Ctrl-C ended it.
+const EXIT_INTERRUPTED: i32 = 130;
+
+/// Ctrl-C during the handshake has to work while the device is talking.
+///
+/// A kernel still running on the Pi prints and never answers HELLO. Each
+/// byte it sends restarts the wait for the ACK, so a Ctrl-C checked only
+/// once that wait times out was never seen at all.
+#[test]
+fn ctrl_c_ends_a_handshake_the_device_talks_over() {
+    let mut fx = Fixture::spawn(&["exec", "0x8000"]);
+    // The first HELLO means the Ctrl-C handler is installed.
+    assert_eq!(fx.device.read_exact(HELLO.len()), HELLO);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let talker_stop = Arc::clone(&stop);
+    let mut port = fx.device.port.try_clone().expect("cloning the device port");
+    let talker = thread::spawn(move || {
+        while !talker_stop.load(Ordering::SeqCst) {
+            if port.write_all(b"kernel log line\r\n").is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    thread::sleep(Duration::from_millis(300));
+    fx.interrupt();
+    let output = fx.finish();
+    stop.store(true, Ordering::SeqCst);
+    let _ = talker.join();
+
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_INTERRUPTED),
+        "Ctrl-C should end the handshake: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Ctrl-C during the handshake with a silent device takes effect within a
+/// poll interval, not after the rest of a 2 s response timeout.
+#[test]
+fn ctrl_c_ends_a_silent_handshake_promptly() {
+    let mut fx = Fixture::spawn(&["exec", "0x8000"]);
+    assert_eq!(fx.device.read_exact(HELLO.len()), HELLO);
+
+    let start = std::time::Instant::now();
+    fx.interrupt();
+    let output = fx.finish();
+    let elapsed = start.elapsed();
+
+    assert_eq!(output.status.code(), Some(EXIT_INTERRUPTED));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "Ctrl-C took {elapsed:?} to take effect"
     );
 }
 
