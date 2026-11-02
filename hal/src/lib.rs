@@ -201,6 +201,10 @@ pub mod pwm;
 /// Blocking driver for the hardware random number generator.
 #[cfg(not(feature = "bcm2712"))]
 pub mod rng;
+/// Where the Pi 5's RP1 sits in the CPU's address map, which the
+/// bootloader decides: [`rp1::init`] moves it to [`pac::RP1_BASE`].
+#[cfg(feature = "bcm2712")]
+pub mod rp1;
 /// Blocking driver for the on-board SD card slot (Arasan EMMC host
 /// controller, or the SDHCI that replaced it on the Pi 4 and Pi 5).
 pub mod sd;

@@ -13,6 +13,16 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
+## [Unreleased]
+
+### Fixed
+
+- **The Pi 5 firmware never answered with a bootloader from 2024-10-10
+  or later.** Those bootloaders put RP1, and so the loader's console, at
+  a different CPU address than rpi-hal expects, and the first console
+  access stalled the core. The loader now calls rpi-hal's new
+  `rp1::init` before it opens the console, which moves RP1 back.
+
 ## [0.6.0] - 2026-10-17
 
 ### Added

@@ -82,6 +82,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stub's core-0 check and the secondary-core trampoline now read Aff1 on
   the BCM2712.
 
+- **Nothing on RP1 worked with a Pi 5 bootloader from 2024-10-10 or
+  later.** Those bootloaders start PCIe memory at 2 GiB, which moves
+  `pcie2`'s window onto RP1 from CPU `0x1f_0000_0000` to `0x1c_0000_0000`,
+  so the first access through `pac::RP1_BASE` (the console UART, GPIO,
+  I2C, PWM) stalled the core with no fault. New `rp1::init` moves the
+  window back to `RP1_BASE`, keeping the PCIe address the bootloader
+  assigned RP1, and `rt`'s boot sequence calls it before `kmain`, through
+  a new per-chip `rpi_hal_soc_init` hook in `boot64.s`. A program with its
+  own boot sequence calls `rp1::init` itself, before its first RP1 access.
+
 ## [0.10.0] - 2026-10-17
 
 ### Added
