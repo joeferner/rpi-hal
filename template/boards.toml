@@ -33,16 +33,16 @@ ref = "1.20260824"
 # renamed to the bare kernel name on the card. The hashes are the
 # release's own `SHA256SUMS`.
 [loader]
-version = "0.6.0"
+version = "0.7.0"
 url = "https://github.com/joeferner/rpi-hal/releases/download/loader-v{version}"
 
 [loader.sha256]
-"rpi-loader-0.6.0-bcm2835-kernel.img" = "83961164ccf54f289fc6c3557fc1d71152f2e15cd7250f4caa1883be131c9661"
-"rpi-loader-0.6.0-bcm2837-kernel7.img" = "6c4af6a49783be1ede5d21abfd117880e538fa96c13a72bb3829ec72136eace0"
-"rpi-loader-0.6.0-bcm2837-kernel8.img" = "098590dbac5579ce260524ed288dcd75563c486c7a2a62eadfa1b31aba3ce757"
-"rpi-loader-0.6.0-bcm2711-kernel7.img" = "eb0211afedeaf5517649100f627a760ac0da3469eb7d3eb0264d51763a411dcc"
-"rpi-loader-0.6.0-bcm2711-kernel8.img" = "cd61dc0f7aab3a9b5115ba8a15a1ed144c211418d9cdb7de3c5ae9b129f25514"
-"rpi-loader-0.6.0-bcm2712-kernel8.img" = "a6a4a76a59cf80f4a931ff53d84c5d18cef8b038d41e7f45f749176c2641089d"
+"rpi-loader-0.7.0-bcm2835-kernel.img" = "43f4f97c23f34ff08e54465c3029dba212d51f24b9769a489a65562955f3f5ff"
+"rpi-loader-0.7.0-bcm2837-kernel7.img" = "c268e8c2a06a52c389e6a9966398247b0b54bae11f43f8e90fd2158c6ccf31a4"
+"rpi-loader-0.7.0-bcm2837-kernel8.img" = "44b9fc6c09741e83d89a702ca5367ebdfd139ee2761018f17a9931721e405e23"
+"rpi-loader-0.7.0-bcm2711-kernel7.img" = "f82841ec82484ac77561c9334e266e5ba26042221490e066594a7065ae0c9417"
+"rpi-loader-0.7.0-bcm2711-kernel8.img" = "484af3a265c3e3622d710efddfe0a8952d9e269f75086a984e16d25d250f7fe6"
+"rpi-loader-0.7.0-bcm2712-kernel8.img" = "e302811cff504852094883c888b70942418ae81ec978d67d9667631e7f5ce7b9"
 
 # What each execution state needs, shared by every board that has it.
 #
