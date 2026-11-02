@@ -165,6 +165,10 @@ compile_error!(
     "the `vchiq`, `mmal` and `v3d` features are not available on the BCM2712 \
      (Pi 5): they drive the VideoCore IV-era firmware interfaces and GPU."
 );
+/// A minimal polled NVMe driver, for an SSD on the Pi 5's external PCIe
+/// connector (see [`pcie`]).
+#[cfg(feature = "bcm2712")]
+pub mod nvme;
 /// Reference I2C driver for the OV5647 (Raspberry Pi Camera v1) image
 /// sensor — a third-party device (paired with [`unicam`]), not a SoC
 /// peripheral.
@@ -175,6 +179,10 @@ pub mod ov5647;
 #[cfg(feature = "bcm2712")]
 #[path = "pac_bcm2712.rs"]
 pub mod pac;
+/// Root complex bring-up and enumeration for the Pi 5's external PCIe
+/// connector.
+#[cfg(feature = "bcm2712")]
+pub mod pcie;
 /// Blocking bring-up for the PCM / I2S peripheral (digital audio out to an
 /// external I2S DAC).
 #[cfg(not(feature = "bcm2712"))]

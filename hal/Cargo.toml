@@ -331,6 +331,12 @@ name = "pwm_fan"
 required-features = ["bcm2712"]
 
 [[example]]
+# Pi 5 only: the external PCIe connector is the BCM2712's `pcie1`, which no
+# other chip has.
+name = "nvme"
+required-features = ["bcm2712"]
+
+[[example]]
 # The Pi 5's RAM above the first gigabyte, which only the BCM2712 has
 # mapped this way.
 name = "high_ram"

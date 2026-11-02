@@ -8,6 +8,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **PCIe and NVMe on the Pi 5's external connector.** New `pcie` module:
+  `Pcie::init(PCIE1, LinkSpeed, &timer)` resets the BCM2712's `pcie1`
+  root complex, programs its windows, trains the link and numbers the bus
+  behind it (the firmware leaves this controller in reset, so no
+  `config.txt` line is needed); `functions()` lists what answered and
+  `enable()` assigns a function's memory BARs and turns on decoding and
+  bus mastering. New `nvme` module: `Nvme::new(&function, &mut Memory,
+  &timer)` brings up a controller with one polled I/O queue pair, then
+  `read_blocks`/`write_blocks`/`flush`/`shutdown` on namespace 1, any
+  4-byte-aligned buffer anywhere in RAM moved directly, others through a
+  bounce page. The MMU now maps the first gigabyte of `pcie1`'s outbound
+  window (`0x1b_0000_0000`), new `pac::PCIE1` token, and the `nvme`
+  example reads, times and round-trips a block on the SSD. With the
+  `resident-fat` feature, `NvmeBlockDevice` wraps an `Nvme` as that
+  crate's `BlockDevice`, so a FAT32 volume on the SSD mounts like the SD
+  card's; drives formatted with 512-byte blocks only, anything else is
+  `nvme::Error::BlockSize`.
 - **ADMA2 for the Pi 5's SD card, off by default.** `Sd::set_adma(true)`
   has the controller move `read_blocks`' and `write_blocks`' data over its
   own DMA, from a table of 64-bit descriptors, for any 4-byte-aligned

@@ -54,8 +54,8 @@
 // The BCM2712 is the odd one out: every peripheral it has sits above 4 GiB,
 // and the whole low 4 GiB is RAM. So it has none of the low-memory
 // peripheral consts below, and instead names its MMIO as whole 1 GiB
-// regions in `HIGH_DEVICE` (from `bcm2712.dtsi`'s `soc` and `pcie2`
-// `ranges`).
+// regions in `HIGH_DEVICE` (from `bcm2712.dtsi`'s `soc`, `pcie1` and
+// `pcie2` `ranges`).
 
 #[cfg(not(feature = "bcm2712"))]
 use crate::soc::PERIPHERAL_BASE;
@@ -78,10 +78,20 @@ const RAM_END: u64 = 1 << 32;
 ///
 /// On the BCM2712: the two that hold the SoC's own peripheral bus
 /// (`0x10_0000_0000`, 2 GiB, which includes the System Timer, the always-on
-/// GPIO and the GIC), and the one RP1's peripheral window opens into
-/// (`0x1f_0000_0000`). Empty on every other chip.
+/// GPIO and the GIC), the first gigabyte of the external PCIe connector's
+/// 32-bit memory window (`0x1b_0000_0000`, where [`crate::pcie`] places
+/// the BARs of whatever is plugged in), and the one RP1's peripheral window
+/// opens into (`0x1f_0000_0000`). Empty on every other chip.
+///
+/// Mapping the PCIe window costs one level-1 entry and nothing else: until
+/// a driver trains the link and assigns a BAR there, nothing reads it.
 #[cfg(feature = "bcm2712")]
-const HIGH_DEVICE: &[u64] = &[0x10_0000_0000, 0x10_4000_0000, 0x1f_0000_0000];
+const HIGH_DEVICE: &[u64] = &[
+    0x10_0000_0000,
+    0x10_4000_0000,
+    0x1b_0000_0000,
+    0x1f_0000_0000,
+];
 #[cfg(all(target_arch = "aarch64", not(feature = "bcm2712")))]
 const HIGH_DEVICE: &[u64] = &[];
 
