@@ -245,15 +245,20 @@ struct Fixture {
 impl Fixture {
     /// Spawns the CLI against a fresh pty, with stdin inherited.
     fn spawn(args: &[&str]) -> Self {
-        Self::spawn_inner(args, false)
+        Self::spawn_inner(args, false, None)
     }
 
     /// Spawns the CLI with its stdin piped, for the terminal tests.
     fn spawn_with_stdin(args: &[&str]) -> Self {
-        Self::spawn_inner(args, true)
+        Self::spawn_inner(args, true, None)
     }
 
-    fn spawn_inner(args: &[&str], pipe_stdin: bool) -> Self {
+    /// Spawns the CLI with its stdin piped and `RPI_LOADER_ESCAPE` set.
+    fn spawn_with_stdin_and_escape_env(args: &[&str], escape: &str) -> Self {
+        Self::spawn_inner(args, true, Some(escape))
+    }
+
+    fn spawn_inner(args: &[&str], pipe_stdin: bool, escape_env: Option<&str>) -> Self {
         let pty = openpty(None, None).expect("openpty");
 
         // Raw on both ends: no echo, no line discipline rewriting bytes
@@ -268,7 +273,14 @@ impl Fixture {
         }
 
         let device_path = ttyname(&pty.slave).expect("ttyname");
-        let child = Command::new(env!("CARGO_BIN_EXE_rpi-loader"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rpi-loader"));
+        // Whatever escape the person running the tests has configured
+        // must not leak in; the tests assume Ctrl-] unless they say so.
+        match escape_env {
+            Some(escape) => command.env("RPI_LOADER_ESCAPE", escape),
+            None => command.env_remove("RPI_LOADER_ESCAPE"),
+        };
+        let child = command
             .arg("--device")
             .arg(&device_path)
             .args(args)
@@ -826,4 +838,47 @@ fn terminal_sends_what_precedes_the_escape() {
     assert_eq!(fx.device.read_exact(3), b"def");
 
     assert_success(&fx.finish());
+}
+
+#[test]
+fn terminal_escape_can_be_changed_with_the_flag() {
+    let mut fx = Fixture::spawn_with_stdin(&["terminal", "--escape", "^A"]);
+
+    // Ctrl-] is an ordinary key now, and goes to the device.
+    fx.type_input(&[b'x', ESCAPE]);
+    assert_eq!(fx.device.read_exact(2), [b'x', ESCAPE]);
+
+    fx.type_input(&[b'y', 0x01, b'z']);
+    assert_eq!(fx.device.read_exact(1), b"y");
+
+    assert_success(&fx.finish());
+}
+
+#[test]
+fn terminal_escape_can_be_changed_with_the_environment() {
+    let mut fx = Fixture::spawn_with_stdin_and_escape_env(&["terminal"], "^A");
+    fx.type_input(&[ESCAPE]);
+    assert_eq!(fx.device.read_exact(1), [ESCAPE]);
+    fx.type_input(&[0x01]);
+    assert_success(&fx.finish());
+}
+
+#[test]
+fn terminal_escape_flag_overrides_the_environment() {
+    let mut fx = Fixture::spawn_with_stdin_and_escape_env(&["terminal", "--escape", "^B"], "^A");
+    fx.type_input(&[0x01]);
+    assert_eq!(fx.device.read_exact(1), [0x01]);
+    fx.type_input(&[0x02]);
+    assert_success(&fx.finish());
+}
+
+#[test]
+fn ctrl_c_is_refused_as_the_escape() {
+    let output = Fixture::spawn(&["terminal", "--escape", "^C"]).finish();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Ctrl-C cannot be the escape"),
+        "stderr should say why: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

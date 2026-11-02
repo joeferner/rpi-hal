@@ -15,6 +15,15 @@ flag here is no reason to bump their dependency.
 
 ## [Unreleased]
 
+### Added
+
+- **`--escape` picks the key that leaves terminal mode**, as `^X` caret
+  notation or a single character, and `RPI_LOADER_ESCAPE` sets it for
+  every invocation. Ctrl-] stays the default, but a keyboard layout with
+  no `]` key (German, Nordic) has no reliable way to type it. The
+  terminal-mode banner names the key in use, calls the default the
+  telnet escape, and says how to change it.
+
 ### Fixed
 
 - **The Pi 5 firmware never answered with a bootloader from 2024-10-10
