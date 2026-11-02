@@ -13,7 +13,7 @@ its own history in [`ota/CHANGELOG.md`](ota/CHANGELOG.md). Its consumers
 are firmware projects in other repositories, and a renamed command-line
 flag here is no reason to bump their dependency.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-02
 
 ### Added
 
@@ -31,6 +31,13 @@ flag here is no reason to bump their dependency.
   a different CPU address than rpi-hal expects, and the first console
   access stalled the core. The loader now calls rpi-hal's new
   `rp1::init` before it opens the console, which moves RP1 back.
+- **Ctrl-C did not stop a handshake the device talked over.** The CLI
+  checked for Ctrl-C only between HELLO attempts, and each attempt waited
+  up to 2 s per byte for the ACK, so a device that kept printing (a
+  kernel still running instead of the loader) restarted that wait with
+  every byte and Ctrl-C was never noticed. Every read on the link now
+  blocks for at most 100 ms and checks for Ctrl-C in between, and the
+  connect line says Ctrl-C aborts.
 
 ## [0.6.0] - 2026-10-17
 
@@ -301,6 +308,7 @@ flag here is no reason to bump their dependency.
 - `list`, which reports the host's USB serial ports without opening one.
 - The host CLI in Rust, published to crates.io as `rpi-loader`.
 
+[0.7.0]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.7.0
 [0.6.0]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.6.0
 [0.5.1]: https://github.com/joeferner/rpi-hal/releases/tag/loader-v0.5.1
 [0.5.0]: https://github.com/joeferner/rpi-loader/releases/tag/v0.5.0

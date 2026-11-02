@@ -4,6 +4,17 @@ Notable changes to `rpi-hal-embassy`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-11-02
+
+### Changed
+
+- **`rpi-hal` 0.10 → 0.11.** Breaking only in that a consumer's own
+  `rpi-hal` must move to 0.11 as well, as with every `rpi-hal` minor.
+  Nothing in this crate's API changed. 0.11's additions are Pi 5
+  (`bcm2712`) drivers, which this crate still doesn't offer: its time
+  driver is interrupt-driven and `rpi-hal` has no interrupt controller
+  for that chip yet.
+
 ## [0.10.0] - 2026-10-17
 
 ### Changed
@@ -419,6 +430,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blink, button, `Instant`/`Duration`, async UART echo, an
   `embassy-net` TCP echo server, and a `picoserve` HTTP server.
 
+[0.11.0]: https://github.com/joeferner/rpi-hal/releases/tag/embassy-v0.11.0
 [0.10.0]: https://github.com/joeferner/rpi-hal/releases/tag/embassy-v0.10.0
 [0.9.1]: https://github.com/joeferner/rpi-hal/releases/tag/embassy-v0.9.1
 [0.9.0]: https://github.com/joeferner/rpi-hal-embassy/releases/tag/v0.9.0
