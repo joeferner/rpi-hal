@@ -11,6 +11,16 @@ core::arch::global_asm!(
     core_shift = const crate::cpu::MPIDR_CORE_SHIFT,
 );
 
+/// Chip-specific setup boot64.s runs after the MMU is up and before
+/// `kmain`. Only the BCM2712 has any: moving RP1's window to where this
+/// crate expects it (see [`crate::rp1`]).
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+extern "C" fn rpi_hal_soc_init() {
+    #[cfg(feature = "bcm2712")]
+    crate::rp1::init();
+}
+
 // See mmu_fallback.s: only included when `mmu` is off, so a build of this
 // crate never defines `rpi_hal_mmu_init` more than once itself (mmu.rs
 // provides its own strong definition when the feature is on). One file per

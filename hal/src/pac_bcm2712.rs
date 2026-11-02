@@ -15,9 +15,11 @@
 //!   [`SOC_BASE`] (`soc` node: `ranges = <0x0 0x10 0x0 0x80000000>`), so
 //!   the System Timer at bus `0x7c00_3000` is physical `0x10_7c00_3000`.
 //! - The RP1 south bridge is a PCIe device. Its peripheral window starts at
-//!   physical [`RP1_BASE`] (`pcie2`'s outbound `ranges` put PCIe address 0
-//!   there, and `&rp1`'s `ranges` put RP1's `0xc0_4000_0000` at PCIe 0), so
-//!   an RP1 block at `0xc0_400d_0000` is physical `0x1f_000d_0000`.
+//!   physical [`RP1_BASE`], so an RP1 block at `0xc0_400d_0000` in RP1's
+//!   own address map is physical `0x1f_000d_0000`. That is where the
+//!   device tree's `pcie2` `ranges` put it, but the bootloader programs the
+//!   window, and newer ones put it elsewhere; [`crate::rp1::init`] moves
+//!   it back.
 //!
 //! RP1 is only reachable if the firmware leaves the PCIe link it trained up:
 //! `pciex4_reset=0` in `config.txt`. With the default (`1`) it resets the
@@ -62,7 +64,8 @@ pub use bcm2711_lpa::emmc;
 /// Physical address of bus address 0 on the SoC's peripheral bus.
 pub const SOC_BASE: usize = 0x10_0000_0000;
 
-/// Physical address of the start of RP1's peripheral window.
+/// Physical address of the start of RP1's peripheral window, once
+/// [`crate::rp1::init`] has put it there.
 pub const RP1_BASE: usize = 0x1f_0000_0000;
 
 /// The BCM System Timer: a free-running 1 MHz counter plus four compare

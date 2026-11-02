@@ -3,7 +3,7 @@
 // The GPU firmware (with `arm_64bit=1`) releases core 0 here, at EL2,
 // with the MMU and caches off. This sets up a stack, drops to EL1,
 // installs the exception vectors, brings up the identity-mapped MMU, zeros
-// .bss, and calls `kmain` -- the same responsibilities boot.s has on
+// .bss, runs any chip-specific setup, and calls `kmain` -- the same responsibilities boot.s has on
 // AArch32, expressed with AArch64 registers and an EL2->EL1 drop in place
 // of boot.s's HYP->SVC drop.
 //
@@ -102,6 +102,10 @@ _start:
     // weak no-op fallback when the `mmu` feature is off). Logic lives in
     // Rust; this is a plain call. Needs the stack set above and .bss zeroed.
     bl      rpi_hal_mmu_init
+
+    // Chip-specific setup that must precede any driver (boot.rs): on the
+    // BCM2712, moving RP1's window to where its drivers expect it.
+    bl      rpi_hal_soc_init
 
     bl      kmain
 

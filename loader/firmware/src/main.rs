@@ -198,6 +198,11 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 /// into a freshly loaded image).
 #[no_mangle]
 pub extern "C" fn kmain() -> ! {
+    // The loader supplies its own boot sequence, so it runs what rpi-hal's
+    // `rt` would before `kmain`: on the Pi 5 the console is on RP1, whose
+    // window the bootloader may have put somewhere else.
+    #[cfg(feature = "bcm2712")]
+    rpi_hal::rp1::init();
     let peripherals = unsafe { pac::Peripherals::steal() };
     let mut uart = Uart::init(&peripherals.GPIO, peripherals.UART0);
     // The SD commands re-`steal()` the peripherals they need (EMMC, GPIO,
