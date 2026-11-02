@@ -88,13 +88,20 @@ crate out. Working:
 - the ACT LED, on the SoC's own always-on GPIO block;
 - the UART console on GPIO14/15, RP1's UART0;
 - the VideoCore mailbox;
-- the SD card, reads and writes, through both FAT layers;
+- the SD card, reads and writes, through both FAT layers, up to UHS-I
+  SDR104 (from 0.11.0);
 - I2C on the header's GPIO2/3 and the HAT ID bus's GPIO0/1, through RP1's
-  own controllers.
+  own controllers;
+- from 0.11.0: cores 1-3 with the `multicore` feature, started through
+  the firmware's PSCI; PWM on GPIO12/13/18/19 and the fan connector,
+  with the fan's speed; `fault-report`; all of the board's RAM, not just
+  the firmware's first gigabyte; and PCIe on the external connector,
+  with NVMe for an SSD there.
 
 These keep the API they have on the other boards, so the `blink`,
-`uart_hello`, SD card and I2C examples build for the Pi 5 unchanged. There is
-no interrupt controller support, second core, DMA or USB here yet. The
+`uart_hello`, SD card, I2C and multicore examples build for the Pi 5
+unchanged. There is no interrupt controller support, general-purpose
+DMA or USB here yet. The
 loader runs on it (from 0.6.0) and [Start a project](../start/) offers
 it; Embassy doesn't support the Pi 5 yet.
 

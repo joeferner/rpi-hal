@@ -311,7 +311,7 @@ Pick the one matching yours:
 | `rpi-loader-<version>-bcm2712-kernel8.img` | Pi 5 (from 0.6.0) | AArch64 |
 
 ```sh
-VERSION=0.6.0
+VERSION=0.7.0
 BASE=https://github.com/joeferner/rpi-hal/releases/download/loader-v$VERSION
 curl -LO $BASE/rpi-loader-$VERSION-bcm2837-kernel8.img
 curl -LO $BASE/SHA256SUMS

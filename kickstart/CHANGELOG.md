@@ -4,7 +4,7 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-02
 
 ### Added
 
@@ -16,6 +16,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`rpi-hal` 0.10 → 0.11 and `rpi-hal-embassy` 0.10 → 0.11.** A
+  consumer's own `rpi-hal` and `rpi-hal-embassy` must move with them,
+  since their types cross this crate's API. The `bcm2712` heap above
+  needs 0.11's `mem::high_ram_region`.
 - **The heap is `rlsf`'s TLSF driven directly**, in place of
   `embedded-alloc`'s wrapper of the same allocator, which takes one
   region where a Pi 5's heap is two. Same allocator, same `heap::init`
@@ -517,6 +521,7 @@ The first release.
   addresses. A count that keeps rising is the difference between a board
   that booted and a board that booted and then faulted.
 
+[0.5.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.5.0
 [0.4.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.4.0
 [0.3.0]: https://github.com/joeferner/rpi-hal/releases/tag/kickstart-v0.3.0
 [0.2.0]: https://github.com/joeferner/rpi-kickstart/releases/tag/v0.2.0

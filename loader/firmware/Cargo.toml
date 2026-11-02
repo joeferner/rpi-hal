@@ -1,6 +1,6 @@
 [package]
 name = "rpi-loader-firmware"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Self-relocating UART upload loader for Raspberry Pi 1/Zero/2/3/4/5 (BCM2835/BCM2836/BCM2837/BCM2711/BCM2712) — flash once, then upload new firmware over serial instead of rewriting the SD card"
 license = "MIT OR Apache-2.0"
@@ -43,14 +43,16 @@ publish = false
 # crate instead (see [features] below), defaulting to `bcm2837` so every
 # existing invocation means what it did before.
 #
-# 0.8.0 is a floor rather than whatever was current, and each raise has
-# had a reason: 0.3.0 for the `eeprom-*` commands, which need
+# The version is a floor rather than whatever was current, and each
+# raise has had a reason: 0.3.0 for the `eeprom-*` commands, which need
 # `I2c::<BSC0>::init_id` and BSC0 muxed to its GPIO0/1 (HAT ID bus)
 # routing; 0.6.0 for the `bcm2835` feature below, which is where that
 # chip's peripheral map and ARMv6 boot code arrived; 0.8.0 for the
 # `resident-fat` feature and its `sd::SdBlockDevice`; 0.9.0 for that
-# feature on `resident-fat` 0.3.
-rpi-hal = { version = "0.10.0", path = "../../hal", default-features = false, features = ["resident-fat"] }
+# feature on `resident-fat` 0.3; 0.10.0 for the `bcm2712` feature; 0.11.0
+# for `rp1::init`, without which a Pi 5 bootloader from 2024-10-10 on
+# leaves RP1, and so the console, out of reach.
+rpi-hal = { version = "0.11.0", path = "../../hal", default-features = false, features = ["resident-fat"] }
 # The FAT layer itself. rpi-hal only provides the `BlockDevice` adapter, so
 # the loader depends on this directly for the `FileSystem` it drives. Must
 # be the same major rpi-hal 0.9.0 pins: under a different one, rpi-hal's
