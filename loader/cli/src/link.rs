@@ -610,13 +610,14 @@ impl Link {
 
     /// Acts as a bidirectional passthrough terminal: what the device
     /// sends goes to stdout, and what is typed goes to the device.
-    /// Returns when [`ESCAPE`] is pressed.
+    /// Returns when `escape` is pressed; [`DEFAULT_ESCAPE`] says why
+    /// that is not Ctrl-C.
     ///
     /// The two directions block independently — a keystroke can arrive
     /// while nothing is coming back, and vice versa — so the device→stdout
     /// half runs on its own thread over a cloned port handle, and the
     /// keyboard is read here.
-    pub fn terminal(&mut self) -> Result<()> {
+    pub fn terminal(&mut self, escape: u8) -> Result<()> {
         let mut from_device = self
             .port
             .try_clone()
@@ -629,9 +630,19 @@ impl Link {
 
         let raw = RawMode::enable();
         if raw.active {
+            // Naming the telnet escape gives someone whose layout has no
+            // `]` key something to search for, and naming the option
+            // tells them it can be changed.
+            let origin = if escape == DEFAULT_ESCAPE {
+                " (the telnet escape)"
+            } else {
+                ""
+            };
             eprintln!(
-                "Entering terminal mode. Ctrl-] exits; everything else, \
-                 Ctrl-C included, goes to the device.\r"
+                "Entering terminal mode. {}{origin} exits, --escape or \
+                 RPI_LOADER_ESCAPE picks another key; everything else, \
+                 Ctrl-C included, goes to the device.\r",
+                key_name(escape)
             );
         } else {
             // Without a terminal on stdin there is no raw mode and no
@@ -686,7 +697,7 @@ impl Link {
             reader_finished.store(true, Ordering::SeqCst);
         });
 
-        let result = self.forward_keyboard(&finished);
+        let result = self.forward_keyboard(escape, &finished);
 
         finished.store(true, Ordering::SeqCst);
         let _ = reader.join();
@@ -698,9 +709,9 @@ impl Link {
         result
     }
 
-    /// Reads the keyboard and writes it to the device until [`ESCAPE`],
+    /// Reads the keyboard and writes it to the device until `escape`,
     /// end of input, or Ctrl-C.
-    fn forward_keyboard(&mut self, finished: &AtomicBool) -> Result<()> {
+    fn forward_keyboard(&mut self, escape: u8, finished: &AtomicBool) -> Result<()> {
         let mut stdin = std::io::stdin().lock();
         let mut buf = [0u8; 256];
         loop {
@@ -713,7 +724,7 @@ impl Link {
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e).context("reading the keyboard"),
             };
-            if let Some(at) = buf[..n].iter().position(|&b| b == ESCAPE) {
+            if let Some(at) = buf[..n].iter().position(|&b| b == escape) {
                 // Whatever was typed ahead of the escape was meant for the
                 // device; only the escape itself is swallowed.
                 self.write_all(&buf[..at])?;
@@ -732,14 +743,27 @@ impl Link {
     }
 }
 
-/// Key that leaves terminal mode: Ctrl-] (0x1D), the telnet convention.
+/// Key that leaves terminal mode unless `--escape` says otherwise:
+/// Ctrl-] (0x1D), the telnet convention.
 ///
 /// Ctrl-C cannot be the way out once the terminal is bidirectional — the
 /// point of raw mode is that it reaches the device, which is how you
 /// interrupt something running *there*. Ctrl-] is a single keystroke
 /// needing no state machine, unlike the `~.` and `Ctrl-A X` sequences,
-/// and nothing on the device side is likely to want it.
-const ESCAPE: u8 = 0x1D;
+/// and nothing on the device side is likely to want it. Layouts without
+/// a `]` key (German, Nordic) reach it some other way, differently in
+/// each terminal, which is why it can be changed.
+const DEFAULT_ESCAPE: u8 = 0x1D;
+
+/// Names a key the way the terminal-mode banner shows it: `Ctrl-]` for a
+/// control byte, the character itself otherwise.
+fn key_name(key: u8) -> String {
+    match key {
+        0x00..=0x1f => format!("Ctrl-{}", char::from(key ^ 0x40)),
+        0x7f => "Ctrl-?".to_string(),
+        _ => format!("'{}'", char::from(key)),
+    }
+}
 
 /// Puts the host terminal into raw mode for as long as it is alive, so
 /// keystrokes reach the device one at a time, without local echo, and
@@ -814,5 +838,14 @@ mod tests {
             return;
         }
         assert!(!RawMode::enable().active);
+    }
+
+    #[test]
+    fn key_names_read_as_typed() {
+        assert_eq!(key_name(DEFAULT_ESCAPE), "Ctrl-]");
+        assert_eq!(key_name(0x01), "Ctrl-A");
+        assert_eq!(key_name(0x00), "Ctrl-@");
+        assert_eq!(key_name(0x7f), "Ctrl-?");
+        assert_eq!(key_name(b'q'), "'q'");
     }
 }

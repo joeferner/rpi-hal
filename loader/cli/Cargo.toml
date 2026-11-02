@@ -13,7 +13,8 @@ rust-version = "1.87"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.6", features = ["derive"] }
+# `env` lets `--escape` take its default from RPI_LOADER_ESCAPE.
+clap = { version = "4.6.6", features = ["derive", "env"] }
 # Shell completion scripts, generated from the same `Command` clap builds
 # for `--help`, so they cannot describe a different CLI than the one that
 # runs. That is the whole reason this is a subcommand rather than a build

@@ -69,6 +69,23 @@ struct Cli {
     #[arg(short, long, global = true, value_name = "DEVICE")]
     device: Option<String>,
 
+    // Global for the same reason as `--device`, and because three
+    // subcommands (`boot`, `exec --terminal`, `terminal`) reach the
+    // terminal. The environment variable is the way to change it for
+    // every invocation, e.g. on a keyboard layout with no `]` key.
+    /// Key that leaves terminal mode, as `^X` caret notation or a single
+    /// character. The default, Ctrl-], is the telnet escape.
+    #[arg(
+        short,
+        long,
+        global = true,
+        env = "RPI_LOADER_ESCAPE",
+        value_name = "KEY",
+        value_parser = parse_escape,
+        default_value = "^]"
+    )]
+    escape: u8,
+
     /// What to ask the loader to do.
     #[command(subcommand)]
     command: Command,
@@ -310,6 +327,31 @@ fn parse_i2c_address(s: &str) -> Result<u8, String> {
         .ok()
         .filter(|&address| address <= 0x7f)
         .ok_or_else(|| format!("{s:?} is not a 7-bit I2C address (0x00-0x7f)"))
+}
+
+/// Parses a terminal escape key: `^X` caret notation (`^A`-`^Z`, `^@`,
+/// `^[`, `^\`, `^]`, `^^`, `^_`, `^?`, letters in either case), or a
+/// single ASCII character taken literally.
+///
+/// Ctrl-C is refused: raw mode exists so that it reaches the device and
+/// interrupts whatever is running there, and an escape on it would take
+/// that away.
+fn parse_escape(s: &str) -> Result<u8, String> {
+    let key = match s.as_bytes() {
+        [b'^', b'?'] => 0x7f,
+        [b'^', c @ (b'@'..=b'_' | b'a'..=b'z')] => c.to_ascii_uppercase() ^ 0x40,
+        [c] if c.is_ascii() => *c,
+        _ => {
+            return Err(format!(
+                "{s:?} is not a key; use caret notation such as ^] or ^A, \
+                 or a single character"
+            ))
+        }
+    };
+    if key == 0x03 {
+        return Err("Ctrl-C cannot be the escape; it has to reach the device".into());
+    }
+    Ok(key)
 }
 
 /// Reads a local file, naming it if that fails.
@@ -633,7 +675,7 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
             link.negotiate_baud(BASE_BAUD)?;
             link.exec(load_addr)?;
             eprintln!("Jumped to {load_addr:#x}.");
-            link.terminal()?;
+            link.terminal(cli.escape)?;
         }
 
         Command::MemWrite { addr, file, baud } => {
@@ -648,7 +690,7 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
             link.exec(addr)?;
             eprintln!("Jumped to {addr:#x}.");
             if terminal {
-                link.terminal()?;
+                link.terminal(cli.escape)?;
             }
         }
 
@@ -747,7 +789,7 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
             );
         }
 
-        Command::Terminal => link.terminal()?,
+        Command::Terminal => link.terminal(cli.escape)?,
 
         // All three returned above, before a port was ever opened.
         Command::Bundle { .. } => unreachable!(),
@@ -756,4 +798,38 @@ fn run(cli: Cli, interrupted: Arc<AtomicBool>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_takes_caret_notation() {
+        assert_eq!(parse_escape("^]"), Ok(0x1d));
+        assert_eq!(parse_escape("^A"), Ok(0x01));
+        assert_eq!(parse_escape("^a"), Ok(0x01));
+        assert_eq!(parse_escape("^@"), Ok(0x00));
+        assert_eq!(parse_escape("^_"), Ok(0x1f));
+        assert_eq!(parse_escape("^?"), Ok(0x7f));
+    }
+
+    #[test]
+    fn escape_takes_a_literal_character() {
+        assert_eq!(parse_escape("\x01"), Ok(0x01));
+        assert_eq!(parse_escape("q"), Ok(b'q'));
+        // A lone caret is the character, not the start of a notation.
+        assert_eq!(parse_escape("^"), Ok(b'^'));
+    }
+
+    #[test]
+    fn escape_rejects_what_is_not_one_key() {
+        assert!(parse_escape("").is_err());
+        assert!(parse_escape("^AB").is_err());
+        assert!(parse_escape("^1").is_err());
+        assert!(parse_escape("ü").is_err());
+        assert!(parse_escape("^C").is_err());
+        assert!(parse_escape("^c").is_err());
+        assert!(parse_escape("\x03").is_err());
+    }
 }

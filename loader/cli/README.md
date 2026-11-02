@@ -76,10 +76,32 @@ is bidirectional: device output is printed, and what you type is sent
 straight out the serial port. Input is unbuffered and unechoed locally,
 so what you see is what the device echoed back.
 
-**Ctrl-]** exits. Ctrl-C deliberately does not — it is forwarded like any
-other key, which is what lets you interrupt a program running on the
-device. When stdin is a pipe rather than a keyboard there is no raw mode
-to speak of, and Ctrl-C goes back to its usual job of ending the process.
+**Ctrl-]** exits. It is the same escape telnet uses. Ctrl-C deliberately
+does not exit — it is forwarded like any other key, which is what lets
+you interrupt a program running on the device. When stdin is a pipe
+rather than a keyboard there is no raw mode to speak of, and Ctrl-C goes
+back to its usual job of ending the process.
+
+On a keyboard layout with no `]` key of its own (German, Nordic, ...),
+Ctrl-] is awkward or impossible to type, and which other combination
+sends it depends on the terminal. Rather than hunt for it, pick a
+different escape with `--escape`, as `^X` caret notation or a single
+character:
+
+```sh
+rpi-loader --device $DEV --escape '^A' terminal
+```
+
+To change it for every invocation, set `RPI_LOADER_ESCAPE` in your shell
+profile instead; `--escape` still overrides it:
+
+```sh
+export RPI_LOADER_ESCAPE='^A'
+```
+
+Ctrl-C cannot be the escape, since it has to reach the device. To check
+what a key combination actually sends, run `cat -v`, press it, and look
+for the caret form (`^]` for Ctrl-]).
 
 `boot` requires `--load-addr`: `0x8000` for a 32-bit `kernel7.img`,
 `0x80000` for a 64-bit `kernel8.img`. There is deliberately no default —
