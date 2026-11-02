@@ -493,6 +493,45 @@ impl core::fmt::Debug for GIO_AON {
     }
 }
 
+/// The BCM2712's second PCIe root complex (`pcie1`), behind the Pi 5's
+/// external PCIe connector, driven by [`crate::pcie`].
+///
+/// A Broadcom set-top-box PCIe controller (`brcm,bcm2712-pcie`, Linux's
+/// `pcie-brcmstb`), one lane. Of the chip's other two, `pcie2` carries RP1
+/// and `pcie0` is not wired out on a Pi 5. No `Deref`: the driver reaches
+/// its registers through [`PCIE1::ADDR`].
+pub struct PCIE1 {
+    _marker: PhantomData<*const ()>,
+}
+
+// SAFETY: see `SYSTMR`'s.
+unsafe impl Send for PCIE1 {}
+
+impl PCIE1 {
+    /// Address of the controller's register file (`pcie1`'s `reg`, bus
+    /// `0x0011_0000` on the SoC bus), 0x9310 bytes long. Its first 4 KiB
+    /// are the root port's own configuration space.
+    pub const ADDR: usize = SOC_BASE + 0x0011_0000;
+
+    /// Steals an instance of this peripheral.
+    ///
+    /// # Safety
+    ///
+    /// See [`SYSTMR::steal`].
+    pub unsafe fn steal() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl core::fmt::Debug for PCIE1 {
+    /// Prints the token's name; it has no state to show.
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("PCIE1").finish()
+    }
+}
+
 /// Whether [`Peripherals`] has been handed out. Only ever loaded and
 /// stored inside a critical section, so plain loads and stores suffice and
 /// no exclusive-access instructions are needed.
@@ -520,6 +559,8 @@ pub struct Peripherals {
     pub PWM1: PWM1,
     /// The always-on GPIO block.
     pub GIO_AON: GIO_AON,
+    /// The external PCIe connector's root complex.
+    pub PCIE1: PCIE1,
 }
 
 impl Peripherals {
@@ -551,6 +592,7 @@ impl Peripherals {
             PWM0: unsafe { PWM0::steal() },
             PWM1: unsafe { PWM1::steal() },
             GIO_AON: unsafe { GIO_AON::steal() },
+            PCIE1: unsafe { PCIE1::steal() },
         }
     }
 }
