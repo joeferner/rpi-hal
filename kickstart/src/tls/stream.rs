@@ -18,7 +18,6 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use embassy_net::tcp::TcpSocket;
 use embedded_io_async::{ErrorType, Read, Write};
 use rustls::client::UnbufferedClientConnection;
 use rustls::pki_types::ServerName;
@@ -44,7 +43,7 @@ pub enum Error {
     /// an untrusted, expired or wrongly-named certificate must fail rather
     /// than proceed.
     Tls(rustls::Error),
-    /// The TCP socket failed underneath.
+    /// The transport underneath failed.
     Socket,
     /// The peer closed the connection in the middle of the handshake.
     UnexpectedClose,
@@ -75,11 +74,11 @@ impl embedded_io_async::Error for Error {
 }
 
 /// A TLS connection, wrapping a connected TCP socket.
-pub struct TlsStream<'s> {
+pub struct TlsStream<S> {
     /// The `rustls` state machine.
     connection: UnbufferedClientConnection,
-    /// The transport. Already connected before the handshake starts.
-    socket: TcpSocket<'s>,
+    /// The TLS transport. Already connected before the handshake starts.
+    socket: S,
     /// TLS records received but not yet consumed by `rustls`.
     incoming: Vec<u8>,
     /// How much of `incoming` holds real data.
@@ -97,14 +96,14 @@ pub struct TlsStream<'s> {
 }
 
 impl<'s> TlsStream<'s> {
-    /// Performs the TLS handshake over an already-connected socket.
+    /// Performs the TLS handshake over an already-connected transport.
     ///
     /// Returns once the connection is ready to carry application data,
     /// which means the server's certificate chain has been verified against
     /// the configured trust anchors, its name against `server_name`, and its
     /// validity against the clock.
     pub async fn connect(
-        socket: TcpSocket<'s>,
+        socket: S,
         config: Arc<ClientConfig>,
         server_name: &str,
     ) -> Result<Self, Error> {
@@ -139,9 +138,9 @@ impl<'s> TlsStream<'s> {
         self.connection.negotiated_cipher_suite()
     }
 
-    /// Hands back the TCP socket, for a caller that wants to close it
+    /// Hands back the TLS transport, for a caller that wants to close it
     /// itself. The TLS session is abandoned without a `close_notify`.
-    pub fn into_socket(self) -> TcpSocket<'s> {
+    pub fn into_inner(self) -> S {
         self.socket
     }
 
