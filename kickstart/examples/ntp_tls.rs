@@ -195,7 +195,7 @@ async fn tls_task(stack: Stack<'static>) {
 /// Sends `HEAD /` over `stream` and returns the response's status line, or
 /// what went wrong. Enough to show application data both ways, which a
 /// handshake alone does not.
-async fn head(stream: &mut TlsStream<'_>, host: &str) -> String {
+async fn head(stream: &mut TlsStream<embassy_net::tcp::TcpSocket<'_>>, host: &str) -> String {
     use embedded_io_async::{Read, Write};
 
     let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");

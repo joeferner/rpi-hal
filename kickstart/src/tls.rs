@@ -1,5 +1,6 @@
 //! TLS client connections: `rustls` with real certificate-chain
-//! verification, over an `embassy-net` TCP socket.
+//! verification, over any `embedded-io-async` transport — an `embassy-net`
+//! TCP socket in the usual case.
 //!
 //! A cut-down embedded TLS stack would encrypt the connection without
 //! meaningfully authenticating the peer, which for a board that sends

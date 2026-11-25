@@ -1,18 +1,21 @@
-//! A TLS stream over an `embassy-net` TCP socket.
+//! A TLS stream over any async byte transport.
 //!
 //! This is the bridge between two worlds that do not natively meet: `rustls`
-//! is sans-IO and synchronous, and `embassy-net` is async. `rustls`'s usual
-//! `Connection`/`Reader`/`Writer` types are `std`-only, so the connection is
-//! driven through the `unbuffered` API instead — a state machine that hands
-//! back "encode these bytes", "transmit what you have", or "I need more
-//! input", and leaves every byte of actual IO to the caller.
+//! is sans-IO and synchronous, and the network stack is async. `rustls`'s
+//! usual `Connection`/`Reader`/`Writer` types are `std`-only, so the
+//! connection is driven through the `unbuffered` API instead — a state
+//! machine that hands back "encode these bytes", "transmit what you have",
+//! or "I need more input", and leaves every byte of actual IO to the caller.
 //!
-//! Driving that state machine against an async socket is the whole of this
-//! module.
+//! Driving that state machine against an async transport is the whole of
+//! this module.
 //!
-//! The result implements `embedded-io-async`'s `Read` and `Write`, so
-//! anything written against those traits — an HTTP client, for instance —
-//! runs over TLS without knowing it.
+//! The transport is anything implementing `embedded-io-async`'s `Read` and
+//! `Write`: usually an `embassy-net` `TcpSocket`, but equally another
+//! `TlsStream` (TLS through a TLS tunnel, as an HTTPS proxy does) or a
+//! serial link. The result implements the same two traits, so anything
+//! written against them — an HTTP client, for instance — runs over TLS
+//! without knowing it, and a `TlsStream` can itself be a transport.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -43,7 +46,7 @@ pub enum Error {
     /// an untrusted, expired or wrongly-named certificate must fail rather
     /// than proceed.
     Tls(rustls::Error),
-    /// The transport underneath failed.
+    /// The transport underneath the TLS records failed.
     Socket,
     /// The peer closed the connection in the middle of the handshake.
     UnexpectedClose,
@@ -55,7 +58,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::InvalidServerName => write!(f, "invalid server name"),
             Error::Tls(e) => write!(f, "TLS error: {e}"),
-            Error::Socket => write!(f, "TCP socket error"),
+            Error::Socket => write!(f, "transport error"),
             Error::UnexpectedClose => write!(f, "peer closed unexpectedly"),
         }
     }
@@ -73,11 +76,15 @@ impl embedded_io_async::Error for Error {
     }
 }
 
-/// A TLS connection, wrapping a connected TCP socket.
+/// A TLS connection over a connected transport `S`.
+///
+/// `S` is the byte stream the TLS records travel on, typically an
+/// `embassy-net` `TcpSocket`. It must already be connected to the peer.
 pub struct TlsStream<S> {
     /// The `rustls` state machine.
     connection: UnbufferedClientConnection,
-    /// The TLS transport. Already connected before the handshake starts.
+    /// The transport the TLS records travel on. Already connected before
+    /// the handshake starts.
     socket: S,
     /// TLS records received but not yet consumed by `rustls`.
     incoming: Vec<u8>,
@@ -95,7 +102,7 @@ pub struct TlsStream<S> {
     peer_closed: bool,
 }
 
-impl<'s> TlsStream<'s> {
+impl<S: Read + Write> TlsStream<S> {
     /// Performs the TLS handshake over an already-connected transport.
     ///
     /// Returns once the connection is ready to carry application data,
@@ -138,7 +145,7 @@ impl<'s> TlsStream<'s> {
         self.connection.negotiated_cipher_suite()
     }
 
-    /// Hands back the TLS transport, for a caller that wants to close it
+    /// Hands back the transport, for a caller that wants to close it
     /// itself. The TLS session is abandoned without a `close_notify`.
     pub fn into_inner(self) -> S {
         self.socket
@@ -296,12 +303,12 @@ impl<'s> TlsStream<'s> {
 }
 
 /// [`Error`], for every operation.
-impl ErrorType for TlsStream<'_> {
+impl<S: Read + Write> ErrorType for TlsStream<S> {
     type Error = Error;
 }
 
 /// Decrypted application data, as the peer sent it.
-impl Read for TlsStream<'_> {
+impl<S: Read + Write> Read for TlsStream<S> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         // Serve from what has already been decrypted before touching the
         // socket again.
@@ -329,7 +336,7 @@ impl Read for TlsStream<'_> {
 }
 
 /// Application data, encrypted and sent as one record per call.
-impl Write for TlsStream<'_> {
+impl<S: Read + Write> Write for TlsStream<S> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         {
             let Self {

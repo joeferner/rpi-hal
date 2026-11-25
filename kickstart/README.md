@@ -31,7 +31,7 @@ named for it.
 | `clock` | The wall clock: one sink every time source sets and everything else reads, `None` until set; with `storage`, files are stamped with it |
 | `tz` | Local time over a `tz-rs` zone |
 | `sntp` | Sets `clock` from an NTP server, and keeps it set |
-| `tls` | TLS 1.3 client connections over an `embassy-net` TCP socket, with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
+| `tls` | TLS 1.3 client connections over any `embedded-io-async` transport (an `embassy-net` TCP socket, another TLS stream), with real certificate verification — over `rustls-rustcrypto`, **pre-release and unaudited** |
 | `https` | A minimal HTTPS client over `tls`: one request per connection, chunked bodies reassembled |
 | `notify` | Outbound notifications over `https`: a `Channel` trait, with `Ntfy` (push) and `Resend` (email) shipped |
 | `webpki-roots` | Mozilla's trust anchors for `tls`, compiled in |
