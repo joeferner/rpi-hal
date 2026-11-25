@@ -224,9 +224,10 @@ subtle = { version = "2.6", default-features = false, optional = true }
 # private server needs one anchor.
 webpki-roots = { version = "1.0", default-features = false, optional = true }
 # The `Read`/`Write` traits `TlsStream` is written against at both ends:
-# consumed from `embassy-net`'s TCP socket, presented to whatever speaks a
-# protocol over it. 0.7 because that is the major `embassy-net`
-# implements, and a socket implementing 0.6 does not satisfy a 0.7 bound.
+# consumed from the transport (`embassy-net`'s TCP socket, usually),
+# presented to whatever speaks a protocol over it. 0.7 because that is the
+# major `embassy-net` implements, and a socket implementing 0.6 does not
+# satisfy a 0.7 bound.
 embedded-io-async = { version = "0.7", default-features = false, optional = true }
 # The splash encoder's PNG decoder, behind `splash-build`. Host only: it
 # runs in a board's build script, never in a kernel.
@@ -447,11 +448,13 @@ sntp = [
     "console",
 ]
 
-# TLS client connections over an `embassy-net` TCP socket, with real
+# TLS client connections over any `embedded-io-async` transport, with real
 # certificate-chain verification (src/tls.rs).
 #
-# Implies `clock`, which it checks certificate validity against, and
-# forwards `embassy-net/tcp` for the socket. It does *not* imply `sntp`:
+# Implies `clock`, which it checks certificate validity against. Not
+# `embassy-net`: the stream is generic over its transport, so a board
+# supplies the TCP socket (or whatever else) from its own dependency, and
+# `https` below is what forwards `embassy-net/tcp`. It does *not* imply `sntp`:
 # what sets the clock is the board's choice, and a board with an RTC has
 # no use for one.
 #
@@ -475,14 +478,13 @@ tls = [
     "dep:rustls-rustcrypto",
     "dep:getrandom",
     "dep:embedded-io-async",
-    "dep:embassy-net",
-    "embassy-net/tcp",
 ]
 
 # A minimal HTTPS client over `tls` (src/https.rs): one request per
 # connection, chunked bodies reassembled, the body returned whatever the
-# status. `embassy-net/dns` because a request names a host.
-https = ["tls", "embassy-net/dns"]
+# status. `embassy-net/tcp` for the socket under the TLS stream,
+# `embassy-net/dns` because a request names a host.
+https = ["tls", "dep:embassy-net", "embassy-net/tcp", "embassy-net/dns"]
 
 # A boot logo baked into the kernel image (src/splash.rs): `splash::Image`,
 # a checked run-length-encoded RGB565 image whose pixels the board blits

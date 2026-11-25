@@ -4,6 +4,22 @@ Notable changes to `rpi-kickstart`, in the format of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`tls::TlsStream` is generic over its transport.** `TlsStream<'s>`,
+  which could only wrap an `embassy-net` `TcpSocket<'s>`, is now
+  `TlsStream<S>` over any `S: embedded_io_async::Read + Write`, so TLS can
+  run through another `TlsStream` (an HTTPS proxy's tunnel) or any other
+  byte stream. A `TcpSocket` caller's `connect` is unchanged; a named type
+  becomes `TlsStream<TcpSocket<'_>>`. `into_socket` is renamed
+  `into_inner`, and `Error::Socket` now reads "transport error".
+- **`tls` no longer enables `embassy-net`.** Nothing in it names a socket
+  any more; `https`, which does, now enables `embassy-net/tcp` itself. A
+  board using `tls` over an `embassy-net` socket already depends on
+  `embassy-net` to make one.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added
