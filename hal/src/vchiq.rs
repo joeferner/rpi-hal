@@ -363,6 +363,11 @@ pub struct SharedMemory {
 impl SharedMemory {
     /// A new, zeroed region. `const` so it can initialize a `static`
     /// without the 2MB landing in the binary image.
+    // Clippy counts the 2MB as a stack frame, but the intended caller is a
+    // `static` initializer, which const-evaluates this at compile time and
+    // never touches the stack. Called at runtime it really would put 2MB on
+    // the stack — which is why the doc comment above points at a `static`.
+    #[allow(clippy::large_unopt_stack_frames)]
     pub const fn new() -> Self {
         Self {
             bytes: [0; SHARED_MEMORY_SIZE],
@@ -372,6 +377,9 @@ impl SharedMemory {
 
 impl Default for SharedMemory {
     /// Same as [`SharedMemory::new`].
+    // Exists to satisfy `clippy::new_without_default`; see the note on
+    // `new` about where the value should live.
+    #[allow(clippy::large_unopt_stack_frames)]
     fn default() -> Self {
         Self::new()
     }
